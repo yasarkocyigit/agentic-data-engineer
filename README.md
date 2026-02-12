@@ -1,8 +1,8 @@
 <div align="center">
 
-# 🚀 Agentic Data Engineer
+# Agentic Data Engineer
 
-### Metadata-Driven Medallion Lakehouse — Powered by AI
+### Metadata-Driven Medallion Lakehouse
 
 [![Airflow 3.0](https://img.shields.io/badge/Airflow-3.0-017CEE?logo=apacheairflow&logoColor=white)](https://airflow.apache.org/)
 [![Spark 4.1.1](https://img.shields.io/badge/Spark-4.1.1-E25A1C?logo=apachespark&logoColor=white)](https://spark.apache.org/)
@@ -17,33 +17,33 @@
 
 ---
 
-[Architecture](#-architecture) · [Quick Start](#-quick-start) · [Pipeline Flow](#-medallion-pipeline-flow) · [Configuration](#-configuration-as-code) · [Project Structure](#-project-structure) · [Contributing](#-contributing)
+[Architecture](#architecture) · [Quick Start](#quick-start) · [Pipeline Flow](#medallion-pipeline-flow) · [Configuration](#configuration-as-code) · [Project Structure](#project-structure) · [Contributing](#contributing)
 
 </div>
 
 ---
 
-## 📋 Table of Contents
+## Table of Contents
 
-- [Overview](#-overview)
-- [Architecture](#-architecture)
-- [Tech Stack](#-tech-stack)
-- [Quick Start](#-quick-start)
-- [Medallion Pipeline Flow](#-medallion-pipeline-flow)
-- [Configuration-as-Code](#-configuration-as-code)
-- [Data Quality Framework](#-data-quality-framework)
-- [Query Engine (Trino)](#-query-engine-trino)
-- [Data Lineage (Marquez)](#-data-lineage-marquez)
-- [Project Structure](#-project-structure)
-- [Service Endpoints](#-service-endpoints)
-- [Schema Migrations](#-schema-migrations)
-- [TPC-H Data Generator](#-tpc-h-data-generator)
-- [Contributing](#-contributing)
-- [License](#-license)
+- [Overview](#overview)
+- [Architecture](#architecture)
+- [Tech Stack](#tech-stack)
+- [Quick Start](#quick-start)
+- [Medallion Pipeline Flow](#medallion-pipeline-flow)
+- [Configuration-as-Code](#configuration-as-code)
+- [Data Quality Framework](#data-quality-framework)
+- [Query Engine (Trino)](#query-engine-trino)
+- [Data Lineage (Marquez)](#data-lineage-marquez)
+- [Project Structure](#project-structure)
+- [Service Endpoints](#service-endpoints)
+- [Schema Migrations](#schema-migrations)
+- [TPC-H Data Generator](#tpc-h-data-generator)
+- [Contributing](#contributing)
+- [License](#license)
 
 ---
 
-## 🔭 Overview
+## Overview
 
 **Agentic Data Engineer** is a fully containerized, end-to-end data lakehouse platform that implements the **Medallion Architecture** (Bronze → Silver → Gold) using entirely **declarative, YAML-driven pipelines**.
 
@@ -62,7 +62,7 @@ The platform ingests transactional data from PostgreSQL (TPC-H benchmark), trans
 
 ---
 
-## 🏗 Architecture
+## Architecture
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -110,7 +110,7 @@ The platform ingests transactional data from PostgreSQL (TPC-H benchmark), trans
 
 ---
 
-## 🛠 Tech Stack
+## Tech Stack
 
 | Component | Technology | Version | Purpose |
 |---|---|---|---|
@@ -127,7 +127,7 @@ The platform ingests transactional data from PostgreSQL (TPC-H benchmark), trans
 
 ---
 
-## ⚡ Quick Start
+## Quick Start
 
 ### Prerequisites
 
@@ -139,11 +139,20 @@ The platform ingests transactional data from PostgreSQL (TPC-H benchmark), trans
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/your-org/airflow-agentic-ai.git
-cd airflow-agentic-ai
+git clone https://github.com/yasarkocyigit/agentic-data-engineer.git
+cd agentic-data-engineer
 ```
 
-### 2. Download Required JARs
+### 2. Configure Environment Variables
+
+Copy the example environment file and fill in your credentials:
+
+```bash
+cp .env.example .env
+# Edit .env with your PostgreSQL password, MinIO credentials, and Airflow secrets
+```
+
+### 3. Download Required JARs
 
 The setup script downloads all necessary JAR dependencies (Iceberg runtime, AWS SDK, Hadoop AWS, PostgreSQL JDBC):
 
@@ -153,7 +162,7 @@ chmod +x setup.sh
 ```
 
 <details>
-<summary>📦 Downloaded JARs</summary>
+<summary>Downloaded JARs</summary>
 
 | JAR | Version | Purpose |
 |---|---|---|
@@ -164,7 +173,7 @@ chmod +x setup.sh
 
 </details>
 
-### 3. Set Up Source Database
+### 4. Set Up Source Database
 
 Create the TPC-H source database and generate sample data:
 
@@ -178,7 +187,7 @@ pip install psycopg2-binary
 python3 scripts/generate_tpch_data.py --scale 0.1
 ```
 
-### 4. Launch the Platform
+### 5. Launch the Platform
 
 ```bash
 docker compose up -d
@@ -186,7 +195,7 @@ docker compose up -d
 
 This brings up **9 services**: Spark Master, Spark Worker, MinIO (+ auto-bucket provisioning), Trino, Marquez (API + DB + Web), Airflow (Init + Webserver + Scheduler + DAG Processor).
 
-### 5. Run the Pipeline
+### 6. Run the Pipeline
 
 1. Open **Airflow UI** at [http://localhost:8081](http://localhost:8081) (username: `admin`, password: `admin`)
 2. Enable the `medallion_pipeline` DAG
@@ -194,7 +203,7 @@ This brings up **9 services**: Spark Master, Spark Worker, MinIO (+ auto-bucket 
 
 ---
 
-## 🔄 Medallion Pipeline Flow
+## Medallion Pipeline Flow
 
 The `medallion_pipeline` DAG orchestrates the full data lifecycle:
 
@@ -223,7 +232,7 @@ Each record is enriched with metadata columns: `_ingested_at`, `_source_table`, 
 | **Source** | Bronze Parquet tables |
 | **Format** | Apache Iceberg (ACID, schema evolution) |
 | **Target** | `lakehouse.silver.<table>` |
-| **DQ Engine** | YAML-configured rules → SQL expectations |
+| **DQ Engine** | YAML-configured rules converted to SQL expectations |
 
 **Transformations applied** (all config-driven):
 - Column renaming (`o_orderkey` → `order_key`)
@@ -250,7 +259,7 @@ Each record is enriched with metadata columns: `_ingested_at`, `_source_table`, 
 
 ---
 
-## 📝 Configuration-as-Code
+## Configuration-as-Code
 
 All pipeline behavior is driven by three YAML files — **no Python code changes needed** to add tables, modify transforms, or adjust SLAs.
 
@@ -294,8 +303,8 @@ Externalized connection strings with environment variable resolution:
 ```yaml
 postgres_sourcedb:
   type: jdbc
-  url: "jdbc:postgresql://${POSTGRES_HOST:host.docker.internal}:${POSTGRES_PORT:5433}/${SOURCE_DB:sourcedb}"
-  user: "${POSTGRES_USER:postgres}"
+  url: "jdbc:postgresql://${POSTGRES_HOST}:${POSTGRES_PORT}/${SOURCE_DB}"
+  user: "${POSTGRES_USER}"
   password: "${POSTGRES_PASSWORD}"
   driver: "org.postgresql.Driver"
   options:
@@ -322,11 +331,11 @@ feature_flags:
 
 ---
 
-## 🛡 Data Quality Framework
+## Data Quality Framework
 
 DQ rules are defined inline in `pipelines.yml` and converted to SQL expectations at runtime by the metadata engine.
 
-### Severity → Action Mapping
+### Severity to Action Mapping
 
 | Severity | SDP Mode | Behavior |
 |---|---|---|
@@ -346,7 +355,7 @@ DQ rules are defined inline in `pipelines.yml` and converted to SQL expectations
 
 ---
 
-## 🔍 Query Engine (Trino)
+## Query Engine (Trino)
 
 Trino is configured as a **federated SQL engine** over the Iceberg lakehouse, sharing the same JDBC catalog as Spark:
 
@@ -370,12 +379,12 @@ LIMIT 10;
 
 ---
 
-## 📊 Data Lineage (Marquez)
+## Data Lineage (Marquez)
 
 [Marquez](https://marquezproject.ai/) provides **OpenLineage-compatible** data lineage tracking:
 
 - Automatic DAG-level lineage from Airflow
-- Table-level lineage across Bronze → Silver → Gold
+- Table-level lineage across Bronze, Silver, and Gold
 - Impact analysis and root cause tracking
 - Full REST API for programmatic access
 
@@ -383,57 +392,58 @@ Access the lineage UI at [http://localhost:8085](http://localhost:8085).
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 airflow-agentic-ai/
 │
-├── config/                          # 📝 Configuration-as-Code
-│   ├── pipelines.yml                #    Pipeline definitions (Bronze/Silver/Gold)
-│   ├── connections.yml              #    Database connection configs
-│   └── settings.yml                 #    SLA definitions & feature flags
+├── config/                          # Configuration-as-Code
+│   ├── pipelines.yml                #   Pipeline definitions (Bronze/Silver/Gold)
+│   ├── connections.yml              #   Database connection configs
+│   └── settings.yml                 #   SLA definitions & feature flags
 │
-├── dags/                            # 🔄 Airflow DAG Definitions
-│   └── medallion_pipeline.py        #    Main DAG: Config → Bronze → Silver → Gold
+├── dags/                            # Airflow DAG Definitions
+│   └── medallion_pipeline.py        #   Main DAG: Config → Bronze → Silver → Gold
 │
-├── notebooks/                       # ⚡ Spark Job Scripts
-│   ├── _metadata.py                 #    Shared metadata engine (YAML reader, DQ, transforms)
-│   ├── spark-pipeline.yml           #    SDP pipeline manifest
+├── notebooks/                       # Spark Job Scripts
+│   ├── _metadata.py                 #   Shared metadata engine (YAML reader, DQ, transforms)
+│   ├── spark-pipeline.yml           #   SDP pipeline manifest
 │   ├── bronze/
-│   │   └── ingestion.py             #    JDBC → Parquet ingestion
+│   │   └── ingestion.py             #   JDBC → Parquet ingestion
 │   ├── silver/
-│   │   └── transformations.py       #    Parquet → Iceberg with DQ & SCD2
+│   │   └── transformations.py       #   Parquet → Iceberg with DQ & SCD2
 │   └── gold/
-│       ├── revenue_analytics.py     #    Revenue materialized views (SDP)
-│       ├── customer_analytics.py    #    Customer analytics views (SDP)
-│       └── operational_metrics.py   #    Operational metrics views (SDP)
+│       ├── revenue_analytics.py     #   Revenue materialized views (SDP)
+│       ├── customer_analytics.py    #   Customer analytics views (SDP)
+│       └── operational_metrics.py   #   Operational metrics views (SDP)
 │
-├── scripts/                         # 🔧 Utility Scripts
-│   ├── setup_sourcedb.sql           #    TPC-H DDL (8 tables + indexes)
-│   ├── generate_tpch_data.py        #    TPC-H data generator (configurable scale)
-│   ├── schema_migration_v2.sql      #    DB migration v2
-│   ├── schema_migration_v3.sql      #    DB migration v3
-│   └── schema_migration_v4.sql      #    DB migration v4
+├── scripts/                         # Utility Scripts
+│   ├── setup_sourcedb.sql           #   TPC-H DDL (8 tables + indexes)
+│   ├── generate_tpch_data.py        #   TPC-H data generator (configurable scale)
+│   ├── schema_migration_v2.sql      #   DB migration v2
+│   ├── schema_migration_v3.sql      #   DB migration v3
+│   └── schema_migration_v4.sql      #   DB migration v4
 │
-├── trino/                           # 🔎 Trino SQL Engine Configuration
+├── trino/                           # Trino SQL Engine Configuration
 │   └── etc/
-│       ├── config.properties        #    Trino server config
-│       ├── jvm.config               #    JVM settings
-│       ├── node.properties          #    Node identity
-│       ├── log.properties           #    Logging
+│       ├── config.properties        #   Trino server config
+│       ├── jvm.config               #   JVM settings
+│       ├── node.properties          #   Node identity
+│       ├── log.properties           #   Logging
 │       └── catalog/
-│           └── iceberg.properties   #    Iceberg connector (shared JDBC catalog)
+│           └── iceberg.properties   #   Iceberg connector (shared JDBC catalog)
 │
-├── docker-compose.yml               # 🐳 Full-stack Docker Compose (9 services)
-├── Dockerfile.airflow               # 🐳 Custom Airflow image (PySpark + Java + AWS SDK)
-├── setup.sh                         # 📦 JAR dependency downloader
+├── docker-compose.yml               # Full-stack Docker Compose (9 services)
+├── Dockerfile.airflow               # Custom Airflow image (PySpark + Java + AWS SDK)
+├── setup.sh                         # JAR dependency downloader
+├── .env.example                     # Environment variable template
 ├── .gitignore                       # Git ignore rules
-└── README.md                        # 📖 This file
+└── README.md                        # This file
 ```
 
 ---
 
-## 🌐 Service Endpoints
+## Service Endpoints
 
 Once `docker compose up -d` completes, the following UIs are available:
 
@@ -442,14 +452,14 @@ Once `docker compose up -d` completes, the following UIs are available:
 | **Airflow UI** | [http://localhost:8081](http://localhost:8081) | `admin` / `admin` |
 | **Spark Master UI** | [http://localhost:8082](http://localhost:8082) | — |
 | **Trino UI** | [http://localhost:8083](http://localhost:8083) | — |
-| **MinIO Console** | [http://localhost:9001](http://localhost:9001) | `admin` / `admin123` |
+| **MinIO Console** | [http://localhost:9001](http://localhost:9001) | See `.env` |
 | **Marquez Lineage UI** | [http://localhost:8085](http://localhost:8085) | — |
 | **Marquez API** | [http://localhost:5002](http://localhost:5002) | — |
-| **MinIO S3 API** | [http://localhost:9000](http://localhost:9000) | `admin` / `admin123` |
+| **MinIO S3 API** | [http://localhost:9000](http://localhost:9000) | See `.env` |
 
 ---
 
-## 🔄 Schema Migrations
+## Schema Migrations
 
 The `scripts/` directory contains incremental SQL migrations for the control database (`controldb`):
 
@@ -462,7 +472,7 @@ The `scripts/` directory contains incremental SQL migrations for the control dat
 
 ---
 
-## 🎲 TPC-H Data Generator
+## TPC-H Data Generator
 
 A built-in Python script generates realistic [TPC-H](http://www.tpc.org/tpch/) benchmark data directly into PostgreSQL:
 
@@ -490,7 +500,7 @@ python3 scripts/generate_tpch_data.py --scale 0.1
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
@@ -501,7 +511,7 @@ python3 scripts/generate_tpch_data.py --scale 0.1
 
 ---
 
-## 📄 License
+## License
 
 This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
 
@@ -509,7 +519,7 @@ This project is licensed under the MIT License — see the [LICENSE](LICENSE) fi
 
 <div align="center">
 
-**Built with ❤️ by the Agentic Data Engineering Team**
+**Built by the Agentic Data Engineering Team**
 
 *Airflow 3.0 · Spark 4.1.1 · Iceberg 1.10 · MinIO · Trino · Marquez*
 

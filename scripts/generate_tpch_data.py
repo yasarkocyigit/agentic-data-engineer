@@ -23,6 +23,7 @@ from psycopg2.extras import execute_values
 import random
 import string
 import argparse
+import os
 from datetime import date, timedelta, datetime
 import sys
 import time
@@ -32,13 +33,13 @@ import time
 # =============================================================
 
 DB_CONFIG = {
-    "host": "localhost",
-    "port": 5433,
-    "user": "postgres",
-    "password": "Gs+163264128",
+    "host": os.getenv("POSTGRES_HOST", "localhost"),
+    "port": int(os.getenv("POSTGRES_PORT", "5433")),
+    "user": os.getenv("POSTGRES_USER", "postgres"),
+    "password": os.getenv("POSTGRES_PASSWORD", "changeme"),
 }
 
-SOURCE_DB = "sourcedb"
+SOURCE_DB = os.getenv("SOURCE_DB", "sourcedb")
 
 # TPC-H Reference Data
 REGIONS = [

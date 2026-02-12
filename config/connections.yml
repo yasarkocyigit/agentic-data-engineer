@@ -14,7 +14,7 @@ postgres_sourcedb:
   type: jdbc
   url: "jdbc:postgresql://${POSTGRES_HOST:host.docker.internal}:${POSTGRES_PORT:5433}/${SOURCE_DB:sourcedb}"
   user: "${POSTGRES_USER:postgres}"
-  password: "${POSTGRES_PASSWORD:Gs+163264128}"
+  password: "${POSTGRES_PASSWORD}"
   driver: "org.postgresql.Driver"
   options:
     fetchsize: 10000

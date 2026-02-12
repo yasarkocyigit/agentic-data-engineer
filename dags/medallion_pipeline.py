@@ -56,14 +56,14 @@ SPARK_CONF = {
     # Shared between Spark and Trino so both engines see the same tables
     "spark.sql.catalog.lakehouse": "org.apache.iceberg.spark.SparkCatalog",
     "spark.sql.catalog.lakehouse.type": "jdbc",
-    "spark.sql.catalog.lakehouse.uri": "jdbc:postgresql://host.docker.internal:5433/controldb",
-    "spark.sql.catalog.lakehouse.jdbc.user": "postgres",
-    "spark.sql.catalog.lakehouse.jdbc.password": "Gs+163264128",
+    "spark.sql.catalog.lakehouse.uri": os.getenv("ICEBERG_CATALOG_URI", "jdbc:postgresql://host.docker.internal:5433/controldb"),
+    "spark.sql.catalog.lakehouse.jdbc.user": os.getenv("POSTGRES_USER", "postgres"),
+    "spark.sql.catalog.lakehouse.jdbc.password": os.getenv("POSTGRES_PASSWORD", "changeme"),
     "spark.sql.catalog.lakehouse.warehouse": "s3a://warehouse/",
     # MinIO / S3A configuration
     "spark.hadoop.fs.s3a.endpoint": "http://minio:9000",
-    "spark.hadoop.fs.s3a.access.key": "admin",
-    "spark.hadoop.fs.s3a.secret.key": "admin123",
+    "spark.hadoop.fs.s3a.access.key": os.getenv("MINIO_ROOT_USER", "admin"),
+    "spark.hadoop.fs.s3a.secret.key": os.getenv("MINIO_ROOT_PASSWORD", "admin123"),
     "spark.hadoop.fs.s3a.path.style.access": "true",
     "spark.hadoop.fs.s3a.impl": "org.apache.hadoop.fs.s3a.S3AFileSystem",
 }

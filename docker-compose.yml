@@ -54,8 +54,8 @@ services:
     container_name: minio_lakehouse
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: admin
-      MINIO_ROOT_PASSWORD: admin123
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-admin123}
     ports:
       - "9000:9000" # MinIO API
       - "9001:9001" # MinIO Console
@@ -77,7 +77,7 @@ services:
       minio:
         condition: service_healthy
     entrypoint: >
-      /bin/sh -c " /usr/bin/mc alias set myminio http://minio:9000 admin admin123; /usr/bin/mc mb myminio/bronze --ignore-existing; /usr/bin/mc mb myminio/silver --ignore-existing; /usr/bin/mc mb myminio/gold --ignore-existing; /usr/bin/mc mb myminio/warehouse --ignore-existing; /usr/bin/mc mb myminio/checkpoints --ignore-existing; echo 'Buckets created successfully!'; exit 0; "
+      /bin/sh -c " /usr/bin/mc alias set myminio http://minio:9000 $${MINIO_ROOT_USER:-admin} $${MINIO_ROOT_PASSWORD:-admin123}; /usr/bin/mc mb myminio/bronze --ignore-existing; /usr/bin/mc mb myminio/silver --ignore-existing; /usr/bin/mc mb myminio/gold --ignore-existing; /usr/bin/mc mb myminio/warehouse --ignore-existing; /usr/bin/mc mb myminio/checkpoints --ignore-existing; echo 'Buckets created successfully!'; exit 0; "
     networks:
       - agentic-network
 
@@ -157,10 +157,10 @@ services:
     container_name: airflow_init
     environment:
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
-      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://postgres:Gs+163264128@host.docker.internal:5433/controldb
-      - AIRFLOW__CORE__FERNET_KEY=zTvhk7Vf2dHkL5j8g3nM9pQrYwXy4bCfE6HiJkLoNsU=
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=${AIRFLOW_DB_CONN:-postgresql+psycopg2://postgres:changeme@host.docker.internal:5433/controldb}
+      - AIRFLOW__CORE__FERNET_KEY=${AIRFLOW_FERNET_KEY:-GENERATE_A_FERNET_KEY}
       - AIRFLOW__CORE__LOAD_EXAMPLES=false
-      - AIRFLOW__WEBSERVER__SECRET_KEY=super-secret-key-for-airflow
+      - AIRFLOW__WEBSERVER__SECRET_KEY=${AIRFLOW_SECRET_KEY:-CHANGE_ME_IN_ENV_FILE}
     entrypoint: >
       /bin/bash -c " airflow db migrate; airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com; echo 'Airflow initialized!'; "
     networks:
@@ -173,12 +173,12 @@ services:
     container_name: airflow_webserver
     environment:
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
-      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://postgres:Gs+163264128@host.docker.internal:5433/controldb
-      - AIRFLOW__CORE__FERNET_KEY=zTvhk7Vf2dHkL5j8g3nM9pQrYwXy4bCfE6HiJkLoNsU=
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=${AIRFLOW_DB_CONN:-postgresql+psycopg2://postgres:changeme@host.docker.internal:5433/controldb}
+      - AIRFLOW__CORE__FERNET_KEY=${AIRFLOW_FERNET_KEY:-GENERATE_A_FERNET_KEY}
       - AIRFLOW__CORE__LOAD_EXAMPLES=false
-      - AIRFLOW__WEBSERVER__SECRET_KEY=super-secret-key-for-airflow
+      - AIRFLOW__WEBSERVER__SECRET_KEY=${AIRFLOW_SECRET_KEY:-CHANGE_ME_IN_ENV_FILE}
       - AIRFLOW__API__AUTH_BACKENDS=airflow.api.auth.backend.basic_auth
-      - AIRFLOW__API_AUTH__JWT_SECRET=airflow-shared-jwt-secret-key-2026
+      - AIRFLOW__API_AUTH__JWT_SECRET=${AIRFLOW_JWT_SECRET:-CHANGE_ME_IN_ENV_FILE}
     command: api-server
     ports:
       - "8081:8080" # Airflow UI
@@ -200,13 +200,13 @@ services:
     container_name: airflow_scheduler
     environment:
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
-      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://postgres:Gs+163264128@host.docker.internal:5433/controldb
-      - AIRFLOW__CORE__FERNET_KEY=zTvhk7Vf2dHkL5j8g3nM9pQrYwXy4bCfE6HiJkLoNsU=
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=${AIRFLOW_DB_CONN:-postgresql+psycopg2://postgres:changeme@host.docker.internal:5433/controldb}
+      - AIRFLOW__CORE__FERNET_KEY=${AIRFLOW_FERNET_KEY:-GENERATE_A_FERNET_KEY}
       - AIRFLOW__CORE__LOAD_EXAMPLES=false
-      - AIRFLOW__WEBSERVER__SECRET_KEY=super-secret-key-for-airflow
+      - AIRFLOW__WEBSERVER__SECRET_KEY=${AIRFLOW_SECRET_KEY:-CHANGE_ME_IN_ENV_FILE}
       - AIRFLOW__CORE__INTERNAL_API_URL=http://airflow-webserver:8080
       - AIRFLOW__CORE__EXECUTION_API_SERVER_URL=http://airflow-webserver:8080/execution/
-      - AIRFLOW__API_AUTH__JWT_SECRET=airflow-shared-jwt-secret-key-2026
+      - AIRFLOW__API_AUTH__JWT_SECRET=${AIRFLOW_JWT_SECRET:-CHANGE_ME_IN_ENV_FILE}
     command: scheduler
     volumes:
       - ./dags:/opt/airflow/dags
@@ -228,13 +228,13 @@ services:
     container_name: airflow_dag_processor
     environment:
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
-      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://postgres:Gs+163264128@host.docker.internal:5433/controldb
-      - AIRFLOW__CORE__FERNET_KEY=zTvhk7Vf2dHkL5j8g3nM9pQrYwXy4bCfE6HiJkLoNsU=
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=${AIRFLOW_DB_CONN:-postgresql+psycopg2://postgres:changeme@host.docker.internal:5433/controldb}
+      - AIRFLOW__CORE__FERNET_KEY=${AIRFLOW_FERNET_KEY:-GENERATE_A_FERNET_KEY}
       - AIRFLOW__CORE__LOAD_EXAMPLES=false
-      - AIRFLOW__WEBSERVER__SECRET_KEY=super-secret-key-for-airflow
+      - AIRFLOW__WEBSERVER__SECRET_KEY=${AIRFLOW_SECRET_KEY:-CHANGE_ME_IN_ENV_FILE}
       - AIRFLOW__CORE__INTERNAL_API_URL=http://airflow-webserver:8080
       - AIRFLOW__CORE__EXECUTION_API_SERVER_URL=http://airflow-webserver:8080/execution/
-      - AIRFLOW__API_AUTH__JWT_SECRET=airflow-shared-jwt-secret-key-2026
+      - AIRFLOW__API_AUTH__JWT_SECRET=${AIRFLOW_JWT_SECRET:-CHANGE_ME_IN_ENV_FILE}
     command: dag-processor
     volumes:
       - ./dags:/opt/airflow/dags

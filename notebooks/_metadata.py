@@ -33,7 +33,7 @@ POSTGRES_CONFIG = {
     "port": os.getenv("POSTGRES_PORT", "5433"),
     "database": os.getenv("POSTGRES_DB", "controldb"),
     "user": os.getenv("POSTGRES_USER", "postgres"),
-    "password": os.getenv("POSTGRES_PASSWORD", "Gs+163264128")
+    "password": os.getenv("POSTGRES_PASSWORD", "changeme")
 }
 
 
