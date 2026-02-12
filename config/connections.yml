@@ -1,0 +1,21 @@
+# =============================================================
+# Connection Configuration
+# =============================================================
+# Replaces: config.connections
+#
+# Use ${ENV_VAR} syntax for secrets — resolved at runtime.
+# Never commit actual passwords to Git.
+# =============================================================
+
+# ---------------------------------------------------------
+# SOURCE DATABASE (TPC-H on PostgreSQL)
+# ---------------------------------------------------------
+postgres_sourcedb:
+  type: jdbc
+  url: "jdbc:postgresql://${POSTGRES_HOST:host.docker.internal}:${POSTGRES_PORT:5433}/${SOURCE_DB:sourcedb}"
+  user: "${POSTGRES_USER:postgres}"
+  password: "${POSTGRES_PASSWORD:Gs+163264128}"
+  driver: "org.postgresql.Driver"
+  options:
+    fetchsize: 10000
+    batchsize: 5000

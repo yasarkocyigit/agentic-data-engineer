@@ -1,0 +1,207 @@
+# =============================================================
+# Pipeline Configuration (Config-as-Code)
+# =============================================================
+# Source: TPC-H tables in PostgreSQL (sourcedb)
+# Target: MinIO Lakehouse (Bronze=Parquet → Silver=Iceberg → Gold=Iceberg)
+#
+# To add a new table: Add an entry under the appropriate layer.
+# To deactivate: Set is_active: false
+# =============================================================
+
+# ---------------------------------------------------------
+# BRONZE LAYER - JDBC Ingestion from PostgreSQL (TPC-H)
+# ---------------------------------------------------------
+bronze:
+  - name: orders
+    source_table: "public.orders"
+    target_path: "s3a://bronze/tpch/orders"
+    connection: postgres_sourcedb
+    load_type: incremental
+    watermark_column: modified_at
+    primary_key: o_orderkey
+    table_type: fact
+    scd_type: 1
+    is_active: true
+    priority: 10
+
+  - name: lineitem
+    source_table: "public.lineitem"
+    target_path: "s3a://bronze/tpch/lineitem"
+    connection: postgres_sourcedb
+    load_type: incremental
+    watermark_column: modified_at
+    primary_key: "l_orderkey,l_linenumber"
+    table_type: fact
+    scd_type: 1
+    is_active: true
+    priority: 20
+
+  - name: customer
+    source_table: "public.customer"
+    target_path: "s3a://bronze/tpch/customer"
+    connection: postgres_sourcedb
+    load_type: full
+    primary_key: c_custkey
+    table_type: dimension
+    scd_type: 2
+    is_active: true
+    priority: 30
+
+  - name: part
+    source_table: "public.part"
+    target_path: "s3a://bronze/tpch/part"
+    connection: postgres_sourcedb
+    load_type: full
+    primary_key: p_partkey
+    table_type: dimension
+    scd_type: 2
+    is_active: true
+    priority: 40
+
+  - name: supplier
+    source_table: "public.supplier"
+    target_path: "s3a://bronze/tpch/supplier"
+    connection: postgres_sourcedb
+    load_type: full
+    primary_key: s_suppkey
+    table_type: dimension
+    scd_type: 2
+    is_active: true
+    priority: 50
+
+  - name: nation
+    source_table: "public.nation"
+    target_path: "s3a://bronze/tpch/nation"
+    connection: postgres_sourcedb
+    load_type: full
+    primary_key: n_nationkey
+    table_type: dimension
+    scd_type: 2
+    is_active: true
+    priority: 60
+
+  - name: region
+    source_table: "public.region"
+    target_path: "s3a://bronze/tpch/region"
+    connection: postgres_sourcedb
+    load_type: full
+    primary_key: r_regionkey
+    table_type: dimension
+    scd_type: 2
+    is_active: true
+    priority: 70
+
+  - name: partsupp
+    source_table: "public.partsupp"
+    target_path: "s3a://bronze/tpch/partsupp"
+    connection: postgres_sourcedb
+    load_type: full
+    primary_key: "ps_partkey,ps_suppkey"
+    table_type: bridge
+    scd_type: 1
+    is_active: true
+    priority: 80
+
+
+# ---------------------------------------------------------
+# SILVER LAYER - Transformations + Data Quality
+# ---------------------------------------------------------
+silver:
+  - name: clean_orders
+    source: "s3a://bronze/tpch/orders"
+    target_path: "s3a://silver/fact_orders"
+    load_type: incremental
+    primary_key: order_key
+    table_type: fact
+    scd_type: 1
+    is_active: true
+    priority: 10
+
+    transformations:
+      - { source: o_orderkey,      target: order_key,      type: rename }
+      - { source: o_custkey,       target: customer_key,   type: rename }
+      - { source: o_orderstatus,   target: order_status,   type: trim }
+      - { source: o_totalprice,    target: total_price,    type: cast,  expression: double }
+      - { source: o_orderdate,     target: order_date,     type: rename }
+      - { source: o_orderpriority, target: order_priority, type: trim }
+      - { source: o_clerk,         target: clerk,          type: trim }
+
+    data_quality:
+      - { name: pk_not_null,        column: order_key,    type: not_null, severity: critical }
+      - { name: date_not_null,      column: order_date,   type: not_null, severity: error }
+      - { name: price_positive,     column: total_price,  type: range,    expression: "0,", severity: warning }
+
+  - name: clean_lineitem
+    source: "s3a://bronze/tpch/lineitem"
+    target_path: "s3a://silver/fact_lineitem"
+    load_type: incremental
+    primary_key: "order_key,line_number"
+    table_type: fact
+    scd_type: 1
+    is_active: true
+    priority: 20
+
+    transformations:
+      - { source: l_orderkey,      target: order_key,        type: rename }
+      - { source: l_partkey,       target: part_key,         type: rename }
+      - { source: l_suppkey,       target: supplier_key,     type: rename }
+      - { source: l_linenumber,    target: line_number,      type: rename }
+      - { source: l_quantity,      target: quantity,         type: cast,  expression: double }
+      - { source: l_extendedprice, target: extended_price,   type: cast,  expression: double }
+      - { source: l_discount,      target: discount,         type: cast,  expression: double }
+      - { source: l_tax,           target: tax,              type: cast,  expression: double }
+      - { source: l_returnflag,    target: return_flag,      type: trim }
+      - { source: l_linestatus,    target: line_status,      type: trim }
+      - { source: l_shipdate,      target: ship_date,        type: rename }
+      - { source: l_shipmode,      target: ship_mode,        type: trim }
+
+    data_quality:
+      - { name: pk_not_null,    column: order_key,      type: not_null, severity: critical }
+      - { name: qty_positive,   column: quantity,        type: range,    expression: "1,",  severity: warning }
+      - { name: price_positive, column: extended_price,  type: range,    expression: "0,",  severity: warning }
+
+  - name: clean_customer
+    source: "s3a://bronze/tpch/customer"
+    target_path: "s3a://silver/dim_customer"
+    load_type: full
+    primary_key: customer_key
+    table_type: dimension
+    scd_type: 2
+    is_active: true
+    priority: 30
+
+    transformations:
+      - { source: c_custkey,    target: customer_key,   type: rename }
+      - { source: c_name,       target: customer_name,  type: trim }
+      - { source: c_address,    target: address,        type: trim }
+      - { source: c_nationkey,  target: nation_key,     type: rename }
+      - { source: c_phone,      target: phone,          type: trim }
+      - { source: c_acctbal,    target: account_balance, type: cast,  expression: double }
+      - { source: c_mktsegment, target: market_segment, type: trim }
+
+    data_quality:
+      - { name: pk_not_null,  column: customer_key, type: not_null, severity: critical }
+      - { name: pk_unique,    column: customer_key, type: unique,   severity: error }
+
+  - name: clean_part
+    source: "s3a://bronze/tpch/part"
+    target_path: "s3a://silver/dim_part"
+    load_type: full
+    primary_key: part_key
+    table_type: dimension
+    scd_type: 2
+    is_active: true
+    priority: 40
+
+    transformations:
+      - { source: p_partkey,      target: part_key,      type: rename }
+      - { source: p_name,         target: part_name,     type: trim }
+      - { source: p_mfgr,         target: manufacturer,  type: trim }
+      - { source: p_brand,        target: brand,         type: trim }
+      - { source: p_type,         target: part_type,     type: trim }
+      - { source: p_size,         target: size,          type: rename }
+      - { source: p_retailprice,  target: retail_price,  type: cast,  expression: double }
+
+    data_quality:
+      - { name: pk_not_null,     column: part_key,     type: not_null, severity: critical }
+      - { name: price_positive,  column: retail_price,  type: range,    expression: "0,", severity: warning }

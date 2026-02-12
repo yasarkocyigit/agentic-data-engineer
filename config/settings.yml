@@ -1,0 +1,30 @@
+# =============================================================
+# Pipeline Settings
+# =============================================================
+# Replaces: config.sla_definitions, config.feature_flags
+# =============================================================
+
+# SLA Definitions
+sla:
+  bronze:
+    freshness_hours: 6
+    completeness_percent: 99
+    alert_channels: ["slack:#data-alerts"]
+
+  silver:
+    freshness_hours: 8
+    completeness_percent: 99.5
+    alert_channels: ["slack:#data-alerts", "email:data-team@company.com"]
+
+  gold:
+    freshness_hours: 12
+    completeness_percent: 99.9
+    alert_channels: ["slack:#data-alerts", "pagerduty:data-oncall"]
+
+# Feature Flags
+feature_flags:
+  enable_schema_drift_detection: true
+  enable_data_profiling: false
+  enable_dead_letter_queue: true
+  enable_scd_type2: true
+  max_parallel_tables: 4

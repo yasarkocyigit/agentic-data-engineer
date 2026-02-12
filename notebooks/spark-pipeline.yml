@@ -1,0 +1,37 @@
+name: medallion_pipeline
+libraries:
+  # Shared metadata module (loaded first)
+  - glob:
+      include: "_metadata.py"
+  # Bronze layer - JDBC ingestion
+  - glob:
+      include: "bronze/**"
+  # Silver layer - Transformations + DQ
+  - glob:
+      include: "silver/**"
+  # Gold layer - Analytics materialized views
+  - glob:
+      include: "gold/**"
+
+storage: "s3a://checkpoints/medallion"
+
+configuration:
+  # Delta Lake
+  spark.sql.extensions: "io.delta.sql.DeltaSparkSessionExtension"
+  spark.sql.catalog.spark_catalog: "org.apache.spark.sql.delta.catalog.DeltaCatalog"
+  
+  # MinIO / S3
+  spark.hadoop.fs.s3a.endpoint: "http://minio:9000"
+  spark.hadoop.fs.s3a.access.key: "admin"
+  spark.hadoop.fs.s3a.secret.key: "admin123"
+  spark.hadoop.fs.s3a.path.style.access: "true"
+  spark.hadoop.fs.s3a.impl: "org.apache.hadoop.fs.s3a.S3AFileSystem"
+  
+  # Schema auto-merge for drift tolerance
+  spark.delta.schema.autoMerge.enabled: "true"
+  
+  # JDBC + Delta dependencies
+  spark.jars.packages: "io.delta:delta-spark_2.13:4.0.0,org.apache.hadoop:hadoop-aws:3.4.1,com.microsoft.sqlserver:mssql-jdbc:12.8.1.jre11"
+  
+  # Performance
+  spark.sql.shuffle.partitions: "8"
