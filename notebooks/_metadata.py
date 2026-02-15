@@ -12,7 +12,10 @@ IMPORTANT: SDP constraint - no collect(), count(), save() inside
 """
 
 import yaml
-import psycopg2
+try:
+    import psycopg2
+except ImportError:
+    psycopg2 = None
 import json
 import os
 import re
@@ -308,20 +311,29 @@ class AIClient:
         self._config = config or POSTGRES_CONFIG
 
     def _conn(self):
+        if psycopg2 is None:
+            raise ImportError("psycopg2 module not found")
         return psycopg2.connect(**self._config)
 
     def log_audit(self, pipeline_id, action: str, details: dict):
         """Log action to ai.audit_logs"""
-        conn = self._conn()
-        cur = conn.cursor()
-        cur.execute("""
-            INSERT INTO ai.audit_logs
-                (entity_type, entity_id, action, actor, details)
-            VALUES ('pipeline', %s, %s, 'spark-sdp', %s)
-        """, (str(pipeline_id), action, json.dumps(details)))
-        conn.commit()
-        cur.close()
-        conn.close()
+        if psycopg2 is None:
+            print(f"[WARN] psycopg2 missing. Skipping audit log: {action} - {details}")
+            return
+
+        try:
+            conn = self._conn()
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO ai.audit_logs
+                    (entity_type, entity_id, action, actor, details)
+                VALUES ('pipeline', %s, %s, 'spark-sdp', %s)
+            """, (str(pipeline_id), action, json.dumps(details)))
+            conn.commit()
+            cur.close()
+            conn.close()
+        except Exception as e:
+            print(f"[ERROR] Audit log failed: {e}")
 
     def log_execution_metric(self, pipeline_name: str, run_id: str,
                              status: str, rows_read: int = 0,
@@ -329,15 +341,22 @@ class AIClient:
                              start_time=None, end_time=None,
                              error: str = None):
         """Log pipeline execution metrics"""
-        conn = self._conn()
-        cur = conn.cursor()
-        cur.execute("""
-            INSERT INTO ai.execution_metrics
-                (run_id, status, rows_read, rows_written,
-                 start_time, end_time, error_message)
+        if psycopg2 is None:
+            print(f"[WARN] psycopg2 missing. Skipping metrics log: {pipeline_name} - {status}")
+            return
+
+        try:
+            conn = self._conn()
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO ai.execution_metrics
+                    (run_id, status, rows_read, rows_written,
+                     start_time, end_time, error_message)
             VALUES (%s,%s,%s,%s,%s,%s,%s)
         """, (run_id, status, rows_read, rows_written,
               start_time or datetime.now(), end_time, error))
-        conn.commit()
-        cur.close()
-        conn.close()
+            conn.commit()
+            cur.close()
+            conn.close()
+        except Exception as e:
+            print(f"[ERROR] Metrics log failed: {e}")

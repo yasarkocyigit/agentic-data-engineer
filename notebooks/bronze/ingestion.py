@@ -24,6 +24,11 @@ import time
 
 spark = SparkSession.builder \
     .appName("Bronze-Ingestion-TPC-H") \
+    .config("spark.hadoop.fs.s3a.access.key", os.getenv("MINIO_ROOT_USER", "admin")) \
+    .config("spark.hadoop.fs.s3a.secret.key", os.getenv("MINIO_ROOT_PASSWORD", "YOUR_MINIO_PASSWORD_HERE")) \
+    .config("spark.hadoop.fs.s3a.endpoint", "http://minio:9000") \
+    .config("spark.hadoop.fs.s3a.path.style.access", "true") \
+    .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
     .getOrCreate()
 
 spark.sparkContext.setLogLevel("WARN")
@@ -172,3 +177,8 @@ for r in results:
     print(f"  {icon} {r['table']:15s} → {r['rows']:>10,} rows")
 
 spark.stop()
+
+# Exit with error if any table failed
+if any(r["status"] != "success" for r in results):
+    print("\n❌ Pipeline failed! Some tables were not ingested.")
+    sys.exit(1)
