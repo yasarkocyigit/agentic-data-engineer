@@ -148,6 +148,28 @@ services:
       - agentic-network
 
   # ---------------------------------------------------------
+  # SOURCE POSTGRES (TPC-H Source + Airflow Metadata)
+  # ---------------------------------------------------------
+  postgres-source:
+    image: postgres:17
+    container_name: postgres_source
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: changeme
+      POSTGRES_DB: postgres
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_source_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - agentic-network
+
+  # ---------------------------------------------------------
   # AIRFLOW 3.x (Orchestration)
   # ---------------------------------------------------------
   airflow-init:
@@ -207,6 +229,7 @@ services:
       - AIRFLOW__CORE__INTERNAL_API_URL=http://airflow-webserver:8080
       - AIRFLOW__CORE__EXECUTION_API_SERVER_URL=http://airflow-webserver:8080/execution/
       - AIRFLOW__API_AUTH__JWT_SECRET=${AIRFLOW_JWT_SECRET:-CHANGE_ME_IN_ENV_FILE}
+      - OPENLINEAGE_DISABLED=true
     command: scheduler
     volumes:
       - ./dags:/opt/airflow/dags
@@ -253,6 +276,7 @@ services:
 volumes:
   minio_data:
   marquez_db_data:
+  postgres_source_data:
 
 
 networks:
