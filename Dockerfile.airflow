@@ -16,7 +16,9 @@ USER airflow
 # Install PySpark (includes spark-submit) and Airflow Spark provider
 RUN pip install --no-cache-dir \
     pyspark==4.1.1 \
-    apache-airflow-providers-apache-spark>=4.0.0
+    apache-airflow-providers-apache-spark>=4.0.0 \
+    pyyaml \
+    psycopg2-binary
 
 # Download AWS SDK v2 bundle into PySpark's jars directory
 # hadoop-aws is bundled with PySpark 4.1.1 (Hadoop 3.4.1)
