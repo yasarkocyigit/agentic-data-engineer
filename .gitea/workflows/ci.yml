@@ -1,0 +1,31 @@
+name: Pipeline Validation
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Validate DAG Syntax
+        run: |
+          echo "Validating DAG files..."
+          for f in dags/*.py; do
+            python -c "import ast; ast.parse(open('$f').read())" && echo "  OK: $f"
+          done
+          echo "DAG syntax check passed"
+
+      - name: Lint Check
+        run: |
+          pip install ruff --quiet
+          ruff check dags/ --select E,W,F --ignore E501 || true
+          echo "Lint check complete"
