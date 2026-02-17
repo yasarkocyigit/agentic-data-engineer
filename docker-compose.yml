@@ -101,7 +101,7 @@ services:
   # MARQUEZ (OpenLineage Data Lineage)
   # ---------------------------------------------------------
   marquez-db:
-    image: postgres:17
+    image: postgres:15
     container_name: marquez_db
     environment:
       POSTGRES_USER: marquez
@@ -109,6 +109,11 @@ services:
       POSTGRES_DB: marquez
     volumes:
       - marquez_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U marquez -d marquez" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     networks:
       - agentic-network
 
@@ -128,7 +133,8 @@ services:
       - "5002:5000" # Marquez API (5002 to avoid Mac AirPlay conflict)
       - "5003:5001" # Marquez Admin
     depends_on:
-      - marquez-db
+      marquez-db:
+        condition: service_healthy
     networks:
       - agentic-network
 
@@ -161,6 +167,8 @@ services:
       - AIRFLOW__CORE__FERNET_KEY=${AIRFLOW_FERNET_KEY:-GENERATE_A_FERNET_KEY}
       - AIRFLOW__CORE__LOAD_EXAMPLES=false
       - AIRFLOW__WEBSERVER__SECRET_KEY=${AIRFLOW_SECRET_KEY:-CHANGE_ME_IN_ENV_FILE}
+      - AIRFLOW__OPENLINEAGE__TRANSPORT={"type":"http","url":"http://marquez:5000","endpoint":"api/v1/lineage"}
+      - AIRFLOW__OPENLINEAGE__NAMESPACE=agentic-pipeline
     entrypoint: >
       /bin/bash -c " airflow db migrate; airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com; echo 'Airflow initialized!'; "
     networks:
@@ -177,8 +185,12 @@ services:
       - AIRFLOW__CORE__FERNET_KEY=${AIRFLOW_FERNET_KEY:-GENERATE_A_FERNET_KEY}
       - AIRFLOW__CORE__LOAD_EXAMPLES=false
       - AIRFLOW__WEBSERVER__SECRET_KEY=${AIRFLOW_SECRET_KEY:-CHANGE_ME_IN_ENV_FILE}
-      - AIRFLOW__API__AUTH_BACKENDS=airflow.api.auth.backend.basic_auth
+      - AIRFLOW__API__AUTH_BACKENDS=airflow.api.auth.backend.no_auth
+      - AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS=admin:ADMIN
+      - AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE=/opt/airflow/config/simple_auth_manager_passwords.json
       - AIRFLOW__API_AUTH__JWT_SECRET=${AIRFLOW_JWT_SECRET:-CHANGE_ME_IN_ENV_FILE}
+      - AIRFLOW__OPENLINEAGE__TRANSPORT={"type":"http","url":"http://marquez:5000","endpoint":"api/v1/lineage"}
+      - AIRFLOW__OPENLINEAGE__NAMESPACE=agentic-pipeline
     command: api-server
     ports:
       - "8081:8080" # Airflow UI
@@ -207,6 +219,8 @@ services:
       - AIRFLOW__CORE__INTERNAL_API_URL=http://airflow-webserver:8080
       - AIRFLOW__CORE__EXECUTION_API_SERVER_URL=http://airflow-webserver:8080/execution/
       - AIRFLOW__API_AUTH__JWT_SECRET=${AIRFLOW_JWT_SECRET:-CHANGE_ME_IN_ENV_FILE}
+      - AIRFLOW__OPENLINEAGE__TRANSPORT={"type":"http","url":"http://marquez:5000","endpoint":"api/v1/lineage"}
+      - AIRFLOW__OPENLINEAGE__NAMESPACE=agentic-pipeline
     command: scheduler
     volumes:
       - ./dags:/opt/airflow/dags
@@ -217,6 +231,7 @@ services:
       - ./jars:/opt/spark/extra-jars
     depends_on:
       - airflow-init
+      - marquez
     restart: unless-stopped
     networks:
       - agentic-network
@@ -235,6 +250,8 @@ services:
       - AIRFLOW__CORE__INTERNAL_API_URL=http://airflow-webserver:8080
       - AIRFLOW__CORE__EXECUTION_API_SERVER_URL=http://airflow-webserver:8080/execution/
       - AIRFLOW__API_AUTH__JWT_SECRET=${AIRFLOW_JWT_SECRET:-CHANGE_ME_IN_ENV_FILE}
+      - AIRFLOW__OPENLINEAGE__TRANSPORT={"type":"http","url":"http://marquez:5000","endpoint":"api/v1/lineage"}
+      - AIRFLOW__OPENLINEAGE__NAMESPACE=agentic-pipeline
     command: dag-processor
     volumes:
       - ./dags:/opt/airflow/dags
@@ -247,12 +264,109 @@ services:
     networks:
       - agentic-network
 
+  # ---------------------------------------------------------
+  # APACHE SUPERSET (Data Visualization)
+  # ---------------------------------------------------------
+  superset-redis:
+    image: redis:7-alpine
+    container_name: superset_redis
+    networks:
+      - agentic-network
+
+  superset-init:
+    build:
+      context: .
+      dockerfile: config/Dockerfile.superset
+    platform: linux/amd64
+    container_name: superset_init
+    environment:
+      - SUPERSET_CONFIG_PATH=/app/superset_config.py
+      - SUPERSET_SECRET_KEY=openclaw-superset-secret-key-2026
+    volumes:
+      - ./config/superset_config.py:/app/superset_config.py:ro
+      - ./config/superset_bootstrap.py:/app/superset_bootstrap.py:ro
+      - superset_home:/app/superset_home
+    command: >
+      sh -c "superset db upgrade &&
+             superset fab create-admin --username admin --firstname Admin --lastname User --email admin@example.com --password admin || true &&
+             superset init &&
+             python /app/superset_bootstrap.py &&
+             echo 'Superset initialized!'"
+    depends_on:
+      superset-redis:
+        condition: service_started
+    networks:
+      - agentic-network
+
+  superset:
+    build:
+      context: .
+      dockerfile: config/Dockerfile.superset
+    platform: linux/amd64
+    container_name: superset_app
+    environment:
+      - SUPERSET_CONFIG_PATH=/app/superset_config.py
+      - SUPERSET_SECRET_KEY=openclaw-superset-secret-key-2026
+    ports:
+      - "8089:8088" # Superset UI
+    volumes:
+      - ./config/superset_config.py:/app/superset_config.py:ro
+      - ./config/superset_bootstrap.py:/app/superset_bootstrap.py:ro
+      - superset_home:/app/superset_home
+    depends_on:
+      - superset-init
+    restart: unless-stopped
+    networks:
+      - agentic-network
+
+  # ---------------------------------------------------------
+  # GITEA (Self-hosted Git + CI/CD)
+  # ---------------------------------------------------------
+  gitea:
+    image: gitea/gitea:latest
+    container_name: gitea_server
+    environment:
+      - USER_UID=1000
+      - USER_GID=1000
+      - GITEA__database__DB_TYPE=sqlite3
+      - GITEA__server__ROOT_URL=http://localhost:3030
+      - GITEA__server__HTTP_PORT=3000
+      - GITEA__actions__ENABLED=true
+      - GITEA__security__INSTALL_LOCK=true
+      - GITEA__service__DISABLE_REGISTRATION=true
+    volumes:
+      - gitea_data:/data
+    ports:
+      - "3030:3000" # Gitea Web UI
+      - "2222:22" # Gitea SSH
+    restart: unless-stopped
+    networks:
+      - agentic-network
+
+  gitea-runner:
+    image: gitea/act_runner:latest
+    container_name: gitea_runner
+    environment:
+      - GITEA_INSTANCE_URL=http://gitea:3000
+      - GITEA_RUNNER_REGISTRATION_TOKEN=UxSlNqbIwVoYWln9r8q6Jo6nRDK7gxR2Q8WTYm7L
+      - GITEA_RUNNER_NAME=agentic-runner
+      - GITEA_RUNNER_LABELS=ubuntu-latest:docker://node:20-bookworm,ubuntu-22.04:docker://node:20-bookworm
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - gitea
+    restart: unless-stopped
+    networks:
+      - agentic-network
+
 # ---------------------------------------------------------
 # VOLUMES
 # ---------------------------------------------------------
 volumes:
   minio_data:
   marquez_db_data:
+  superset_home:
+  gitea_data:
 
 
 networks:
