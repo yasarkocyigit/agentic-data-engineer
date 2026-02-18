@@ -1,0 +1,39 @@
+{
+  "name": "web-ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "lint": "eslint"
+  },
+  "dependencies": {
+    "@monaco-editor/react": "^4.7.0",
+    "@types/react-syntax-highlighter": "^15.5.13",
+    "clsx": "^2.1.1",
+    "framer-motion": "^12.34.0",
+    "lucide-react": "^0.564.0",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-markdown": "^10.1.0",
+    "react-router-dom": "^7.5.0",
+    "react-syntax-highlighter": "^16.1.0",
+    "rehype-raw": "^7.0.0",
+    "remark-gfm": "^4.0.1",
+    "tailwind-merge": "^3.4.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@tailwindcss/vite": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^4.5.0",
+    "eslint": "^9",
+    "tailwindcss": "^4",
+    "typescript": "^5",
+    "vite": "^6.3.0"
+  }
+}

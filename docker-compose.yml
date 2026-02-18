@@ -5,6 +5,39 @@
 
 services:
   # ---------------------------------------------------------
+  # OPENCLAW API (FastAPI Backend)
+  # ---------------------------------------------------------
+  openclaw-api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: openclaw_api
+    ports:
+      - "8000:8000"
+    environment:
+      - AIRFLOW_API_URL=http://airflow-webserver:8080
+      - AIRFLOW_SA_USERNAME=admin
+      - AIRFLOW_SA_PASSWORD=admin
+      - MARQUEZ_URL=http://marquez:5000
+      - MINIO_ENDPOINT=http://minio:9000
+      - TRINO_HOST=trino
+      - TRINO_PORT=8080
+      - PG_HOST=host.docker.internal
+      - PG_PORT=5433
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./notebooks:/opt/airflow/notebooks
+      - .:/workspace
+    depends_on:
+      - airflow-webserver
+      - trino
+      - marquez
+      - minio
+    restart: unless-stopped
+    networks:
+      - agentic-network
+
+  # ---------------------------------------------------------
   # SPARK MASTER
   # ---------------------------------------------------------
   spark-master:
