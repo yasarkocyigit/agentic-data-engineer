@@ -72,11 +72,11 @@ function StateBadge({ state, size = 'sm' }: { state: string | null | undefined; 
 // ─── Health Dot ───
 
 function HealthDot({ label, status }: { label: string; status: string }) {
-    const color = status === 'healthy' ? 'bg-[#499c54]' : status === 'unhealthy' ? 'bg-[#ff5261]' : 'bg-[#e5c07b]';
+    const color = status === 'healthy' ? 'bg-obsidian-success' : status === 'unhealthy' ? 'bg-obsidian-danger' : 'bg-obsidian-warning';
     return (
         <div className="flex items-center gap-1.5 group relative">
             <div className={clsx("w-1.5 h-1.5 rounded-full", color, status === 'healthy' && "shadow-[0_0_4px_rgba(73,156,84,0.6)]")} />
-            <span className="text-[10px] text-[#6c707e] group-hover:text-[#bcbec4] transition-colors">{label}</span>
+            <span className="text-[10px] text-obsidian-muted group-hover:text-foreground transition-colors">{label}</span>
         </div>
     );
 }
@@ -302,18 +302,18 @@ export default function WorkflowsPage() {
     const selectedDagData = selectedDag ? dags.find(d => d.dag_id === selectedDag) : null;
 
     return (
-        <div className="flex h-screen bg-[#1e1f22] text-[#bcbec4] font-sans overflow-hidden">
+        <div className="flex h-screen bg-obsidian-bg text-foreground font-sans overflow-hidden">
             <Sidebar />
             <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
 
                 {/* ─── Top Toolbar ─── */}
-                <header className="h-10 bg-[#2b2d30] border-b border-[#393b40] flex items-center justify-between px-4 shrink-0">
+                <header className="h-10 bg-obsidian-panel border-b border-obsidian-border flex items-center justify-between px-4 shrink-0">
                     <div className="flex items-center gap-3">
                         <div className="flex items-center gap-2">
-                            <Activity className="w-4 h-4 text-[#3574f0]" />
-                            <span className="text-[12px] font-bold text-[#ced0d6] tracking-wide">Orchestration</span>
+                            <Activity className="w-4 h-4 text-obsidian-info" />
+                            <span className="text-[12px] font-bold text-foreground tracking-wide">Orchestration</span>
                         </div>
-                        <div className="flex items-center gap-3 ml-4 pl-4 border-l border-[#393b40]">
+                        <div className="flex items-center gap-3 ml-4 pl-4 border-l border-obsidian-border">
                             {health ? (
                                 <>
                                     <HealthDot label="Scheduler" status={health.scheduler.status} />
@@ -321,15 +321,15 @@ export default function WorkflowsPage() {
                                     <HealthDot label="Processor" status={health.dag_processor.status} />
                                 </>
                             ) : (
-                                <span className="text-[10px] text-[#6c707e] animate-pulse">Connecting...</span>
+                                <span className="text-[10px] text-obsidian-muted animate-pulse">Connecting...</span>
                             )}
                         </div>
                     </div>
                     <div className="flex items-center gap-2">
-                        <span className="text-[10px] text-[#6c707e]">{dags.length} pipelines</span>
+                        <span className="text-[10px] text-obsidian-muted">{dags.length} pipelines</span>
                         <button
                             onClick={() => { fetchDags(); fetchHealth(); }}
-                            className="p-1.5 hover:bg-[#3c3f41] rounded text-[#bcbec4] transition-colors"
+                            className="p-1.5 hover:bg-obsidian-panel-hover rounded text-foreground transition-colors"
                         >
                             <RefreshCw className={clsx("w-3.5 h-3.5", loading && "animate-spin")} />
                         </button>
@@ -337,24 +337,24 @@ export default function WorkflowsPage() {
                 </header>
 
                 {/* ─── Filter Bar ─── */}
-                <div className="h-9 bg-[#2b2d30] border-b border-[#393b40] flex items-center px-4 gap-3 shrink-0">
-                    <div className="flex items-center gap-1.5 bg-[#1e1f22] rounded px-2 py-1 flex-1 max-w-xs">
-                        <Search className="w-3 h-3 text-[#6c707e]" />
+                <div className="h-9 bg-obsidian-panel border-b border-obsidian-border flex items-center px-4 gap-3 shrink-0">
+                    <div className="flex items-center gap-1.5 bg-obsidian-bg rounded px-2 py-1 flex-1 max-w-xs">
+                        <Search className="w-3 h-3 text-obsidian-muted" />
                         <input
                             type="text"
                             placeholder="Search pipelines..."
                             value={search}
                             onChange={(e) => setSearch(e.target.value)}
-                            className="bg-transparent text-[11px] text-[#bcbec4] placeholder-[#6c707e] outline-none w-full"
+                            className="bg-transparent text-[11px] text-foreground placeholder-[#6c707e] outline-none w-full"
                         />
                     </div>
                     <div className="flex items-center gap-1.5">
-                        <Tag className="w-3 h-3 text-[#6c707e]" />
+                        <Tag className="w-3 h-3 text-obsidian-muted" />
                         <button
                             onClick={() => setFilterTag(null)}
                             className={clsx(
                                 "px-2 py-0.5 rounded text-[10px] transition-colors",
-                                !filterTag ? "bg-[#3574f0]/20 text-[#3574f0]" : "text-[#6c707e] hover:text-[#bcbec4]"
+                                !filterTag ? "bg-obsidian-info/20 text-obsidian-info" : "text-obsidian-muted hover:text-foreground"
                             )}
                         >
                             All
@@ -365,7 +365,7 @@ export default function WorkflowsPage() {
                                 onClick={() => setFilterTag(filterTag === tag ? null : tag)}
                                 className={clsx(
                                     "px-2 py-0.5 rounded text-[10px] transition-colors",
-                                    filterTag === tag ? "bg-[#3574f0]/20 text-[#3574f0]" : "text-[#6c707e] hover:text-[#bcbec4]"
+                                    filterTag === tag ? "bg-obsidian-info/20 text-obsidian-info" : "text-obsidian-muted hover:text-foreground"
                                 )}
                             >
                                 {tag}
@@ -376,10 +376,10 @@ export default function WorkflowsPage() {
 
                 {/* ─── Error Toast ─── */}
                 {actionError && (
-                    <div className="mx-4 mt-1 px-3 py-2 bg-[#ff5261]/10 border border-[#ff5261]/30 rounded text-[11px] text-[#ff7b86] flex items-center gap-2 shrink-0">
-                        <AlertCircle className="w-3.5 h-3.5 text-[#ff5261] shrink-0" />
+                    <div className="mx-4 mt-1 px-3 py-2 bg-obsidian-danger/10 border border-obsidian-danger/30 rounded text-[11px] text-obsidian-danger-light flex items-center gap-2 shrink-0">
+                        <AlertCircle className="w-3.5 h-3.5 text-obsidian-danger shrink-0" />
                         <span className="flex-1 truncate">{actionError}</span>
-                        <button onClick={() => setActionError(null)} className="text-[#ff5261] hover:text-white text-[10px] font-bold">✕</button>
+                        <button onClick={() => setActionError(null)} className="text-obsidian-danger hover:text-white text-[10px] font-bold">✕</button>
                     </div>
                 )}
 
@@ -387,7 +387,7 @@ export default function WorkflowsPage() {
                 <div className="flex-1 flex overflow-hidden">
 
                     {/* DAG List / Graph View */}
-                    <div className={clsx("flex-1 overflow-auto", selectedDag ? "border-r border-[#393b40]" : "")}>
+                    <div className={clsx("flex-1 overflow-auto", selectedDag ? "border-r border-obsidian-border" : "")}>
                         {/* Show graph in main area when graph tab is active */}
                         {selectedDag && sidebarTab === 'graph' ? (
                             <DagGraph
@@ -399,28 +399,28 @@ export default function WorkflowsPage() {
                                 }}
                             />
                         ) : error ? (
-                            <div className="flex flex-col items-center justify-center h-full text-[#ff5261] gap-3">
+                            <div className="flex flex-col items-center justify-center h-full text-obsidian-danger gap-3">
                                 <AlertCircle className="w-10 h-10 opacity-60" />
                                 <span className="text-[13px] font-medium">Connection Error</span>
-                                <span className="text-[11px] text-[#6c707e] max-w-sm text-center">{error}</span>
+                                <span className="text-[11px] text-obsidian-muted max-w-sm text-center">{error}</span>
                                 <button
                                     onClick={fetchDags}
-                                    className="mt-2 px-3 py-1.5 bg-[#3574f0]/20 text-[#3574f0] rounded text-[11px] hover:bg-[#3574f0]/30 transition-colors"
+                                    className="mt-2 px-3 py-1.5 bg-obsidian-info/20 text-obsidian-info rounded text-[11px] hover:bg-obsidian-info/30 transition-colors"
                                 >
                                     Retry Connection
                                 </button>
                             </div>
                         ) : (
                             <table className="w-full text-left border-collapse">
-                                <thead className="sticky top-0 bg-[#2b2d30] z-10 shadow-[0_1px_0_#393b40]">
+                                <thead className="sticky top-0 bg-obsidian-panel z-10 shadow-[0_1px_0_#393b40]">
                                     <tr>
-                                        <th className="p-1.5 px-3 text-[10px] text-[#6c707e] font-medium uppercase tracking-wider w-8"></th>
-                                        <th className="p-1.5 px-3 text-[10px] text-[#6c707e] font-medium uppercase tracking-wider text-left">Pipeline</th>
-                                        <th className="p-1.5 px-3 text-[10px] text-[#6c707e] font-medium uppercase tracking-wider text-left w-24">Schedule</th>
-                                        <th className="p-1.5 px-3 text-[10px] text-[#6c707e] font-medium uppercase tracking-wider text-left w-24">Last Run</th>
-                                        <th className="p-1.5 px-3 text-[10px] text-[#6c707e] font-medium uppercase tracking-wider text-left w-20">State</th>
-                                        <th className="p-1.5 px-3 text-[10px] text-[#6c707e] font-medium uppercase tracking-wider text-left w-20">Duration</th>
-                                        <th className="p-1.5 px-3 text-[10px] text-[#6c707e] font-medium uppercase tracking-wider text-center w-44">Actions</th>
+                                        <th className="p-1.5 px-3 text-[10px] text-obsidian-muted font-medium uppercase tracking-wider w-8"></th>
+                                        <th className="p-1.5 px-3 text-[10px] text-obsidian-muted font-medium uppercase tracking-wider text-left">Pipeline</th>
+                                        <th className="p-1.5 px-3 text-[10px] text-obsidian-muted font-medium uppercase tracking-wider text-left w-24">Schedule</th>
+                                        <th className="p-1.5 px-3 text-[10px] text-obsidian-muted font-medium uppercase tracking-wider text-left w-24">Last Run</th>
+                                        <th className="p-1.5 px-3 text-[10px] text-obsidian-muted font-medium uppercase tracking-wider text-left w-20">State</th>
+                                        <th className="p-1.5 px-3 text-[10px] text-obsidian-muted font-medium uppercase tracking-wider text-left w-20">Duration</th>
+                                        <th className="p-1.5 px-3 text-[10px] text-obsidian-muted font-medium uppercase tracking-wider text-center w-44">Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody className="text-[12px]">
@@ -432,8 +432,8 @@ export default function WorkflowsPage() {
                                                 key={dag.dag_id}
                                                 onClick={() => setSelectedDag(isSelected ? null : dag.dag_id)}
                                                 className={clsx(
-                                                    "border-b border-[#393b40]/50 group cursor-pointer transition-colors",
-                                                    isSelected ? "bg-[#214283]/30" : "hover:bg-[#2b2d30]"
+                                                    "border-b border-obsidian-border/50 group cursor-pointer transition-colors",
+                                                    isSelected ? "bg-[#214283]/30" : "hover:bg-obsidian-panel"
                                                 )}
                                             >
                                                 {/* Status indicator */}
@@ -441,26 +441,26 @@ export default function WorkflowsPage() {
                                                     <div className={clsx(
                                                         "w-2 h-2 rounded-full mx-auto transition-all",
                                                         dag.is_paused
-                                                            ? "bg-[#6c707e]/50"
-                                                            : "bg-[#499c54] shadow-[0_0_6px_rgba(73,156,84,0.5)]"
+                                                            ? "bg-obsidian-muted/50"
+                                                            : "bg-obsidian-success shadow-[0_0_6px_rgba(73,156,84,0.5)]"
                                                     )} />
                                                 </td>
 
                                                 {/* Pipeline info */}
                                                 <td className="p-1.5 px-3">
                                                     <div className="flex items-center gap-2">
-                                                        <span className="text-[#e8eaed] font-semibold">{dag.display_name}</span>
+                                                        <span className="text-foreground font-semibold">{dag.display_name}</span>
                                                         {dag.has_import_errors && (
-                                                            <span title="Import errors"><AlertCircle className="w-3 h-3 text-[#ff5261]" /></span>
+                                                            <span title="Import errors"><AlertCircle className="w-3 h-3 text-obsidian-danger" /></span>
                                                         )}
                                                     </div>
                                                     <div className="flex items-center gap-2 mt-0.5">
-                                                        <span className="text-[10px] text-[#6c707e]">
+                                                        <span className="text-[10px] text-obsidian-muted">
                                                             <User className="w-2.5 h-2.5 inline mr-0.5 -mt-0.5" />
                                                             {dag.owners.join(', ')}
                                                         </span>
                                                         {dag.tags.slice(0, 3).map(tag => (
-                                                            <span key={tag} className="text-[8px] px-1.5 py-0.5 rounded bg-[#3c3f41] text-[#8c8e9e]">
+                                                            <span key={tag} className="text-[8px] px-1.5 py-0.5 rounded bg-obsidian-panel-hover text-obsidian-muted">
                                                                 {tag}
                                                             </span>
                                                         ))}
@@ -468,12 +468,12 @@ export default function WorkflowsPage() {
                                                 </td>
 
                                                 {/* Schedule */}
-                                                <td className="p-1.5 px-3 text-[#8c8e9e] font-mono text-[11px]">
+                                                <td className="p-1.5 px-3 text-obsidian-muted font-mono text-[11px]">
                                                     {dag.schedule || 'Manual'}
                                                 </td>
 
                                                 {/* Last run time */}
-                                                <td className="p-1.5 px-3 text-[#8c8e9e] text-[11px]">
+                                                <td className="p-1.5 px-3 text-obsidian-muted text-[11px]">
                                                     {dag.last_run ? timeAgo(dag.last_run.end_date || dag.last_run.start_date) : '—'}
                                                 </td>
 
@@ -482,14 +482,14 @@ export default function WorkflowsPage() {
                                                     {dag.last_run ? (
                                                         <StateBadge state={dag.last_run.state} />
                                                     ) : dag.is_paused ? (
-                                                        <span className="text-[9px] text-[#6c707e] uppercase font-semibold">Paused</span>
+                                                        <span className="text-[9px] text-obsidian-muted uppercase font-semibold">Paused</span>
                                                     ) : (
-                                                        <span className="text-[9px] text-[#6c707e] uppercase font-semibold">Ready</span>
+                                                        <span className="text-[9px] text-obsidian-muted uppercase font-semibold">Ready</span>
                                                     )}
                                                 </td>
 
                                                 {/* Duration */}
-                                                <td className="p-1.5 px-3 text-[#8c8e9e] font-mono text-[11px]">
+                                                <td className="p-1.5 px-3 text-obsidian-muted font-mono text-[11px]">
                                                     {formatDuration(dag.last_run?.duration_seconds)}
                                                 </td>
 
@@ -502,8 +502,8 @@ export default function WorkflowsPage() {
                                                             onClick={() => handleAction(dag.dag_id, 'trigger')}
                                                             disabled={!!actionLoading}
                                                             className="flex items-center gap-1 px-2 py-1 rounded text-[9px] font-semibold
-                                         bg-[#499c54]/10 text-[#499c54] hover:bg-[#499c54]/25
-                                         border border-[#499c54]/20 transition-colors disabled:opacity-30"
+                                         bg-obsidian-success/10 text-obsidian-success hover:bg-obsidian-success/25
+                                         border border-obsidian-success/20 transition-colors disabled:opacity-30"
                                                         >
                                                             {actionLoading === `${dag.dag_id}-trigger`
                                                                 ? <Loader2 className="w-3 h-3 animate-spin" />
@@ -517,8 +517,8 @@ export default function WorkflowsPage() {
                                                                 onClick={() => handleAction(dag.dag_id, 'cancel', dag.last_run!.run_id)}
                                                                 disabled={!!actionLoading}
                                                                 className="flex items-center gap-1 px-2 py-1 rounded text-[9px] font-semibold
-                                           bg-[#ff5261]/10 text-[#ff5261] hover:bg-[#ff5261]/25
-                                           border border-[#ff5261]/20 transition-colors disabled:opacity-30"
+                                           bg-obsidian-danger/10 text-obsidian-danger hover:bg-obsidian-danger/25
+                                           border border-obsidian-danger/20 transition-colors disabled:opacity-30"
                                                             >
                                                                 {actionLoading === `${dag.dag_id}-cancel`
                                                                     ? <Loader2 className="w-3 h-3 animate-spin" />
@@ -534,8 +534,8 @@ export default function WorkflowsPage() {
                                                             className={clsx(
                                                                 "flex items-center gap-1 px-2 py-1 rounded text-[9px] font-semibold border transition-colors disabled:opacity-30",
                                                                 dag.is_paused
-                                                                    ? "bg-[#3574f0]/10 text-[#3574f0] hover:bg-[#3574f0]/25 border-[#3574f0]/20"
-                                                                    : "bg-[#e5c07b]/10 text-[#e5c07b] hover:bg-[#e5c07b]/25 border-[#e5c07b]/20"
+                                                                    ? "bg-obsidian-info/10 text-obsidian-info hover:bg-obsidian-info/25 border-obsidian-info/20"
+                                                                    : "bg-obsidian-warning/10 text-obsidian-warning hover:bg-obsidian-warning/25 border-obsidian-warning/20"
                                                             )}
                                                         >
                                                             {actionLoading === `${dag.dag_id}-pause` || actionLoading === `${dag.dag_id}-unpause`
@@ -552,7 +552,7 @@ export default function WorkflowsPage() {
                                     })}
                                     {!loading && filteredDags.length === 0 && (
                                         <tr>
-                                            <td colSpan={7} className="p-12 text-center text-[#6c707e]">
+                                            <td colSpan={7} className="p-12 text-center text-obsidian-muted">
                                                 {search || filterTag ? 'No pipelines match your filter' : 'No pipelines found'}
                                             </td>
                                         </tr>
@@ -565,24 +565,24 @@ export default function WorkflowsPage() {
                     {/* ─── Run History Sidebar ─── */}
                     {selectedDag && (
                         <div className={clsx(
-                            "flex flex-col bg-[#1e1f22] shrink-0 transition-all duration-200",
+                            "flex flex-col bg-obsidian-bg shrink-0 transition-all duration-200",
                             fullscreenSidebar
                                 ? "fixed inset-0 z-50 w-full"
                                 : "w-[380px]"
                         )}>
                             {/* Header */}
                             <div className={clsx(
-                                "bg-[#2b2d30] border-b border-[#393b40] flex items-center justify-between shrink-0",
+                                "bg-obsidian-panel border-b border-obsidian-border flex items-center justify-between shrink-0",
                                 fullscreenSidebar ? "h-12 px-6" : "h-10 px-4"
                             )}>
                                 <div className="flex items-center gap-2 min-w-0">
-                                    <Zap className={clsx("text-[#3574f0] shrink-0", fullscreenSidebar ? "w-4 h-4" : "w-3.5 h-3.5")} />
-                                    <span className={clsx("font-bold text-[#ced0d6] truncate", fullscreenSidebar ? "text-sm" : "text-[11px]")}>{selectedDag}</span>
+                                    <Zap className={clsx("text-obsidian-info shrink-0", fullscreenSidebar ? "w-4 h-4" : "w-3.5 h-3.5")} />
+                                    <span className={clsx("font-bold text-foreground truncate", fullscreenSidebar ? "text-sm" : "text-[11px]")}>{selectedDag}</span>
                                 </div>
                                 <div className="flex items-center gap-1">
                                     <button
                                         onClick={() => setFullscreenSidebar(!fullscreenSidebar)}
-                                        className="p-1 hover:bg-[#3c3f41] rounded text-[#6c707e] hover:text-[#bcbec4] transition-colors"
+                                        className="p-1 hover:bg-obsidian-panel-hover rounded text-obsidian-muted hover:text-foreground transition-colors"
                                         title={fullscreenSidebar ? 'Minimize' : 'Maximize'}
                                     >
                                         {fullscreenSidebar
@@ -592,7 +592,7 @@ export default function WorkflowsPage() {
                                     </button>
                                     <button
                                         onClick={() => { setSelectedDag(null); setFullscreenSidebar(false); }}
-                                        className="p-1 hover:bg-[#3c3f41] rounded text-[#6c707e] hover:text-[#bcbec4] text-[12px]"
+                                        className="p-1 hover:bg-obsidian-panel-hover rounded text-obsidian-muted hover:text-foreground text-[12px]"
                                     >
                                         ✕
                                     </button>
@@ -601,11 +601,11 @@ export default function WorkflowsPage() {
 
                             {/* DAG Info */}
                             {selectedDagData && (
-                                <div className="px-4 py-3 border-b border-[#393b40] text-[11px] space-y-2">
+                                <div className="px-4 py-3 border-b border-obsidian-border text-[11px] space-y-2">
                                     {selectedDagData.description && (
-                                        <p className="text-[#8c8e9e] leading-relaxed">{selectedDagData.description}</p>
+                                        <p className="text-obsidian-muted leading-relaxed">{selectedDagData.description}</p>
                                     )}
-                                    <div className="flex items-center gap-4 text-[10px] text-[#6c707e]">
+                                    <div className="flex items-center gap-4 text-[10px] text-obsidian-muted">
                                         <span><Calendar className="w-3 h-3 inline mr-1 -mt-0.5" />{selectedDagData.schedule || 'Manual'}</span>
                                         <span><User className="w-3 h-3 inline mr-1 -mt-0.5" />{selectedDagData.owners.join(', ')}</span>
                                     </div>
@@ -614,8 +614,8 @@ export default function WorkflowsPage() {
                                         <span className={clsx(
                                             "text-[9px] px-2 py-0.5 rounded font-semibold uppercase",
                                             selectedDagData.is_paused
-                                                ? "bg-[#e5c07b]/10 text-[#e5c07b]"
-                                                : "bg-[#499c54]/10 text-[#499c54]"
+                                                ? "bg-obsidian-warning/10 text-obsidian-warning"
+                                                : "bg-obsidian-success/10 text-obsidian-success"
                                         )}>
                                             Schedule: {selectedDagData.is_paused ? 'Paused' : 'Active'}
                                         </span>
@@ -625,8 +625,8 @@ export default function WorkflowsPage() {
                                             className={clsx(
                                                 "flex items-center gap-1 px-2 py-1 rounded text-[10px] font-medium border transition-colors disabled:opacity-50",
                                                 selectedDagData.is_paused
-                                                    ? "bg-[#3574f0]/10 text-[#3574f0] hover:bg-[#3574f0]/25 border-[#3574f0]/20"
-                                                    : "bg-[#e5c07b]/10 text-[#e5c07b] hover:bg-[#e5c07b]/25 border-[#e5c07b]/20"
+                                                    ? "bg-obsidian-info/10 text-obsidian-info hover:bg-obsidian-info/25 border-obsidian-info/20"
+                                                    : "bg-obsidian-warning/10 text-obsidian-warning hover:bg-obsidian-warning/25 border-obsidian-warning/20"
                                             )}
                                         >
                                             {selectedDagData.is_paused
@@ -638,14 +638,14 @@ export default function WorkflowsPage() {
                             )}
 
                             {/* Tab Bar */}
-                            <div className="flex border-b border-[#393b40] shrink-0">
+                            <div className="flex border-b border-obsidian-border shrink-0">
                                 <button
                                     onClick={() => setSidebarTab('graph')}
                                     className={clsx(
                                         "flex-1 flex items-center justify-center gap-1.5 py-2 text-[10px] font-semibold transition-colors",
                                         sidebarTab === 'graph'
-                                            ? "text-[#bcbec4] border-b-2 border-[#3574f0] bg-[#2b2d30]/50"
-                                            : "text-[#6c707e] hover:text-[#bcbec4] hover:bg-[#393b40]/30"
+                                            ? "text-foreground border-b-2 border-[#3574f0] bg-obsidian-panel/50"
+                                            : "text-obsidian-muted hover:text-foreground hover:bg-obsidian-panel/30"
                                     )}
                                 >
                                     <GitBranch className="w-3 h-3" /> Graph
@@ -655,8 +655,8 @@ export default function WorkflowsPage() {
                                     className={clsx(
                                         "flex-1 flex items-center justify-center gap-1.5 py-2 text-[10px] font-semibold transition-colors",
                                         sidebarTab === 'runs'
-                                            ? "text-[#bcbec4] border-b-2 border-[#3574f0] bg-[#2b2d30]/50"
-                                            : "text-[#6c707e] hover:text-[#bcbec4] hover:bg-[#393b40]/30"
+                                            ? "text-foreground border-b-2 border-[#3574f0] bg-obsidian-panel/50"
+                                            : "text-obsidian-muted hover:text-foreground hover:bg-obsidian-panel/30"
                                     )}
                                 >
                                     <FileText className="w-3 h-3" /> Runs
@@ -666,8 +666,8 @@ export default function WorkflowsPage() {
                                     className={clsx(
                                         "flex-1 flex items-center justify-center gap-1.5 py-2 text-[10px] font-semibold transition-colors",
                                         sidebarTab === 'code'
-                                            ? "text-[#bcbec4] border-b-2 border-[#3574f0] bg-[#2b2d30]/50"
-                                            : "text-[#6c707e] hover:text-[#bcbec4] hover:bg-[#393b40]/30"
+                                            ? "text-foreground border-b-2 border-[#3574f0] bg-obsidian-panel/50"
+                                            : "text-obsidian-muted hover:text-foreground hover:bg-obsidian-panel/30"
                                     )}
                                 >
                                     <Code2 className="w-3 h-3" /> Code
@@ -676,13 +676,13 @@ export default function WorkflowsPage() {
 
                             {/* Runs List header */}
                             {sidebarTab === 'runs' && (
-                                <div className="px-4 py-2 border-b border-[#393b40] flex items-center justify-between shrink-0">
-                                    <span className="text-[10px] text-[#6c707e] uppercase font-semibold tracking-wider">Recent Runs</span>
+                                <div className="px-4 py-2 border-b border-obsidian-border flex items-center justify-between shrink-0">
+                                    <span className="text-[10px] text-obsidian-muted uppercase font-semibold tracking-wider">Recent Runs</span>
                                     <button
                                         onClick={() => handleAction(selectedDag, 'trigger')}
                                         disabled={!!actionLoading}
-                                        className="flex items-center gap-1 px-2 py-1 bg-[#499c54]/15 text-[#499c54] rounded text-[10px]
-                             font-medium hover:bg-[#499c54]/25 border border-[#499c54]/20 transition-colors disabled:opacity-50"
+                                        className="flex items-center gap-1 px-2 py-1 bg-obsidian-success/15 text-obsidian-success rounded text-[10px]
+                             font-medium hover:bg-obsidian-success/25 border border-obsidian-success/20 transition-colors disabled:opacity-50"
                                     >
                                         <Play className="w-3 h-3" /> Trigger New Run
                                     </button>
@@ -694,30 +694,30 @@ export default function WorkflowsPage() {
                                 <div className="flex-1 overflow-auto">
                                     {runsLoading ? (
                                         <div className="flex items-center justify-center py-8">
-                                            <Loader2 className="w-5 h-5 text-[#3574f0] animate-spin" />
+                                            <Loader2 className="w-5 h-5 text-obsidian-info animate-spin" />
                                         </div>
                                     ) : runs.length === 0 ? (
-                                        <div className="text-center py-8 text-[#6c707e] text-[11px]">No runs yet</div>
+                                        <div className="text-center py-8 text-obsidian-muted text-[11px]">No runs yet</div>
                                     ) : (
                                         <div>
                                             {runs.map((run) => {
                                                 const isExpanded = expandedRun === run.run_id;
                                                 const isRunRunning = run.state === 'running' || run.state === 'queued';
                                                 return (
-                                                    <div key={run.run_id} className="border-b border-[#393b40]/30">
+                                                    <div key={run.run_id} className="border-b border-obsidian-border/30">
                                                         {/* Run row */}
                                                         <div
                                                             onClick={() => toggleRunExpand(run.run_id)}
                                                             className={clsx(
                                                                 "px-4 py-2.5 cursor-pointer transition-colors",
-                                                                isExpanded ? "bg-[#2b2d30]" : "hover:bg-[#2b2d30]/50"
+                                                                isExpanded ? "bg-obsidian-panel" : "hover:bg-obsidian-panel/50"
                                                             )}
                                                         >
                                                             <div className="flex items-center justify-between mb-1">
                                                                 <div className="flex items-center gap-1.5">
                                                                     {isExpanded
-                                                                        ? <ChevronDown className="w-3 h-3 text-[#6c707e]" />
-                                                                        : <ChevronRight className="w-3 h-3 text-[#6c707e]" />}
+                                                                        ? <ChevronDown className="w-3 h-3 text-obsidian-muted" />
+                                                                        : <ChevronRight className="w-3 h-3 text-obsidian-muted" />}
                                                                     <StateBadge state={run.state} />
                                                                     {/* Cancel button inline for running runs */}
                                                                     {isRunRunning && (
@@ -725,17 +725,17 @@ export default function WorkflowsPage() {
                                                                             onClick={(e) => { e.stopPropagation(); handleAction(selectedDag!, 'cancel', run.run_id); }}
                                                                             disabled={!!actionLoading}
                                                                             className="flex items-center gap-1 ml-1 px-1.5 py-0.5 rounded text-[8px] font-semibold
-                                               bg-[#ff5261]/10 text-[#ff5261] hover:bg-[#ff5261]/25
-                                               border border-[#ff5261]/20 transition-colors disabled:opacity-30"
+                                               bg-obsidian-danger/10 text-obsidian-danger hover:bg-obsidian-danger/25
+                                               border border-obsidian-danger/20 transition-colors disabled:opacity-30"
                                                                         >
                                                                             <CircleStop className="w-2.5 h-2.5" />
                                                                             Cancel
                                                                         </button>
                                                                     )}
                                                                 </div>
-                                                                <span className="text-[10px] text-[#6c707e]">{timeAgo(run.end_date || run.start_date)}</span>
+                                                                <span className="text-[10px] text-obsidian-muted">{timeAgo(run.end_date || run.start_date)}</span>
                                                             </div>
-                                                            <div className="flex items-center justify-between text-[10px] text-[#6c707e] mt-1 pl-[18px]">
+                                                            <div className="flex items-center justify-between text-[10px] text-obsidian-muted mt-1 pl-[18px]">
                                                                 <span className="font-mono truncate max-w-[200px]">
                                                                     {run.run_type} • {run.triggered_by}
                                                                 </span>
@@ -745,16 +745,16 @@ export default function WorkflowsPage() {
 
                                                         {/* Expanded: Task Instances */}
                                                         {isExpanded && (
-                                                            <div className="bg-[#1a1b1e] border-t border-[#393b40]/30">
+                                                            <div className="bg-[#1a1b1e] border-t border-obsidian-border/30">
                                                                 {tasksLoading ? (
                                                                     <div className="flex items-center justify-center py-4">
-                                                                        <Loader2 className="w-4 h-4 text-[#3574f0] animate-spin" />
+                                                                        <Loader2 className="w-4 h-4 text-obsidian-info animate-spin" />
                                                                     </div>
                                                                 ) : taskInstances.length === 0 ? (
-                                                                    <div className="text-center py-4 text-[#6c707e] text-[10px]">No task details available</div>
+                                                                    <div className="text-center py-4 text-obsidian-muted text-[10px]">No task details available</div>
                                                                 ) : (
                                                                     <div className="py-1">
-                                                                        <div className="px-4 py-1.5 text-[9px] text-[#6c707e] uppercase font-semibold tracking-wider flex items-center gap-1">
+                                                                        <div className="px-4 py-1.5 text-[9px] text-obsidian-muted uppercase font-semibold tracking-wider flex items-center gap-1">
                                                                             <Activity className="w-2.5 h-2.5" />
                                                                             Task Details
                                                                         </div>
@@ -766,7 +766,7 @@ export default function WorkflowsPage() {
                                                                                     key={ti.id}
                                                                                     className={clsx(
                                                                                         "px-4 py-2 flex items-start gap-2 text-[11px]",
-                                                                                        isFailed && "bg-[#ff5261]/5"
+                                                                                        isFailed && "bg-obsidian-danger/5"
                                                                                     )}
                                                                                 >
                                                                                     {/* State icon */}
@@ -789,19 +789,19 @@ export default function WorkflowsPage() {
                                                                                         <div className="flex items-center justify-between">
                                                                                             <span className={clsx(
                                                                                                 "font-mono font-medium truncate",
-                                                                                                isFailed ? "text-[#ff5261]" : "text-[#bcbec4]"
+                                                                                                isFailed ? "text-obsidian-danger" : "text-foreground"
                                                                                             )}>
                                                                                                 {ti.task_display_name}
                                                                                             </span>
-                                                                                            <span className="text-[10px] text-[#6c707e] font-mono ml-2 shrink-0">
+                                                                                            <span className="text-[10px] text-obsidian-muted font-mono ml-2 shrink-0">
                                                                                                 {formatDuration(ti.duration)}
                                                                                             </span>
                                                                                         </div>
-                                                                                        <div className="text-[9px] text-[#6c707e] mt-0.5 flex items-center gap-2">
+                                                                                        <div className="text-[9px] text-obsidian-muted mt-0.5 flex items-center gap-2">
                                                                                             <span>
                                                                                                 {ti.operator}
                                                                                                 {ti.try_number > 1 && (
-                                                                                                    <span className="ml-1 text-[#e5c07b]">
+                                                                                                    <span className="ml-1 text-obsidian-warning">
                                                                                                         (try {ti.try_number}/{ti.max_tries})
                                                                                                     </span>
                                                                                                 )}
@@ -839,8 +839,8 @@ export default function WorkflowsPage() {
                                                                                                     className={clsx(
                                                                                                         "flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[8px] font-semibold border transition-colors",
                                                                                                         viewingTaskCode === ti.task_id
-                                                                                                            ? "bg-[#3574f0]/20 text-[#3574f0] border-[#3574f0]/30"
-                                                                                                            : "bg-[#393b40]/30 text-[#8c8e9e] hover:text-[#bcbec4] hover:bg-[#393b40]/50 border-[#393b40]/50"
+                                                                                                            ? "bg-obsidian-info/20 text-obsidian-info border-obsidian-info/30"
+                                                                                                            : "bg-obsidian-panel/30 text-obsidian-muted hover:text-foreground hover:bg-obsidian-panel/50 border-obsidian-border/50"
                                                                                                     )}
                                                                                                 >
                                                                                                     <Code2 className="w-2.5 h-2.5" />
@@ -853,37 +853,37 @@ export default function WorkflowsPage() {
                                                                                             <div className={clsx(
                                                                                                 fullscreenCode
                                                                                                     ? "fixed inset-0 z-50 flex flex-col bg-[#1a1b1e]"
-                                                                                                    : "mt-2 rounded border border-[#393b40] overflow-hidden"
+                                                                                                    : "mt-2 rounded border border-obsidian-border overflow-hidden"
                                                                                             )}>
                                                                                                 {/* Backdrop for fullscreen */}
                                                                                                 {fullscreenCode && (
                                                                                                     <div className="fixed inset-0 bg-black/60 -z-10" onClick={() => setFullscreenCode(false)} />
                                                                                                 )}
                                                                                                 {taskCodeLoading ? (
-                                                                                                    <div className="flex items-center justify-center py-4 text-[#6c707e] text-[10px]">
+                                                                                                    <div className="flex items-center justify-center py-4 text-obsidian-muted text-[10px]">
                                                                                                         <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> Loading...
                                                                                                     </div>
                                                                                                 ) : taskCode ? (
                                                                                                     <>
                                                                                                         <div className={clsx(
-                                                                                                            "bg-[#2b2d30] border-b border-[#393b40] flex items-center justify-between shrink-0",
+                                                                                                            "bg-obsidian-panel border-b border-obsidian-border flex items-center justify-between shrink-0",
                                                                                                             fullscreenCode ? "px-5 py-3" : "px-2 py-1"
                                                                                                         )}>
                                                                                                             <div className="flex items-center gap-2">
-                                                                                                                <Code2 className={clsx(fullscreenCode ? "w-4 h-4" : "w-3 h-3", "text-[#3574f0]")} />
+                                                                                                                <Code2 className={clsx(fullscreenCode ? "w-4 h-4" : "w-3 h-3", "text-obsidian-info")} />
                                                                                                                 <span className={clsx(
-                                                                                                                    "text-[#bcbec4] font-mono font-medium",
+                                                                                                                    "text-foreground font-mono font-medium",
                                                                                                                     fullscreenCode ? "text-sm" : "text-[9px]"
                                                                                                                 )}>{taskCode.filename}</span>
                                                                                                                 <span className={clsx(
-                                                                                                                    "text-[#6c707e]",
+                                                                                                                    "text-obsidian-muted",
                                                                                                                     fullscreenCode ? "text-xs" : "text-[8px]"
                                                                                                                 )}>{taskCode.content.split('\n').length} lines</span>
                                                                                                             </div>
                                                                                                             <div className="flex items-center gap-1">
                                                                                                                 <button
                                                                                                                     onClick={(e) => { e.stopPropagation(); setFullscreenCode(!fullscreenCode); }}
-                                                                                                                    className="p-1 rounded hover:bg-[#393b40]/60 text-[#6c707e] hover:text-[#bcbec4] transition-colors"
+                                                                                                                    className="p-1 rounded hover:bg-obsidian-panel/60 text-obsidian-muted hover:text-foreground transition-colors"
                                                                                                                     title={fullscreenCode ? 'Minimize' : 'Maximize'}
                                                                                                                 >
                                                                                                                     {fullscreenCode
@@ -899,7 +899,7 @@ export default function WorkflowsPage() {
                                                                                                                             setViewingTaskCode(null);
                                                                                                                             setTaskCode(null);
                                                                                                                         }}
-                                                                                                                        className="p-1 rounded hover:bg-[#ff5261]/20 text-[#6c707e] hover:text-[#ff5261] transition-colors"
+                                                                                                                        className="p-1 rounded hover:bg-obsidian-danger/20 text-obsidian-muted hover:text-obsidian-danger transition-colors"
                                                                                                                         title="Close"
                                                                                                                     >
                                                                                                                         <XCircle className="w-3.5 h-3.5" />
@@ -913,11 +913,11 @@ export default function WorkflowsPage() {
                                                                                                         )}>
                                                                                                             {taskCode.content.split('\n').map((codeLine, li) => (
                                                                                                                 <div key={li} className={clsx(
-                                                                                                                    "flex font-mono hover:bg-[#2b2d30]/40",
+                                                                                                                    "flex font-mono hover:bg-obsidian-panel/40",
                                                                                                                     fullscreenCode ? "text-[13px] leading-[22px]" : "text-[10px] leading-[16px]"
                                                                                                                 )}>
                                                                                                                     <span className={clsx(
-                                                                                                                        "text-right text-[#6c707e]/40 select-none shrink-0",
+                                                                                                                        "text-right text-obsidian-muted/40 select-none shrink-0",
                                                                                                                         fullscreenCode ? "w-14 pr-4 pl-4" : "w-8 pr-2"
                                                                                                                     )}>{li + 1}</span>
                                                                                                                     <span className="flex-1 whitespace-pre" dangerouslySetInnerHTML={{ __html: highlightPython(codeLine) }} />
@@ -930,13 +930,13 @@ export default function WorkflowsPage() {
                                                                                         )}
                                                                                         {/* Failed task: prominent error box */}
                                                                                         {isFailed && (
-                                                                                            <div className="mt-1.5 px-2 py-1.5 bg-[#ff5261]/10 rounded border border-[#ff5261]/20 text-[10px]">
-                                                                                                <span className="text-[#ff5261] font-semibold">✕ Task failed</span>
+                                                                                            <div className="mt-1.5 px-2 py-1.5 bg-obsidian-danger/10 rounded border border-obsidian-danger/20 text-[10px]">
+                                                                                                <span className="text-obsidian-danger font-semibold">✕ Task failed</span>
                                                                                                 <span className="text-[#ff7b86] ml-1">
                                                                                                     after {formatDuration(ti.duration)}
-                                                                                                    {ti.hostname && <span className="text-[#6c707e]"> on {ti.hostname}</span>}
+                                                                                                    {ti.hostname && <span className="text-obsidian-muted"> on {ti.hostname}</span>}
                                                                                                 </span>
-                                                                                                <div className="mt-1 text-[9px] text-[#8c8e9e]">
+                                                                                                <div className="mt-1 text-[9px] text-obsidian-muted">
                                                                                                     Started: {ti.start_date ? new Date(ti.start_date).toLocaleString() : '—'}
                                                                                                     {' → '}
                                                                                                     Ended: {ti.end_date ? new Date(ti.end_date).toLocaleString() : '—'}
@@ -963,21 +963,21 @@ export default function WorkflowsPage() {
                             {sidebarTab === 'code' && (
                                 <div className="flex-1 flex flex-col overflow-hidden">
                                     {sourceLoading ? (
-                                        <div className="flex-1 flex items-center justify-center text-[#6c707e] text-[11px]">
+                                        <div className="flex-1 flex items-center justify-center text-obsidian-muted text-[11px]">
                                             <Loader2 className="w-4 h-4 animate-spin mr-2" /> Loading source...
                                         </div>
                                     ) : dagSource ? (
                                         <>
-                                            <div className="px-3 py-1.5 bg-[#2b2d30] border-b border-[#393b40] flex items-center justify-between shrink-0">
-                                                <span className="text-[10px] text-[#6c707e] font-mono">{selectedDag}.py</span>
-                                                <span className="text-[9px] text-[#6c707e]">v{dagSource.version}</span>
+                                            <div className="px-3 py-1.5 bg-obsidian-panel border-b border-obsidian-border flex items-center justify-between shrink-0">
+                                                <span className="text-[10px] text-obsidian-muted font-mono">{selectedDag}.py</span>
+                                                <span className="text-[9px] text-obsidian-muted">v{dagSource.version}</span>
                                             </div>
                                             <div className="flex-1 overflow-auto">
                                                 <pre className="text-[11px] leading-[18px] font-mono p-0 m-0">
                                                     <code>
                                                         {dagSource.content.split('\n').map((line, i) => (
-                                                            <div key={i} className="flex hover:bg-[#2b2d30]/50">
-                                                                <span className="w-10 text-right pr-3 text-[#6c707e]/50 select-none shrink-0 text-[10px] leading-[18px]">{i + 1}</span>
+                                                            <div key={i} className="flex hover:bg-obsidian-panel/50">
+                                                                <span className="w-10 text-right pr-3 text-obsidian-muted/50 select-none shrink-0 text-[10px] leading-[18px]">{i + 1}</span>
                                                                 <span className="flex-1 whitespace-pre" dangerouslySetInnerHTML={{ __html: highlightPython(line) }} />
                                                             </div>
                                                         ))}
@@ -986,7 +986,7 @@ export default function WorkflowsPage() {
                                             </div>
                                         </>
                                     ) : (
-                                        <div className="flex-1 flex items-center justify-center text-[#6c707e] text-[11px]">
+                                        <div className="flex-1 flex items-center justify-center text-obsidian-muted text-[11px]">
                                             No source code available
                                         </div>
                                     )}

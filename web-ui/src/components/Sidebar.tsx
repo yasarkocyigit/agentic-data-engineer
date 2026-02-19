@@ -6,6 +6,18 @@ import clsx from 'clsx';
 type ContextMenuItem = { label: string; icon?: React.ReactNode; action: () => void; separator?: boolean };
 type ContextMenuState = { x: number; y: number; items: ContextMenuItem[] } | null;
 
+async function fetchJsonWithTimeout(url: string, timeoutMs = 10000) {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const res = await fetch(url, { signal: controller.signal });
+        if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+        return await res.json();
+    } finally {
+        window.clearTimeout(timer);
+    }
+}
+
 // ─── Activity Bar Items ───
 const navItems = [
     { name: 'Home', icon: Home, path: '/' },
@@ -34,6 +46,10 @@ const Sidebar = () => {
     const [contextMenu, setContextMenu] = useState<ContextMenuState>(null);
     const contextMenuRef = useRef<HTMLDivElement>(null);
 
+    // ─── Gitea Repos (CI/CD Sidebar) ───
+    const [giteaRepos, setGiteaRepos] = useState<any[]>([]);
+    const [giteaReposLoading, setGiteaReposLoading] = useState(false);
+
     // ─── Project File Tree ───
     const [fileTree, setFileTree] = useState<any[]>([]);
     const [fileTreeLoading, setFileTreeLoading] = useState(false);
@@ -53,6 +69,32 @@ const Sidebar = () => {
         if (['dockerfile'].includes(name.toLowerCase())) return Server;
         return FileIcon;
     };
+
+    // Fetch Gitea repos for CI/CD sidebar
+    useEffect(() => {
+        if (pathname === '/cicd') {
+            fetchGiteaRepos();
+        }
+    }, [pathname]);
+
+    useEffect(() => {
+        if (pathname !== '/cicd' || !giteaReposLoading) return;
+        const t = window.setTimeout(() => setGiteaReposLoading(false), 12000);
+        return () => window.clearTimeout(t);
+    }, [pathname, giteaReposLoading]);
+
+    async function fetchGiteaRepos() {
+        setGiteaReposLoading(true);
+        try {
+            const data = await fetchJsonWithTimeout('/api/gitea/repos?limit=50', 10000);
+            setGiteaRepos(data.repos || []);
+        } catch (e) {
+            console.error('Failed to fetch Gitea repos', e);
+            setGiteaRepos([]);
+        } finally {
+            setGiteaReposLoading(false);
+        }
+    }
 
     // Fetch file tree
     useEffect(() => {
@@ -103,8 +145,8 @@ const Sidebar = () => {
                 <div key={node.path}>
                     <div
                         className={clsx(
-                            "flex items-center gap-1.5 py-[1px] px-2 cursor-pointer hover:bg-[#393b40] text-[#bcbec4] select-none text-[13px]",
-                            !isDir && activeFile === node.path && 'bg-[#3574f0] text-white'
+                            "flex items-center gap-1.5 py-[1px] px-2 cursor-pointer hover:bg-obsidian-panel-hover text-foreground select-none text-[13px]",
+                            !isDir && activeFile === node.path && 'bg-obsidian-info text-white'
                         )}
                         onClick={() => {
                             if (isDir) {
@@ -117,23 +159,23 @@ const Sidebar = () => {
                     >
                         <div className="w-4 h-4 flex items-center justify-center flex-shrink-0">
                             {isDir ? (
-                                <ChevronRight className={`w-3.5 h-3.5 text-[#6c707e] transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
+                                <ChevronRight className={`w-3.5 h-3.5 text-obsidian-muted transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
                             ) : (
                                 <div className="w-4" />
                             )}
                         </div>
-                        <Icon className={`w-4 h-4 flex-shrink-0 ${isDir ? 'text-[#c7a84e]' :
-                            node.extension === 'py' ? 'text-[#4c8bb6]' :
-                                ['ts', 'tsx'].includes(node.extension) ? 'text-[#3178c6]' :
-                                    node.extension === 'sql' ? 'text-[#e6b12a]' :
-                                        ['yml', 'yaml'].includes(node.extension) ? 'text-[#cb3f49]' :
-                                            node.extension === 'md' ? 'text-[#50a14f]' :
-                                                ['sh', 'bash'].includes(node.extension) ? 'text-[#40c463]' :
-                                                    'text-[#6c707e]'
+                        <Icon className={`w-4 h-4 flex-shrink-0 ${isDir ? 'text-obsidian-folder' :
+                            node.extension === 'py' ? 'text-obsidian-python' :
+                                ['ts', 'tsx'].includes(node.extension) ? 'text-obsidian-typescript' :
+                                    node.extension === 'sql' ? 'text-obsidian-sql' :
+                                        ['yml', 'yaml'].includes(node.extension) ? 'text-obsidian-yaml' :
+                                            node.extension === 'md' ? 'text-obsidian-markdown' :
+                                                ['sh', 'bash'].includes(node.extension) ? 'text-obsidian-success' :
+                                                    'text-obsidian-muted'
                             }`} />
                         <span className="truncate">{node.name}</span>
                         {!isDir && node.size && (
-                            <span className="ml-auto text-[10px] text-[#5f6368] opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
+                            <span className="ml-auto text-[10px] text-obsidian-muted opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
                                 {formatSize(node.size)}
                             </span>
                         )}
@@ -387,24 +429,24 @@ const Sidebar = () => {
     const getDataTypeColor = (type: string) => {
         const t = type.toLowerCase();
         if (t.includes('int') || t.includes('bigint') || t.includes('smallint') || t.includes('tinyint'))
-            return { bg: 'bg-[#3574f0]/15', text: 'text-[#5b9bd5]', label: t };
+            return { bg: 'bg-obsidian-info/15', text: 'text-[#5b9bd5]', label: t };
         if (t.includes('double') || t.includes('float') || t.includes('decimal') || t.includes('real') || t.includes('numeric'))
-            return { bg: 'bg-[#6897bb]/15', text: 'text-[#6897bb]', label: t };
+            return { bg: 'bg-obsidian-number/15', text: 'text-obsidian-number', label: t };
         if (t.includes('varchar') || t.includes('char') || t.includes('text') || t.includes('string'))
-            return { bg: 'bg-[#6aab73]/15', text: 'text-[#6aab73]', label: t };
+            return { bg: 'bg-obsidian-string/15', text: 'text-obsidian-string', label: t };
         if (t.includes('timestamp') || t.includes('date') || t.includes('time'))
-            return { bg: 'bg-[#b07cd8]/15', text: 'text-[#b07cd8]', label: t };
+            return { bg: 'bg-obsidian-date/15', text: 'text-obsidian-date', label: t };
         if (t.includes('bool'))
-            return { bg: 'bg-[#e5c07b]/15', text: 'text-[#e5c07b]', label: t };
+            return { bg: 'bg-obsidian-boolean/15', text: 'text-obsidian-boolean', label: t };
         if (t.includes('json') || t.includes('map') || t.includes('array') || t.includes('row'))
-            return { bg: 'bg-[#cc7832]/15', text: 'text-[#cc7832]', label: t };
+            return { bg: 'bg-obsidian-object/15', text: 'text-obsidian-object', label: t };
         if (t.includes('binary') || t.includes('blob') || t.includes('bytea') || t.includes('varbinary'))
-            return { bg: 'bg-[#ff5261]/15', text: 'text-[#ff5261]', label: t };
-        return { bg: 'bg-[#6c707e]/10', text: 'text-[#6c707e]', label: t };
+            return { bg: 'bg-obsidian-binary/15', text: 'text-obsidian-binary', label: t };
+        return { bg: 'bg-obsidian-muted/10', text: 'text-obsidian-muted', label: t };
     };
 
     const getDataTypeStyle = (type: string) => {
-        return "text-[#6c707e]";
+        return "text-obsidian-muted";
     };
 
     // ─── Context Menu Helpers ───
@@ -438,7 +480,7 @@ const Sidebar = () => {
             });
             items.push({
                 label: 'Generate SELECT',
-                icon: <List className="w-3 h-3 text-[#3574f0]" />,
+                icon: <List className="w-3 h-3 text-obsidian-info" />,
                 action: () => {
                     const event = new CustomEvent('openclaw:insert-query', {
                         detail: { query: `SELECT\n    *\nFROM ${fullName}\nLIMIT 100;` }
@@ -463,14 +505,14 @@ const Sidebar = () => {
 
         items.push({
             label: 'Copy Name',
-            icon: <Copy className="w-3 h-3 text-[#6c707e]" />,
+            icon: <Copy className="w-3 h-3 text-obsidian-muted" />,
             action: () => copyToClipboard(node.name)
         });
 
         if (node.type === 'column' && node.dataType) {
             items.push({
                 label: `Copy Type: ${node.dataType}`,
-                icon: <Type className="w-3 h-3 text-[#6c707e]" />,
+                icon: <Type className="w-3 h-3 text-obsidian-muted" />,
                 action: () => copyToClipboard(node.dataType)
             });
         }
@@ -527,7 +569,7 @@ const Sidebar = () => {
                 <div key={node.id}>
                     <div
                         className={clsx(
-                            "flex items-center gap-1.5 py-[1px] px-2 cursor-pointer hover:bg-[#393b40] text-[#bcbec4] select-none text-[13px] group",
+                            "flex items-center gap-1.5 py-[1px] px-2 cursor-pointer hover:bg-obsidian-panel-hover text-foreground select-none text-[13px] group",
                             level > 0 && "ml-3"
                         )}
                         onClick={() => isPg ? togglePgNode(node) : toggleNode(node)}
@@ -537,15 +579,15 @@ const Sidebar = () => {
                     >
                         <div className="w-4 h-4 flex items-center justify-center flex-shrink-0">
                             {node.children && node.children.length > 0 ? (
-                                <ChevronRight className={clsx("w-3.5 h-3.5 text-[#6c707e] transition-transform", isExpanded && "rotate-90")} />
+                                <ChevronRight className={clsx("w-3.5 h-3.5 text-obsidian-muted transition-transform", isExpanded && "rotate-90")} />
                             ) : (
                                 <div className="w-4" />
                             )}
                         </div>
 
                         <Icon className={clsx("w-4 h-4 flex-shrink-0 transition-colors",
-                            node.type === 'database' ? (isPg ? "text-[#336791]" : "text-[#d65f5f]") :
-                                node.type === 'schema' ? "text-[#c7a84e]" :
+                            node.type === 'database' ? (isPg ? "text-obsidian-postgres" : "text-obsidian-trino") :
+                                node.type === 'schema' ? "text-obsidian-folder" :
                                     node.type === 'table' ? "text-[#5b9bd5]" : "text-[#a9b7c6]"
                         )} />
 
@@ -563,7 +605,7 @@ const Sidebar = () => {
                             );
                         })()}
 
-                        {isLoading && <span className="ml-auto text-[9px] text-[#6c707e] animate-pulse">...</span>}
+                        {isLoading && <span className="ml-auto text-[9px] text-obsidian-muted animate-pulse">...</span>}
                     </div>
                     {isExpanded && node.children && (
                         <div>{renderTree(node.children, level + 1, isPg)}</div>
@@ -576,7 +618,7 @@ const Sidebar = () => {
     return (
         <div className="flex h-full select-none">
             {/* Activity Bar */}
-            <div className="w-12 bg-[#2b2d30] border-r border-[#393b40] flex flex-col items-center py-2 space-y-4 z-10 shrink-0">
+            <div className="w-12 bg-obsidian-panel border-r border-obsidian-border flex flex-col items-center py-2 space-y-4 z-10 shrink-0">
                 {navItems.map((item) => {
                     const Icon = item.icon;
                     const isActive = pathname === item.path || (item.path !== '/' && pathname.startsWith(item.path));
@@ -584,38 +626,39 @@ const Sidebar = () => {
                         <Link to={item.path} key={item.path} title={item.name}>
                             <div className={clsx(
                                 "p-2 rounded cursor-pointer transition-colors relative group",
-                                isActive ? "bg-[#4c5052]" : "hover:bg-[#393b40]"
+                                isActive ? "bg-[#4c5052]" : "hover:bg-obsidian-panel-hover"
                             )}>
                                 <Icon className={clsx(
                                     "w-5 h-5",
-                                    isActive ? "text-[#bcbec4]" : "text-[#6c707e] group-hover:text-[#bcbec4]"
+                                    isActive ? "text-foreground" : "text-obsidian-muted group-hover:text-foreground"
                                 )} />
-                                {isActive && <div className="absolute left-0 top-0 bottom-0 w-[3px] bg-[#3574f0] rounded-r"></div>}
+                                {isActive && <div className="absolute left-0 top-0 bottom-0 w-[3px] bg-obsidian-info rounded-r"></div>}
                             </div>
                         </Link>
                     );
                 })}
                 <div className="mt-auto pb-2">
-                    <div className="p-2 cursor-pointer hover:bg-[#393b40] rounded text-[#6c707e] hover:text-[#dfe1e5]">
+                    <div className="p-2 cursor-pointer hover:bg-obsidian-panel-hover rounded text-obsidian-muted hover:text-foreground">
                         <Settings className="w-5 h-5" />
                     </div>
                 </div>
             </div>
 
             {/* Sidebar Content */}
-            <div className="w-[250px] bg-[#2b2d30] border-r border-[#393b40] flex flex-col h-full text-[#bcbec4] text-[12px] font-sans select-none">
+            <div className="w-[250px] bg-obsidian-panel border-r border-obsidian-border flex flex-col h-full text-foreground text-[12px] font-sans select-none">
                 {/* Header */}
-                <div className="h-9 flex items-center px-3 border-b border-[#393b40] bg-[#2b2d30] justify-between shrink-0">
-                    <span className="font-bold tracking-tight text-[#ced0d6]">
+                <div className="h-9 flex items-center px-3 border-b border-obsidian-border bg-obsidian-panel justify-between shrink-0">
+                    <span className="font-bold tracking-tight text-foreground">
                         {pathname === '/data' ? 'Database Explorer' :
                             pathname === '/workflows' ? 'Project Structure' :
                                 pathname === '/lineage' ? 'Data Lineage' :
                                     pathname === '/visualize' ? 'Dashboards' :
-                                        pathname === '/compute' ? 'Infrastructure' : 'Explorer'}
+                                        pathname === '/compute' ? 'Infrastructure' :
+                                            pathname === '/cicd' ? 'Repositories' : 'Explorer'}
                     </span>
                     <div className="flex gap-1">
-                        <Search className="w-3.5 h-3.5 text-[#6c707e] cursor-pointer hover:text-[#bcbec4]" />
-                        <Maximize2 className="w-3.5 h-3.5 text-[#6c707e] cursor-pointer hover:text-[#bcbec4]" />
+                        <Search className="w-3.5 h-3.5 text-obsidian-muted cursor-pointer hover:text-foreground" />
+                        <Maximize2 className="w-3.5 h-3.5 text-obsidian-muted cursor-pointer hover:text-foreground" />
                     </div>
                 </div>
 
@@ -630,8 +673,8 @@ const Sidebar = () => {
                                     className={clsx(
                                         "flex-1 px-2 py-1 rounded text-[10px] font-medium transition-all",
                                         dbEngine === 'trino'
-                                            ? "bg-[#3574f0]/20 text-[#3574f0] border border-[#3574f0]/30"
-                                            : "text-[#6c707e] hover:text-[#bcbec4] hover:bg-[#393b40]"
+                                            ? "bg-obsidian-info/20 text-obsidian-info border border-[#3574f0]/30"
+                                            : "text-obsidian-muted hover:text-foreground hover:bg-obsidian-panel-hover"
                                     )}
                                 >
                                     Trino
@@ -642,7 +685,7 @@ const Sidebar = () => {
                                         "flex-1 px-2 py-1 rounded text-[10px] font-medium transition-all",
                                         dbEngine === 'postgres'
                                             ? "bg-[#336791]/20 text-[#5b9bd5] border border-[#336791]/30"
-                                            : "text-[#6c707e] hover:text-[#bcbec4] hover:bg-[#393b40]"
+                                            : "text-obsidian-muted hover:text-foreground hover:bg-obsidian-panel-hover"
                                     )}
                                 >
                                     PostgreSQL
@@ -651,42 +694,69 @@ const Sidebar = () => {
                             {dbEngine === 'trino' ? (
                                 <>
                                     {dbItems.length === 0 && (
-                                        <div className="ml-4 text-[#6c707e] text-[10px] animate-pulse">Fetching Catalogs...</div>
+                                        <div className="ml-4 text-obsidian-muted text-[10px] animate-pulse">Fetching Catalogs...</div>
                                     )}
                                     {renderTree(dbItems)}
                                 </>
                             ) : (
                                 <>
                                     {pgItems.length === 0 && (
-                                        <div className="ml-4 text-[#6c707e] text-[10px] animate-pulse">Fetching Databases...</div>
+                                        <div className="ml-4 text-obsidian-muted text-[10px] animate-pulse">Fetching Databases...</div>
                                     )}
                                     {renderTree(pgItems, 0, true)}
                                 </>
                             )}
                         </>
+                    ) : pathname === '/cicd' ? (
+                        <>
+                            {giteaReposLoading ? (
+                                <div className="ml-4 text-obsidian-muted text-[10px] animate-pulse">Loading repos...</div>
+                            ) : giteaRepos.length === 0 ? (
+                                <div className="ml-4 text-obsidian-muted text-[10px]">No repos found</div>
+                            ) : (
+                                giteaRepos.map((repo: any) => (
+                                    <div
+                                        key={repo.id}
+                                        className="flex items-center gap-1.5 py-[2px] px-2 cursor-pointer hover:bg-obsidian-panel-hover text-foreground select-none text-[13px]"
+                                        style={{ paddingLeft: '8px' }}
+                                        onClick={() => {
+                                            window.dispatchEvent(new CustomEvent('openclaw:select-repo', {
+                                                detail: { repo: repo.full_name }
+                                            }));
+                                        }}
+                                    >
+                                        <GitPullRequest className="w-4 h-4 text-obsidian-danger flex-shrink-0" />
+                                        <span className="truncate">{repo.name}</span>
+                                        {repo.language && (
+                                            <span className="ml-auto text-[9px] text-obsidian-muted">{repo.language}</span>
+                                        )}
+                                    </div>
+                                ))
+                            )}
+                        </>
                     ) : pathname === '/' ? (
                         <>
                             {fileTreeLoading ? (
-                                <div className="ml-4 text-[#6c707e] text-[10px] animate-pulse">Loading project structure...</div>
+                                <div className="ml-4 text-obsidian-muted text-[10px] animate-pulse">Loading project structure...</div>
                             ) : fileTree.length === 0 ? (
-                                <div className="ml-4 text-[#6c707e] text-[10px]">No files found</div>
+                                <div className="ml-4 text-obsidian-muted text-[10px]">No files found</div>
                             ) : (
                                 renderFileTree(fileTree)
                             )}
                         </>
                     ) : (
-                        <div className="px-4 py-2 text-[#6c707e] italic">
+                        <div className="px-4 py-2 text-obsidian-muted italic">
                             {pathname === '/workflows' && "DAGs Explorer..."}
                         </div>
                     )}
                 </div>
 
                 {/* Bottom Panel (Services/Status) */}
-                <div className="h-[200px] border-t border-[#393b40] bg-[#2b2d30] flex flex-col shrink-0">
-                    <div className="h-7 flex items-center px-3 border-b border-[#393b40] gap-2">
-                        <span className="font-semibold text-[#bcbec4]">Services</span>
+                <div className="h-[200px] border-t border-obsidian-border bg-obsidian-panel flex flex-col shrink-0">
+                    <div className="h-7 flex items-center px-3 border-b border-obsidian-border gap-2">
+                        <span className="font-semibold text-foreground">Services</span>
                         <div className="ml-auto flex gap-1">
-                            <MoreHorizontal className="w-3.5 h-3.5 text-[#6c707e]" />
+                            <MoreHorizontal className="w-3.5 h-3.5 text-obsidian-muted" />
                         </div>
                     </div>
                     <div className="flex-1 overflow-y-auto p-2 space-y-1">
@@ -705,17 +775,17 @@ const Sidebar = () => {
             {contextMenu && (
                 <div
                     ref={contextMenuRef}
-                    className="fixed z-[9999] bg-[#2b2d30] border border-[#393b40] rounded-md shadow-2xl py-1 min-w-[180px]"
+                    className="fixed z-[9999] bg-obsidian-panel border border-obsidian-border rounded-md shadow-2xl py-1 min-w-[180px]"
                     style={{ left: contextMenu.x, top: contextMenu.y }}
                     onClick={(e) => e.stopPropagation()}
                 >
                     {contextMenu.items.map((item, idx) =>
                         item.separator ? (
-                            <div key={idx} className="h-[1px] bg-[#393b40] my-1" />
+                            <div key={idx} className="h-[1px] bg-obsidian-border my-1" />
                         ) : (
                             <button
                                 key={idx}
-                                className="w-full px-3 py-1.5 text-left text-[11px] text-[#bcbec4] hover:bg-[#3574f0]/20 flex items-center gap-2 transition-colors"
+                                className="w-full px-3 py-1.5 text-left text-[11px] text-foreground hover:bg-obsidian-info/20 flex items-center gap-2 transition-colors"
                                 onClick={() => {
                                     item.action();
                                     setContextMenu(null);
@@ -733,14 +803,14 @@ const Sidebar = () => {
 };
 
 const ServiceItem = ({ name, status }: { name: string, status: string }) => (
-    <div className="flex items-center py-[1px] hover:bg-[#393b40] rounded cursor-pointer px-1">
+    <div className="flex items-center py-[1px] hover:bg-obsidian-panel-hover rounded cursor-pointer px-1">
         <div className={clsx("w-2 h-2 rounded-full mr-2", status === 'running' ? "bg-green-500" : "bg-red-500")}></div>
-        <span className="text-[#bcbec4]">{name}</span>
+        <span className="text-foreground">{name}</span>
     </div>
 );
 
 const SidebarWrapper = () => (
-    <Suspense fallback={<div className="flex h-full bg-[#2b2d30]" />}>
+    <Suspense fallback={<div className="flex h-full bg-obsidian-panel" />}>
         <Sidebar />
     </Suspense>
 );

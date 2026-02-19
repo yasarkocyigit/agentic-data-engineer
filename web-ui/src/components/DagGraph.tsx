@@ -225,8 +225,8 @@ export default function DagGraph({ dagId, runId, className, onNodeClick }: DagGr
         return (
             <div className={clsx("flex items-center justify-center h-full", className)}>
                 <div className="flex flex-col items-center gap-2">
-                    <Loader2 className="w-6 h-6 text-[#3574f0] animate-spin" />
-                    <span className="text-[11px] text-[#6c707e]">Loading graph...</span>
+                    <Loader2 className="w-6 h-6 text-obsidian-info animate-spin" />
+                    <span className="text-[11px] text-obsidian-muted">Loading graph...</span>
                 </div>
             </div>
         );
@@ -236,10 +236,10 @@ export default function DagGraph({ dagId, runId, className, onNodeClick }: DagGr
         return (
             <div className={clsx("flex items-center justify-center h-full", className)}>
                 <div className="flex flex-col items-center gap-2 text-center">
-                    <span className="text-[12px] text-[#ff5261]">{error}</span>
+                    <span className="text-[12px] text-obsidian-danger">{error}</span>
                     <button
                         onClick={fetchGraph}
-                        className="px-3 py-1 bg-[#3574f0]/20 text-[#3574f0] rounded text-[11px] hover:bg-[#3574f0]/30"
+                        className="px-3 py-1 bg-obsidian-info/20 text-obsidian-info rounded text-[11px] hover:bg-obsidian-info/30"
                     >
                         Retry
                     </button>
@@ -250,7 +250,7 @@ export default function DagGraph({ dagId, runId, className, onNodeClick }: DagGr
 
     if (!graph || layoutNodes.length === 0) {
         return (
-            <div className={clsx("flex items-center justify-center h-full text-[#6c707e] text-[11px]", className)}>
+            <div className={clsx("flex items-center justify-center h-full text-obsidian-muted text-[11px]", className)}>
                 No tasks found
             </div>
         );
@@ -261,50 +261,50 @@ export default function DagGraph({ dagId, runId, className, onNodeClick }: DagGr
     const runningSummary = layoutNodes.filter(n => n.state === 'running').length;
 
     return (
-        <div className={clsx("flex flex-col h-full bg-[#1e1f22] relative", className)}>
+        <div className={clsx("flex flex-col h-full bg-obsidian-bg relative", className)}>
             {/* Toolbar */}
-            <div className="flex items-center justify-between px-3 py-1.5 bg-[#2b2d30] border-b border-[#393b40] shrink-0">
+            <div className="flex items-center justify-between px-3 py-1.5 bg-obsidian-panel border-b border-obsidian-border shrink-0">
                 <div className="flex items-center gap-2">
-                    <GitBranch className="w-3.5 h-3.5 text-[#3574f0]" />
-                    <span className="text-[10px] text-[#6c707e] uppercase font-semibold tracking-wider">
+                    <GitBranch className="w-3.5 h-3.5 text-obsidian-info" />
+                    <span className="text-[10px] text-obsidian-muted uppercase font-semibold tracking-wider">
                         Lineage Graph
                     </span>
-                    <span className="text-[10px] text-[#4e5157] ml-1">
+                    <span className="text-[10px] text-obsidian-muted/80 ml-1">
                         {layoutNodes.length} tasks · {graph.edges.length} edges
                     </span>
                 </div>
                 <div className="flex items-center gap-1">
                     {runId && (
                         <div className="flex items-center gap-1.5 mr-2 text-[10px]">
-                            {healthySummary > 0 && <span className="text-[#499c54]">✓ {healthySummary}</span>}
-                            {failedSummary > 0 && <span className="text-[#ff5261]">✗ {failedSummary}</span>}
-                            {runningSummary > 0 && <span className="text-[#3574f0]">● {runningSummary}</span>}
+                            {healthySummary > 0 && <span className="text-obsidian-success">✓ {healthySummary}</span>}
+                            {failedSummary > 0 && <span className="text-obsidian-danger">✗ {failedSummary}</span>}
+                            {runningSummary > 0 && <span className="text-obsidian-info">● {runningSummary}</span>}
                         </div>
                     )}
                     <button
                         onClick={() => setZoom(z => Math.min(3, z + 0.2))}
-                        className="p-1 hover:bg-[#3c3f41] rounded text-[#6c707e] hover:text-[#bcbec4]"
+                        className="p-1 hover:bg-obsidian-panel-hover rounded text-obsidian-muted hover:text-foreground"
                         title="Zoom in"
                     >
                         <ZoomIn className="w-3.5 h-3.5" />
                     </button>
                     <button
                         onClick={() => setZoom(z => Math.max(0.3, z - 0.2))}
-                        className="p-1 hover:bg-[#3c3f41] rounded text-[#6c707e] hover:text-[#bcbec4]"
+                        className="p-1 hover:bg-obsidian-panel-hover rounded text-obsidian-muted hover:text-foreground"
                         title="Zoom out"
                     >
                         <ZoomOut className="w-3.5 h-3.5" />
                     </button>
                     <button
                         onClick={resetView}
-                        className="p-1 hover:bg-[#3c3f41] rounded text-[#6c707e] hover:text-[#bcbec4]"
+                        className="p-1 hover:bg-obsidian-panel-hover rounded text-obsidian-muted hover:text-foreground"
                         title="Fit to screen"
                     >
                         <Maximize2 className="w-3.5 h-3.5" />
                     </button>
                     <button
                         onClick={fetchGraph}
-                        className="p-1 hover:bg-[#3c3f41] rounded text-[#6c707e] hover:text-[#bcbec4] ml-1"
+                        className="p-1 hover:bg-obsidian-panel-hover rounded text-obsidian-muted hover:text-foreground ml-1"
                         title="Refresh"
                     >
                         <RefreshCw className={clsx("w-3.5 h-3.5", loading && "animate-spin")} />
@@ -344,7 +344,7 @@ export default function DagGraph({ dagId, runId, className, onNodeClick }: DagGr
                             markerHeight="8"
                             orient="auto-start-reverse"
                         >
-                            <path d="M 0 0 L 10 5 L 0 10 Z" fill="#4e5157" />
+                            <path d="M 0 0 L 10 5 L 0 10 Z" fill="var(--color-obsidian-muted)" />
                         </marker>
                         <marker
                             id="arrow-active"
@@ -355,7 +355,7 @@ export default function DagGraph({ dagId, runId, className, onNodeClick }: DagGr
                             markerHeight="8"
                             orient="auto-start-reverse"
                         >
-                            <path d="M 0 0 L 10 5 L 0 10 Z" fill="#3574f0" />
+                            <path d="M 0 0 L 10 5 L 0 10 Z" fill="var(--color-obsidian-info)" />
                         </marker>
 
                         {/* Glow filter for running nodes */}
@@ -377,7 +377,13 @@ export default function DagGraph({ dagId, runId, className, onNodeClick }: DagGr
 
                         const isHovered = hoveredNode === edge.source || hoveredNode === edge.target;
                         const srcState = src.state;
-                        const stateColor = srcState ? getStateColor(srcState).text : '#4e5157';
+                        // Use variable if possible, or mapping function for SVG
+                        // But for now let's rely on mapping helper or fallback
+                        // Ideally getStateColor should return CSS vars? 
+                        // It currently returns hex. Let's stick to hex from helper for states for now 
+                        // as getting vars into JS logic is tricky without a mapper.
+                        // But we can replace defaults.
+                        const stateColor = srcState ? getStateColor(srcState).text : 'var(--color-obsidian-muted)';
 
                         return (
                             <g key={`edge-${i}`}>
@@ -385,7 +391,7 @@ export default function DagGraph({ dagId, runId, className, onNodeClick }: DagGr
                                 <path
                                     d={edgePath(src, tgt)}
                                     fill="none"
-                                    stroke={isHovered ? stateColor : '#393b40'}
+                                    stroke={isHovered ? stateColor : 'var(--color-obsidian-border)'}
                                     strokeWidth={isHovered ? 2.5 : 1.5}
                                     strokeOpacity={isHovered ? 0.4 : 0.2}
                                     strokeDasharray={isHovered ? '' : ''}
@@ -394,7 +400,7 @@ export default function DagGraph({ dagId, runId, className, onNodeClick }: DagGr
                                 <path
                                     d={edgePath(src, tgt)}
                                     fill="none"
-                                    stroke={isHovered ? stateColor : '#4e5157'}
+                                    stroke={isHovered ? stateColor : 'var(--color-obsidian-muted)'}
                                     strokeWidth={isHovered ? 2 : 1.2}
                                     markerEnd={isHovered ? 'url(#arrow-active)' : 'url(#arrow)'}
                                     style={{
@@ -403,7 +409,7 @@ export default function DagGraph({ dagId, runId, className, onNodeClick }: DagGr
                                 />
                                 {/* Animated pulse for running */}
                                 {srcState === 'running' && (
-                                    <circle r="3" fill="#3574f0">
+                                    <circle r="3" fill="var(--color-obsidian-info)">
                                         <animateMotion
                                             dur="2s"
                                             repeatCount="indefinite"
@@ -421,10 +427,14 @@ export default function DagGraph({ dagId, runId, className, onNodeClick }: DagGr
                         const stateInfo = getStateColor(node.state);
                         const hasState = !!node.state;
 
-                        const nodeStroke = hasState ? stateInfo.text : '#393b40';
+                        const nodeStroke = hasState ? stateInfo.text : 'var(--color-obsidian-border)';
                         const nodeFill = hasState
                             ? stateInfo.bg
-                            : isHovered ? '#2b2d30' : '#252628';
+                            : isHovered ? 'var(--color-obsidian-panel)' : 'var(--color-obsidian-panel)'; // Use panel for both, maybe slightly different helper for hover?
+
+                        // Override for default idle
+                        const finalFill = !hasState && !isHovered ? '#16171a' : nodeFill; // Hard to use var in complex JS logic, sticking to hex for specific fallback or just varStr
+
                         const glowFilter = node.state === 'running' ? 'url(#glow)' : undefined;
 
                         return (
@@ -446,7 +456,7 @@ export default function DagGraph({ dagId, runId, className, onNodeClick }: DagGr
                                     height={NODE_H}
                                     rx={8}
                                     ry={8}
-                                    fill={nodeFill}
+                                    fill={!hasState && !isHovered ? 'var(--color-obsidian-panel)' : nodeFill}
                                     stroke={nodeStroke}
                                     strokeWidth={isHovered ? 1.5 : 1}
                                     filter={glowFilter}
@@ -478,7 +488,7 @@ export default function DagGraph({ dagId, runId, className, onNodeClick }: DagGr
                                 <text
                                     x={node.x + (hasState ? 26 : 14)}
                                     y={node.y + 24}
-                                    fill={isHovered ? '#e8eaed' : '#ced0d6'}
+                                    fill={isHovered ? 'var(--color-foreground)' : 'var(--color-obsidian-muted)'}
                                     fontSize="12"
                                     fontWeight="600"
                                     fontFamily="ui-monospace, monospace"
@@ -491,7 +501,8 @@ export default function DagGraph({ dagId, runId, className, onNodeClick }: DagGr
                                 <text
                                     x={node.x + (hasState ? 26 : 14)}
                                     y={node.y + 42}
-                                    fill="#6c707e"
+                                    fill="var(--color-obsidian-muted)"
+                                    fillOpacity="0.7"
                                     fontSize="10"
                                     fontFamily="system-ui, sans-serif"
                                 >
@@ -503,7 +514,7 @@ export default function DagGraph({ dagId, runId, className, onNodeClick }: DagGr
                                     <text
                                         x={node.x + NODE_W - 10}
                                         y={node.y + 42}
-                                        fill="#8c8e9e"
+                                        fill="var(--color-obsidian-muted)"
                                         fontSize="9"
                                         fontFamily="ui-monospace, monospace"
                                         textAnchor="end"
@@ -530,7 +541,7 @@ export default function DagGraph({ dagId, runId, className, onNodeClick }: DagGr
                                         <text
                                             x={node.x + NODE_W - 37}
                                             y={node.y + 17}
-                                            fill="#e5c07b"
+                                            fill="var(--color-obsidian-warning)"
                                             fontSize="8"
                                             fontFamily="system-ui, sans-serif"
                                             textAnchor="middle"
@@ -557,18 +568,18 @@ export default function DagGraph({ dagId, runId, className, onNodeClick }: DagGr
                                     width={170}
                                     height={node.state ? 70 : 52}
                                     rx={6}
-                                    fill="#2b2d30"
-                                    stroke="#393b40"
+                                    fill="var(--color-obsidian-panel)"
+                                    stroke="var(--color-obsidian-border)"
                                     strokeWidth={1}
                                     filter="drop-shadow(0 4px 6px rgba(0,0,0,0.3))"
                                 />
-                                <text x={node.x + NODE_W + 18} y={node.y + 8} fill="#e8eaed" fontSize="11" fontWeight="600">
+                                <text x={node.x + NODE_W + 18} y={node.y + 8} fill="var(--color-foreground)" fontSize="11" fontWeight="600">
                                     {node.label}
                                 </text>
-                                <text x={node.x + NODE_W + 18} y={node.y + 24} fill="#6c707e" fontSize="9">
+                                <text x={node.x + NODE_W + 18} y={node.y + 24} fill="var(--color-obsidian-muted)" fontSize="9">
                                     {node.operator}
                                 </text>
-                                <text x={node.x + NODE_W + 18} y={node.y + 38} fill="#6c707e" fontSize="9">
+                                <text x={node.x + NODE_W + 18} y={node.y + 38} fill="var(--color-obsidian-muted)" fontSize="9">
                                     Rule: {node.triggerRule}
                                 </text>
                                 {node.state && (
@@ -583,7 +594,7 @@ export default function DagGraph({ dagId, runId, className, onNodeClick }: DagGr
             </div>
 
             {/* Zoom indicator */}
-            <div className="absolute bottom-2 right-2 text-[9px] text-[#4e5157] bg-[#1e1f22]/90 px-2 py-0.5 rounded">
+            <div className="absolute bottom-2 right-2 text-[9px] text-obsidian-muted bg-obsidian-panel/90 px-2 py-0.5 rounded border border-obsidian-border">
                 {Math.round(zoom * 100)}%
             </div>
         </div>

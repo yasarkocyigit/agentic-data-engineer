@@ -184,19 +184,19 @@ export default function StoragePage() {
     };
 
     return (
-        <div className="flex h-screen bg-[#1e1f22] text-[#bcbec4] font-sans overflow-hidden">
+        <div className="flex h-screen bg-obsidian-bg text-foreground font-sans overflow-hidden">
             <Sidebar />
 
             <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
 
                 {/* ─── Top Bar ─── */}
-                <header className="h-9 bg-[#2b2d30] border-b border-[#393b40] flex items-center justify-between px-4 shrink-0">
+                <header className="h-9 bg-obsidian-panel border-b border-obsidian-border flex items-center justify-between px-4 shrink-0">
                     <div className="flex items-center gap-2">
-                        <HardDrive className="w-3.5 h-3.5 text-[#3574f0]" />
-                        <span className="text-[12px] font-bold text-[#bcbec4]">Storage Layer</span>
-                        <span className="text-[10px] text-[#6c707e]">MinIO S3</span>
+                        <HardDrive className="w-3.5 h-3.5 text-obsidian-info" />
+                        <span className="text-[12px] font-bold text-foreground">Storage Layer</span>
+                        <span className="text-[10px] text-obsidian-muted">MinIO S3</span>
                     </div>
-                    <div className="flex items-center gap-3 text-[10px] text-[#6c707e]">
+                    <div className="flex items-center gap-3 text-[10px] text-obsidian-muted">
                         <span>{buckets.length} buckets</span>
                         <span>•</span>
                         <span>{totalObjects} objects</span>
@@ -204,7 +204,7 @@ export default function StoragePage() {
                         <span>{formatBytes(totalSize)}</span>
                         <button
                             onClick={() => { fetchBuckets(); if (selectedBucket) fetchObjects(selectedBucket, currentPrefix); }}
-                            className="p-1 hover:bg-[#3c3f41] rounded text-[#6c707e] hover:text-[#bcbec4] ml-2"
+                            className="p-1 hover:bg-obsidian-panel-hover rounded text-obsidian-muted hover:text-foreground ml-2"
                         >
                             <RefreshCw className="w-3.5 h-3.5" />
                         </button>
@@ -217,34 +217,34 @@ export default function StoragePage() {
                     {/* ─── Bucket/Object Browser ─── */}
                     <div className={clsx(
                         "flex-1 flex flex-col overflow-hidden",
-                        selectedFile && !fullscreenPreview && "border-r border-[#393b40]"
+                        selectedFile && !fullscreenPreview && "border-r border-obsidian-border"
                     )}>
 
                         {/* Breadcrumb */}
                         {selectedBucket && (
-                            <div className="h-8 bg-[#2b2d30] border-b border-[#393b40] flex items-center px-3 gap-1 text-[11px] shrink-0">
+                            <div className="h-8 bg-obsidian-panel border-b border-obsidian-border flex items-center px-3 gap-1 text-[11px] shrink-0">
                                 <button
                                     onClick={goBackToBuckets}
-                                    className="text-[#3574f0] hover:text-[#5a9cf5] hover:underline"
+                                    className="text-obsidian-info hover:text-[#5a9cf5] hover:underline"
                                 >
                                     Buckets
                                 </button>
-                                <ChevronRight className="w-3 h-3 text-[#6c707e]" />
+                                <ChevronRight className="w-3 h-3 text-obsidian-muted" />
                                 <button
                                     onClick={() => openFolder('')}
                                     className={clsx(
-                                        breadcrumbs.length === 0 ? "text-[#bcbec4]" : "text-[#3574f0] hover:text-[#5a9cf5] hover:underline"
+                                        breadcrumbs.length === 0 ? "text-foreground" : "text-obsidian-info hover:text-[#5a9cf5] hover:underline"
                                     )}
                                 >
                                     {selectedBucket}
                                 </button>
                                 {breadcrumbs.map((bc, i) => (
                                     <React.Fragment key={bc.prefix}>
-                                        <ChevronRight className="w-3 h-3 text-[#6c707e]" />
+                                        <ChevronRight className="w-3 h-3 text-obsidian-muted" />
                                         <button
                                             onClick={() => openFolder(bc.prefix)}
                                             className={clsx(
-                                                i === breadcrumbs.length - 1 ? "text-[#bcbec4]" : "text-[#3574f0] hover:text-[#5a9cf5] hover:underline"
+                                                i === breadcrumbs.length - 1 ? "text-foreground" : "text-obsidian-info hover:text-[#5a9cf5] hover:underline"
                                             )}
                                         >
                                             {bc.label}
@@ -255,24 +255,24 @@ export default function StoragePage() {
                         )}
 
                         {/* Content Area */}
-                        <div className="flex-1 overflow-auto bg-[#1e1f22]">
+                        <div className="flex-1 overflow-auto bg-obsidian-bg">
 
                             {/* ─── Bucket Cards ─── */}
                             {!selectedBucket && (
                                 <div className="p-4">
                                     {bucketsLoading ? (
-                                        <div className="flex items-center justify-center py-20 text-[#6c707e]">
+                                        <div className="flex items-center justify-center py-20 text-obsidian-muted">
                                             <Loader2 className="w-5 h-5 animate-spin mr-2" />
                                             <span className="text-[12px]">Connecting to MinIO...</span>
                                         </div>
                                     ) : bucketsError ? (
-                                        <div className="flex items-center justify-center py-20 text-[#ff5261]">
+                                        <div className="flex items-center justify-center py-20 text-obsidian-danger">
                                             <AlertCircle className="w-5 h-5 mr-2" />
                                             <span className="text-[12px]">{bucketsError}</span>
                                         </div>
                                     ) : (
                                         <>
-                                            <div className="text-[11px] text-[#6c707e] font-bold uppercase tracking-wider mb-3 px-1">
+                                            <div className="text-[11px] text-obsidian-muted font-bold uppercase tracking-wider mb-3 px-1">
                                                 Lakehouse Buckets
                                             </div>
                                             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3">
@@ -283,7 +283,7 @@ export default function StoragePage() {
                                                         <div
                                                             key={bucket.name}
                                                             onClick={() => openBucket(bucket.name)}
-                                                            className="group bg-[#2b2d30] border border-[#393b40] rounded-lg p-4 cursor-pointer hover:border-[#3574f0]/40 hover:bg-[#2b2d30]/80 transition-all"
+                                                            className="group bg-obsidian-panel border border-obsidian-border rounded-lg p-4 cursor-pointer hover:border-obsidian-info/40 hover:bg-obsidian-panel/80 transition-all"
                                                         >
                                                             <div className="flex items-start justify-between mb-3">
                                                                 <div
@@ -292,12 +292,12 @@ export default function StoragePage() {
                                                                 >
                                                                     <Icon className="w-4.5 h-4.5" style={{ color: style.color }} />
                                                                 </div>
-                                                                <ChevronRight className="w-3.5 h-3.5 text-[#6c707e] opacity-0 group-hover:opacity-100 transition-opacity mt-1" />
+                                                                <ChevronRight className="w-3.5 h-3.5 text-obsidian-muted opacity-0 group-hover:opacity-100 transition-opacity mt-1" />
                                                             </div>
-                                                            <div className="text-[13px] font-semibold text-[#ced0d6] mb-1">
+                                                            <div className="text-[13px] font-semibold text-foreground mb-1">
                                                                 {bucket.name}
                                                             </div>
-                                                            <div className="flex items-center gap-3 text-[10px] text-[#6c707e]">
+                                                            <div className="flex items-center gap-3 text-[10px] text-obsidian-muted">
                                                                 <span>{bucket.objectCount} objects</span>
                                                                 <span>•</span>
                                                                 <span>{bucket.totalSizeFormatted}</span>
@@ -315,23 +315,23 @@ export default function StoragePage() {
                             {selectedBucket && (
                                 <>
                                     {objectsLoading ? (
-                                        <div className="flex items-center justify-center py-20 text-[#6c707e]">
+                                        <div className="flex items-center justify-center py-20 text-obsidian-muted">
                                             <Loader2 className="w-5 h-5 animate-spin mr-2" />
                                             <span className="text-[12px]">Loading objects...</span>
                                         </div>
                                     ) : objects.length === 0 ? (
-                                        <div className="flex flex-col items-center justify-center py-20 text-[#6c707e]">
+                                        <div className="flex flex-col items-center justify-center py-20 text-obsidian-muted">
                                             <Archive className="w-8 h-8 mb-3 opacity-30" />
                                             <span className="text-[12px]">This directory is empty</span>
                                         </div>
                                     ) : (
                                         <table className="w-full text-left border-collapse">
-                                            <thead className="sticky top-0 bg-[#3c3f41] shadow-sm z-10">
+                                            <thead className="sticky top-0 bg-obsidian-panel-hover shadow-sm z-10">
                                                 <tr>
-                                                    <th className="p-1 px-3 border-r border-[#393b40] border-b text-[11px] text-[#bcbec4] font-normal w-[50%]">Name</th>
-                                                    <th className="p-1 px-3 border-r border-[#393b40] border-b text-[11px] text-[#bcbec4] font-normal w-[15%]">Size</th>
-                                                    <th className="p-1 px-3 border-r border-[#393b40] border-b text-[11px] text-[#bcbec4] font-normal w-[15%]">Modified</th>
-                                                    <th className="p-1 px-3 border-b text-[11px] text-[#bcbec4] font-normal w-[20%]">Type</th>
+                                                    <th className="p-1 px-3 border-r border-obsidian-border border-b text-[11px] text-foreground font-normal w-[50%]">Name</th>
+                                                    <th className="p-1 px-3 border-r border-obsidian-border border-b text-[11px] text-foreground font-normal w-[15%]">Size</th>
+                                                    <th className="p-1 px-3 border-r border-obsidian-border border-b text-[11px] text-foreground font-normal w-[15%]">Modified</th>
+                                                    <th className="p-1 px-3 border-b text-[11px] text-foreground font-normal w-[20%]">Type</th>
                                                 </tr>
                                             </thead>
                                             <tbody className="text-[12px] font-mono">
@@ -344,35 +344,35 @@ export default function StoragePage() {
                                                             key={item.key}
                                                             onClick={() => isFolder ? openFolder(item.key) : openFilePreview(item)}
                                                             className={clsx(
-                                                                "cursor-pointer border-b border-[#393b40]",
-                                                                isSelected ? "bg-[#214283]" : "hover:bg-[#2b2d30]"
+                                                                "cursor-pointer border-b border-obsidian-border",
+                                                                isSelected ? "bg-[#214283]" : "hover:bg-obsidian-panel"
                                                             )}
                                                         >
-                                                            <td className="p-1.5 px-3 border-r border-[#393b40]">
+                                                            <td className="p-1.5 px-3 border-r border-obsidian-border">
                                                                 <div className="flex items-center gap-2">
                                                                     <Icon className={clsx(
                                                                         "w-4 h-4 shrink-0",
-                                                                        isFolder ? "text-[#e5c07b]" : "text-[#6c707e]"
+                                                                        isFolder ? "text-obsidian-warning" : "text-obsidian-muted"
                                                                     )} />
                                                                     <span className={clsx(
                                                                         "truncate",
-                                                                        isFolder ? "text-[#ced0d6]" : "text-[#a9b7c6]"
+                                                                        isFolder ? "text-foreground" : "text-foreground"
                                                                     )}>
                                                                         {item.name}
                                                                     </span>
                                                                 </div>
                                                             </td>
-                                                            <td className="p-1.5 px-3 border-r border-[#393b40] text-[#6c707e]">
+                                                            <td className="p-1.5 px-3 border-r border-obsidian-border text-obsidian-muted">
                                                                 {item.sizeFormatted}
                                                             </td>
-                                                            <td className="p-1.5 px-3 border-r border-[#393b40] text-[#6c707e]">
+                                                            <td className="p-1.5 px-3 border-r border-obsidian-border text-obsidian-muted">
                                                                 {timeAgo(item.lastModified)}
                                                             </td>
-                                                            <td className="p-1.5 px-3 text-[#6c707e]">
+                                                            <td className="p-1.5 px-3 text-obsidian-muted">
                                                                 {isFolder ? (
-                                                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#e5c07b]/10 text-[#e5c07b] font-semibold uppercase">DIR</span>
+                                                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#e5c07b]/10 text-obsidian-warning font-semibold uppercase">DIR</span>
                                                                 ) : (
-                                                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#3574f0]/10 text-[#3574f0] font-semibold uppercase">
+                                                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#3574f0]/10 text-obsidian-info font-semibold uppercase">
                                                                         {item.extension || 'file'}
                                                                     </span>
                                                                 )}
@@ -391,26 +391,26 @@ export default function StoragePage() {
                     {/* ─── File Preview Sidebar ─── */}
                     {selectedFile && (
                         <div className={clsx(
-                            "flex flex-col bg-[#1e1f22] shrink-0 transition-all duration-200",
+                            "flex flex-col bg-obsidian-bg shrink-0 transition-all duration-200",
                             fullscreenPreview
                                 ? "fixed inset-0 z-50 w-full"
                                 : "w-[380px]"
                         )}>
                             {/* Preview Header */}
                             <div className={clsx(
-                                "bg-[#2b2d30] border-b border-[#393b40] flex items-center justify-between shrink-0",
+                                "bg-obsidian-panel border-b border-obsidian-border flex items-center justify-between shrink-0",
                                 fullscreenPreview ? "h-12 px-6" : "h-10 px-4"
                             )}>
                                 <div className="flex items-center gap-2 min-w-0">
-                                    <FileText className={clsx("text-[#3574f0] shrink-0", fullscreenPreview ? "w-4 h-4" : "w-3.5 h-3.5")} />
-                                    <span className={clsx("font-bold text-[#ced0d6] truncate", fullscreenPreview ? "text-sm" : "text-[11px]")}>
+                                    <FileText className={clsx("text-obsidian-info shrink-0", fullscreenPreview ? "w-4 h-4" : "w-3.5 h-3.5")} />
+                                    <span className={clsx("font-bold text-foreground truncate", fullscreenPreview ? "text-sm" : "text-[11px]")}>
                                         {selectedFile.name}
                                     </span>
                                 </div>
                                 <div className="flex items-center gap-1">
                                     <button
                                         onClick={() => setFullscreenPreview(!fullscreenPreview)}
-                                        className="p-1 hover:bg-[#3c3f41] rounded text-[#6c707e] hover:text-[#bcbec4] transition-colors"
+                                        className="p-1 hover:bg-obsidian-panel-hover rounded text-obsidian-muted hover:text-foreground transition-colors"
                                         title={fullscreenPreview ? 'Minimize' : 'Maximize'}
                                     >
                                         {fullscreenPreview
@@ -420,7 +420,7 @@ export default function StoragePage() {
                                     </button>
                                     <button
                                         onClick={() => { setSelectedFile(null); setFilePreview(null); setFullscreenPreview(false); }}
-                                        className="p-1 hover:bg-[#3c3f41] rounded text-[#6c707e] hover:text-[#bcbec4] text-[12px]"
+                                        className="p-1 hover:bg-obsidian-panel-hover rounded text-obsidian-muted hover:text-foreground text-[12px]"
                                     >
                                         ✕
                                     </button>
@@ -430,7 +430,7 @@ export default function StoragePage() {
                             {/* Preview Body */}
                             <div className="flex-1 overflow-auto">
                                 {previewLoading ? (
-                                    <div className="flex items-center justify-center py-20 text-[#6c707e]">
+                                    <div className="flex items-center justify-center py-20 text-obsidian-muted">
                                         <Loader2 className="w-5 h-5 animate-spin mr-2" />
                                         <span className="text-[12px]">Loading preview...</span>
                                     </div>
@@ -438,36 +438,36 @@ export default function StoragePage() {
                                     <div className="flex flex-col h-full">
                                         {/* Metadata */}
                                         <div className={clsx(
-                                            "border-b border-[#393b40] space-y-2",
+                                            "border-b border-obsidian-border space-y-2",
                                             fullscreenPreview ? "p-6" : "p-3"
                                         )}>
-                                            <div className="text-[10px] text-[#6c707e] font-bold uppercase tracking-wider mb-2">Object Details</div>
+                                            <div className="text-[10px] text-obsidian-muted font-bold uppercase tracking-wider mb-2">Object Details</div>
                                             <div className="grid grid-cols-2 gap-2 text-[11px]">
                                                 <div>
-                                                    <div className="text-[9px] text-[#6c707e] uppercase mb-0.5">Key</div>
-                                                    <div className="text-[#a9b7c6] font-mono text-[10px] break-all">{filePreview.key}</div>
+                                                    <div className="text-[9px] text-obsidian-muted uppercase mb-0.5">Key</div>
+                                                    <div className="text-foreground font-mono text-[10px] break-all">{filePreview.key}</div>
                                                 </div>
                                                 <div>
-                                                    <div className="text-[9px] text-[#6c707e] uppercase mb-0.5">Bucket</div>
-                                                    <div className="text-[#a9b7c6] font-mono text-[10px]">{filePreview.bucket}</div>
+                                                    <div className="text-[9px] text-obsidian-muted uppercase mb-0.5">Bucket</div>
+                                                    <div className="text-foreground font-mono text-[10px]">{filePreview.bucket}</div>
                                                 </div>
                                                 <div>
-                                                    <div className="text-[9px] text-[#6c707e] uppercase mb-0.5">Size</div>
-                                                    <div className="text-[#a9b7c6] font-mono text-[10px]">{filePreview.sizeFormatted}</div>
+                                                    <div className="text-[9px] text-obsidian-muted uppercase mb-0.5">Size</div>
+                                                    <div className="text-foreground font-mono text-[10px]">{filePreview.sizeFormatted}</div>
                                                 </div>
                                                 <div>
-                                                    <div className="text-[9px] text-[#6c707e] uppercase mb-0.5">Content Type</div>
-                                                    <div className="text-[#a9b7c6] font-mono text-[10px]">{filePreview.contentType}</div>
+                                                    <div className="text-[9px] text-obsidian-muted uppercase mb-0.5">Content Type</div>
+                                                    <div className="text-foreground font-mono text-[10px]">{filePreview.contentType}</div>
                                                 </div>
                                                 <div>
-                                                    <div className="text-[9px] text-[#6c707e] uppercase mb-0.5">Last Modified</div>
-                                                    <div className="text-[#a9b7c6] font-mono text-[10px]">
+                                                    <div className="text-[9px] text-obsidian-muted uppercase mb-0.5">Last Modified</div>
+                                                    <div className="text-foreground font-mono text-[10px]">
                                                         {filePreview.lastModified ? new Date(filePreview.lastModified).toLocaleString() : '--'}
                                                     </div>
                                                 </div>
                                                 <div>
-                                                    <div className="text-[9px] text-[#6c707e] uppercase mb-0.5">ETag</div>
-                                                    <div className="text-[#a9b7c6] font-mono text-[10px] truncate">{filePreview.etag || '--'}</div>
+                                                    <div className="text-[9px] text-obsidian-muted uppercase mb-0.5">ETag</div>
+                                                    <div className="text-foreground font-mono text-[10px] truncate">{filePreview.etag || '--'}</div>
                                                 </div>
                                             </div>
                                         </div>
@@ -476,24 +476,24 @@ export default function StoragePage() {
                                         {filePreview.isPreviewable && filePreview.preview && (
                                             <div className="flex-1 flex flex-col overflow-hidden">
                                                 <div className={clsx(
-                                                    "bg-[#2b2d30] border-b border-[#393b40] flex items-center justify-between shrink-0",
+                                                    "bg-obsidian-panel border-b border-obsidian-border flex items-center justify-between shrink-0",
                                                     fullscreenPreview ? "px-6 py-2" : "px-3 py-1"
                                                 )}>
-                                                    <span className="text-[10px] text-[#6c707e] font-bold uppercase">Content Preview</span>
-                                                    <span className="text-[9px] text-[#6c707e]">{filePreview.preview.split('\n').length} lines</span>
+                                                    <span className="text-[10px] text-obsidian-muted font-bold uppercase">Content Preview</span>
+                                                    <span className="text-[9px] text-obsidian-muted">{filePreview.preview.split('\n').length} lines</span>
                                                 </div>
                                                 <div className="flex-1 overflow-auto bg-[#1a1b1e]">
                                                     <pre className="p-0 m-0">
                                                         <code className={clsx("font-mono leading-relaxed", fullscreenPreview ? "text-[13px]" : "text-[11px]")}>
                                                             {filePreview.preview.split('\n').map((line, i) => (
-                                                                <div key={i} className="flex hover:bg-[#2b2d30]/50">
+                                                                <div key={i} className="flex hover:bg-obsidian-panel/50">
                                                                     <span className={clsx(
-                                                                        "text-right pr-3 text-[#6c707e]/50 select-none shrink-0",
+                                                                        "text-right pr-3 text-obsidian-muted/50 select-none shrink-0",
                                                                         fullscreenPreview ? "w-14 text-[12px]" : "w-8 text-[10px]"
                                                                     )} style={{ lineHeight: fullscreenPreview ? '24px' : '18px' }}>
                                                                         {i + 1}
                                                                     </span>
-                                                                    <span className="flex-1 whitespace-pre text-[#a9b7c6]" style={{ lineHeight: fullscreenPreview ? '24px' : '18px' }}>
+                                                                    <span className="flex-1 whitespace-pre text-foreground" style={{ lineHeight: fullscreenPreview ? '24px' : '18px' }}>
                                                                         {line}
                                                                     </span>
                                                                 </div>
@@ -506,7 +506,7 @@ export default function StoragePage() {
 
                                         {/* Binary file notice */}
                                         {!filePreview.isPreviewable && (
-                                            <div className="flex-1 flex flex-col items-center justify-center text-[#6c707e] p-6">
+                                            <div className="flex-1 flex flex-col items-center justify-center text-obsidian-muted p-6">
                                                 <File className="w-10 h-10 mb-3 opacity-30" />
                                                 <span className="text-[12px] mb-1">Binary file — preview not available</span>
                                                 <span className="text-[10px]">{filePreview.contentType}</span>
@@ -514,7 +514,7 @@ export default function StoragePage() {
                                         )}
                                     </div>
                                 ) : (
-                                    <div className="flex items-center justify-center py-20 text-[#6c707e] text-[12px]">
+                                    <div className="flex items-center justify-center py-20 text-obsidian-muted text-[12px]">
                                         Failed to load preview
                                     </div>
                                 )}

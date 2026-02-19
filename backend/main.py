@@ -2,10 +2,13 @@
 OpenClaw Backend — FastAPI
 Main application entry point with CORS and router registration.
 """
+from dotenv import load_dotenv
+load_dotenv()  # Load .env before any router imports read os.getenv()
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from routers import trino, postgres, airflow, lineage, storage, orchestrator, health, files
+from routers import trino, postgres, airflow, lineage, storage, orchestrator, health, files, gitea
 
 app = FastAPI(
     title="OpenClaw API",
@@ -36,6 +39,7 @@ app.include_router(storage.router,      prefix="/api", tags=["Storage"])
 app.include_router(orchestrator.router, prefix="/api", tags=["Orchestrator"])
 app.include_router(health.router,       prefix="/api", tags=["Health"])
 app.include_router(files.router,        prefix="/api", tags=["Files"])
+app.include_router(gitea.router,       prefix="/api", tags=["Gitea"])
 
 
 @app.get("/")

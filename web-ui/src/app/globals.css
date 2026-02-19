@@ -1,13 +1,48 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #111215;
+  --foreground: #e2e8f0;
 }
 
 @theme {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+
+  /* Obsidian (One Dark) Hybrid Theme Palette */
+  --color-obsidian-bg: #111215;
+  /* Revert to Deep Obsidian */
+  --color-obsidian-panel: #1e2024;
+  --color-obsidian-panel-hover: #27292e;
+  --color-obsidian-border: #2b2d31;
+  --color-obsidian-border-active: #404249;
+
+  /* Text */
+  --color-obsidian-muted: #abb2bf;
+  /* Brighter muted text */
+  --color-foreground: #dcdfe4;
+  /* Brighter foreground */
+
+  /* Accents (One Dark Vivid) */
+  --color-obsidian-primary: #c678dd;
+  /* Purple */
+  --color-obsidian-primary-dim: rgba(198, 120, 221, 0.15);
+
+  --color-obsidian-success: #98c379;
+  /* Green */
+  --color-obsidian-success-dim: rgba(152, 195, 121, 0.15);
+
+  --color-obsidian-danger: #e06c75;
+  /* Red */
+  --color-obsidian-danger-dim: rgba(224, 108, 117, 0.15);
+
+  --color-obsidian-warning: #e5c07b;
+  /* Yellow */
+  --color-obsidian-warning-dim: rgba(229, 192, 123, 0.15);
+
+  --color-obsidian-info: #61afef;
+  /* Blue */
+  --color-obsidian-info-dim: rgba(97, 175, 239, 0.15);
 }
 
 /* Custom Scrollbar */

@@ -42,44 +42,44 @@ const CATEGORIES: Record<string, CategoryInfo> = {
     'orchestration': {
         label: 'Orchestration',
         icon: <Workflow className="w-4 h-4" />,
-        color: 'text-[#e5c07b]',
-        bgColor: 'bg-[#3d3829]',
-        borderColor: 'border-[#5a5030]',
+        color: 'text-obsidian-warning',
+        bgColor: 'bg-obsidian-warning/10',
+        borderColor: 'border-obsidian-warning/20',
     },
     'compute': {
         label: 'Compute Engine',
         icon: <Cpu className="w-4 h-4" />,
-        color: 'text-[#e06c75]',
-        bgColor: 'bg-[#3d2929]',
-        borderColor: 'border-[#5a3030]',
+        color: 'text-obsidian-danger',
+        bgColor: 'bg-obsidian-danger/10',
+        borderColor: 'border-obsidian-danger/20',
     },
     'storage': {
         label: 'Storage & Lakehouse',
         icon: <HardDrive className="w-4 h-4" />,
-        color: 'text-[#6aab73]',
-        bgColor: 'bg-[#293d29]',
-        borderColor: 'border-[#305a30]',
+        color: 'text-obsidian-success',
+        bgColor: 'bg-obsidian-success/10',
+        borderColor: 'border-obsidian-success/20',
     },
     'data-catalog': {
         label: 'Data Catalog & Query',
         icon: <Database className="w-4 h-4" />,
-        color: 'text-[#3574f0]',
-        bgColor: 'bg-[#29293d]',
-        borderColor: 'border-[#30305a]',
+        color: 'text-obsidian-info',
+        bgColor: 'bg-obsidian-info/10',
+        borderColor: 'border-obsidian-info/20',
     },
     'reporting': {
         label: 'Reporting & BI',
         icon: <PieChart className="w-4 h-4" />,
-        color: 'text-[#c678dd]',
-        bgColor: 'bg-[#372940]',
-        borderColor: 'border-[#503060]',
+        color: 'text-obsidian-purple',
+        bgColor: 'bg-obsidian-purple/10',
+        borderColor: 'border-obsidian-purple/20',
     },
     'devops': {
         label: 'DevOps & Version Control',
         icon: <GitFork className="w-4 h-4" />,
-        color: 'text-[#56b6c2]',
-        bgColor: 'bg-[#293d3d]',
-        borderColor: 'border-[#305a5a]',
+        color: 'text-cyan-400',
+        bgColor: 'bg-cyan-900/20',
+        borderColor: 'border-cyan-800/30',
     },
 };
 
@@ -350,37 +350,37 @@ export default function ComputePage() {
 
     const statusIcon = (status: ServiceStatus) => {
         switch (status) {
-            case 'healthy': return <CheckCircle2 className="w-3.5 h-3.5 text-[#6aab73]" />;
-            case 'unhealthy': return <XCircle className="w-3.5 h-3.5 text-[#ff5261]" />;
-            case 'checking': return <Loader2 className="w-3.5 h-3.5 text-[#e5c07b] animate-spin" />;
-            default: return <AlertTriangle className="w-3.5 h-3.5 text-[#6c707e]" />;
+            case 'healthy': return <CheckCircle2 className="w-3.5 h-3.5 text-obsidian-success" />;
+            case 'unhealthy': return <XCircle className="w-3.5 h-3.5 text-obsidian-danger" />;
+            case 'checking': return <Loader2 className="w-3.5 h-3.5 text-obsidian-warning animate-spin" />;
+            default: return <AlertTriangle className="w-3.5 h-3.5 text-obsidian-muted" />;
         }
     };
 
     const statusLabel = (status: ServiceStatus, hasPort: boolean) => {
         switch (status) {
-            case 'healthy': return <span className="text-[#6aab73]">{hasPort ? 'Healthy' : 'Running'}</span>;
-            case 'unhealthy': return <span className="text-[#ff5261]">Down</span>;
-            case 'checking': return <span className="text-[#e5c07b]">Checking...</span>;
-            default: return <span className="text-[#6c707e]">Unknown</span>;
+            case 'healthy': return <span className="text-obsidian-success">{hasPort ? 'Healthy' : 'Running'}</span>;
+            case 'unhealthy': return <span className="text-obsidian-danger">Down</span>;
+            case 'checking': return <span className="text-obsidian-warning">Checking...</span>;
+            default: return <span className="text-obsidian-muted">Unknown</span>;
         }
     };
 
     return (
-        <div className="flex h-screen bg-[#1e1f22] text-[#bcbec4] font-sans overflow-hidden">
+        <div className="flex h-screen bg-obsidian-bg text-foreground font-sans overflow-hidden">
             <Sidebar />
             <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
 
                 {/* ─── Top Header ─── */}
-                <header className="h-9 bg-[#2b2d30] border-b border-[#393b40] flex items-center justify-between px-4 shrink-0">
+                <header className="h-9 bg-obsidian-panel border-b border-obsidian-border flex items-center justify-between px-4 shrink-0">
                     <div className="flex items-center gap-2">
-                        <Server className="w-3.5 h-3.5 text-[#3574f0]" />
-                        <span className="text-[12px] font-bold text-[#bcbec4]">Compute & Infrastructure</span>
-                        <span className="text-[10px] text-[#6c707e] ml-2">Docker Compose Stack</span>
+                        <Server className="w-3.5 h-3.5 text-obsidian-info" />
+                        <span className="text-[12px] font-bold text-foreground">Compute & Infrastructure</span>
+                        <span className="text-[10px] text-obsidian-muted ml-2">Docker Compose Stack</span>
                     </div>
                     <div className="flex items-center gap-3">
                         {lastRefresh && (
-                            <span className="text-[10px] text-[#6c707e]">
+                            <span className="text-[10px] text-obsidian-muted">
                                 Updated {lastRefresh.toLocaleTimeString()}
                             </span>
                         )}
@@ -390,8 +390,8 @@ export default function ComputePage() {
                             className={clsx(
                                 "flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium transition-all",
                                 isRefreshing
-                                    ? "bg-[#4c5052] text-[#6c707e] cursor-not-allowed"
-                                    : "bg-[#365a36] text-[#6aab73] hover:bg-[#3d6b3d]"
+                                    ? "bg-obsidian-muted/20 text-obsidian-muted cursor-not-allowed"
+                                    : "bg-obsidian-success/20 text-obsidian-success hover:bg-obsidian-panel-hover"
                             )}
                         >
                             <RefreshCw className={clsx("w-3 h-3", isRefreshing && "animate-spin")} />
@@ -401,26 +401,26 @@ export default function ComputePage() {
                 </header>
 
                 {/* ─── Overview Cards ─── */}
-                <div className="bg-[#2b2d30] border-b border-[#393b40] shrink-0">
-                    <div className="grid grid-cols-4 divide-x divide-[#393b40]">
+                <div className="bg-obsidian-panel border-b border-obsidian-border shrink-0">
+                    <div className="grid grid-cols-4 divide-x divide-obsidian-border">
                         {/* Total Services */}
                         <div className="p-4">
-                            <div className="flex items-center gap-2 text-[10px] text-[#6c707e] uppercase tracking-wider font-bold mb-2">
+                            <div className="flex items-center gap-2 text-[10px] text-obsidian-muted uppercase tracking-wider font-bold mb-2">
                                 <Boxes className="w-3.5 h-3.5" /> Total Services
                             </div>
-                            <div className="text-3xl font-mono font-bold text-[#bcbec4]">{totalCount}</div>
-                            <div className="text-[10px] text-[#6c707e] mt-1">containers managed</div>
+                            <div className="text-3xl font-mono font-bold text-foreground">{totalCount}</div>
+                            <div className="text-[10px] text-obsidian-muted mt-1">containers managed</div>
                         </div>
 
                         {/* Healthy */}
                         <div className="p-4">
-                            <div className="flex items-center gap-2 text-[10px] text-[#6aab73] uppercase tracking-wider font-bold mb-2">
+                            <div className="flex items-center gap-2 text-[10px] text-obsidian-success uppercase tracking-wider font-bold mb-2">
                                 <CheckCircle2 className="w-3.5 h-3.5" /> Healthy
                             </div>
-                            <div className="text-3xl font-mono font-bold text-[#6aab73]">{healthyCount}</div>
-                            <div className="w-full bg-[#3c3f41] h-1.5 mt-2 rounded-full overflow-hidden">
+                            <div className="text-3xl font-mono font-bold text-obsidian-success">{healthyCount}</div>
+                            <div className="w-full bg-obsidian-panel-hover h-1.5 mt-2 rounded-full overflow-hidden">
                                 <div
-                                    className="bg-[#6aab73] h-full rounded-full transition-all duration-500"
+                                    className="bg-obsidian-success h-full rounded-full transition-all duration-500"
                                     style={{ width: `${totalCount > 0 ? (healthyCount / totalCount) * 100 : 0}%` }}
                                 />
                             </div>
@@ -428,13 +428,13 @@ export default function ComputePage() {
 
                         {/* Unhealthy */}
                         <div className="p-4">
-                            <div className="flex items-center gap-2 text-[10px] text-[#ff5261] uppercase tracking-wider font-bold mb-2">
+                            <div className="flex items-center gap-2 text-[10px] text-obsidian-danger uppercase tracking-wider font-bold mb-2">
                                 <XCircle className="w-3.5 h-3.5" /> Unhealthy
                             </div>
-                            <div className="text-3xl font-mono font-bold text-[#ff5261]">{unhealthyCount}</div>
-                            <div className="w-full bg-[#3c3f41] h-1.5 mt-2 rounded-full overflow-hidden">
+                            <div className="text-3xl font-mono font-bold text-obsidian-danger">{unhealthyCount}</div>
+                            <div className="w-full bg-obsidian-panel-hover h-1.5 mt-2 rounded-full overflow-hidden">
                                 <div
-                                    className="bg-[#ff5261] h-full rounded-full transition-all duration-500"
+                                    className="bg-obsidian-danger h-full rounded-full transition-all duration-500"
                                     style={{ width: `${totalCount > 0 ? (unhealthyCount / totalCount) * 100 : 0}%` }}
                                 />
                             </div>
@@ -442,14 +442,14 @@ export default function ComputePage() {
 
                         {/* Network */}
                         <div className="p-4">
-                            <div className="flex items-center gap-2 text-[10px] text-[#6c707e] uppercase tracking-wider font-bold mb-2">
+                            <div className="flex items-center gap-2 text-[10px] text-obsidian-muted uppercase tracking-wider font-bold mb-2">
                                 <Network className="w-3.5 h-3.5" /> Docker Network
                             </div>
-                            <div className="text-xl font-mono font-bold text-[#bcbec4] flex items-center gap-2">
-                                <Circle className="w-2.5 h-2.5 fill-[#6aab73] text-[#6aab73]" />
+                            <div className="text-xl font-mono font-bold text-foreground flex items-center gap-2">
+                                <Circle className="w-2.5 h-2.5 fill-obsidian-success text-obsidian-success" />
                                 Active
                             </div>
-                            <div className="text-[10px] text-[#6c707e] mt-2 font-mono">bridge: agentic-network</div>
+                            <div className="text-[10px] text-obsidian-muted mt-2 font-mono">bridge: agentic-network</div>
                         </div>
                     </div>
                 </div>
@@ -457,16 +457,16 @@ export default function ComputePage() {
                 {/* ─── Service Groups ─── */}
                 <div className="flex-1 overflow-auto">
                     {categoryGroups.map(({ key, info, services: catServices }) => (
-                        <div key={key} className="border-b border-[#393b40]">
+                        <div key={key} className="border-b border-obsidian-border">
                             {/* Category Header */}
                             <div
                                 onClick={() => toggleCategory(key)}
-                                className="h-8 bg-[#2b2d30] border-b border-[#393b40] flex items-center px-3 gap-2 cursor-pointer hover:bg-[#313335] transition-colors select-none group"
+                                className="h-8 bg-obsidian-panel border-b border-obsidian-border flex items-center px-3 gap-2 cursor-pointer hover:bg-obsidian-panel-header transition-colors select-none group"
                             >
                                 {expandedCategories[key] ? (
-                                    <ChevronDown className="w-3.5 h-3.5 text-[#6c707e]" />
+                                    <ChevronDown className="w-3.5 h-3.5 text-obsidian-muted" />
                                 ) : (
-                                    <ChevronRight className="w-3.5 h-3.5 text-[#6c707e]" />
+                                    <ChevronRight className="w-3.5 h-3.5 text-obsidian-muted" />
                                 )}
                                 <div className={clsx("flex items-center gap-1.5", info.color)}>
                                     {info.icon}
@@ -485,10 +485,10 @@ export default function ComputePage() {
                                         <div key={s.containerName} title={s.name}>
                                             <Circle className={clsx(
                                                 "w-2 h-2",
-                                                s.status === 'healthy' ? "fill-[#6aab73] text-[#6aab73]" :
-                                                    s.status === 'unhealthy' ? "fill-[#ff5261] text-[#ff5261]" :
-                                                        s.status === 'checking' ? "fill-[#e5c07b] text-[#e5c07b] animate-pulse" :
-                                                            "fill-[#6c707e] text-[#6c707e]"
+                                                s.status === 'healthy' ? "fill-obsidian-success text-obsidian-success" :
+                                                    s.status === 'unhealthy' ? "fill-obsidian-danger text-obsidian-danger" :
+                                                        s.status === 'checking' ? "fill-obsidian-warning text-obsidian-warning animate-pulse" :
+                                                            "fill-obsidian-muted text-obsidian-muted"
                                             )} />
                                         </div>
                                     ))}
@@ -498,18 +498,18 @@ export default function ComputePage() {
                             {/* Services Table */}
                             {expandedCategories[key] && (
                                 <table className="w-full text-left border-collapse">
-                                    <thead className="bg-[#313335]">
+                                    <thead className="bg-obsidian-panel-header">
                                         <tr>
-                                            <th className="p-1.5 px-3 border-r border-b border-[#393b40] w-8 text-center text-[10px] text-[#6c707e]">
+                                            <th className="p-1.5 px-3 border-r border-b border-obsidian-border w-8 text-center text-[10px] text-obsidian-muted">
                                                 <Activity className="w-3 h-3 inline" />
                                             </th>
-                                            <th className="p-1.5 px-3 border-r border-b border-[#393b40] text-[10px] text-[#6c707e] font-medium uppercase tracking-wider">Service</th>
-                                            <th className="p-1.5 px-3 border-r border-b border-[#393b40] text-[10px] text-[#6c707e] font-medium uppercase tracking-wider">Container</th>
-                                            <th className="p-1.5 px-3 border-r border-b border-[#393b40] text-[10px] text-[#6c707e] font-medium uppercase tracking-wider">Image</th>
-                                            <th className="p-1.5 px-3 border-r border-b border-[#393b40] text-[10px] text-[#6c707e] font-medium uppercase tracking-wider w-20">Port</th>
-                                            <th className="p-1.5 px-3 border-r border-b border-[#393b40] text-[10px] text-[#6c707e] font-medium uppercase tracking-wider w-24">Status</th>
-                                            <th className="p-1.5 px-3 border-r border-b border-[#393b40] text-[10px] text-[#6c707e] font-medium uppercase tracking-wider w-16">Latency</th>
-                                            <th className="p-1.5 px-3 border-b border-[#393b40] text-[10px] text-[#6c707e] font-medium uppercase tracking-wider w-16 text-center">Actions</th>
+                                            <th className="p-1.5 px-3 border-r border-b border-obsidian-border text-[10px] text-obsidian-muted font-medium uppercase tracking-wider">Service</th>
+                                            <th className="p-1.5 px-3 border-r border-b border-obsidian-border text-[10px] text-obsidian-muted font-medium uppercase tracking-wider">Container</th>
+                                            <th className="p-1.5 px-3 border-r border-b border-obsidian-border text-[10px] text-obsidian-muted font-medium uppercase tracking-wider">Image</th>
+                                            <th className="p-1.5 px-3 border-r border-b border-obsidian-border text-[10px] text-obsidian-muted font-medium uppercase tracking-wider w-20">Port</th>
+                                            <th className="p-1.5 px-3 border-r border-b border-obsidian-border text-[10px] text-obsidian-muted font-medium uppercase tracking-wider w-24">Status</th>
+                                            <th className="p-1.5 px-3 border-r border-b border-obsidian-border text-[10px] text-obsidian-muted font-medium uppercase tracking-wider w-16">Latency</th>
+                                            <th className="p-1.5 px-3 border-b border-obsidian-border text-[10px] text-obsidian-muted font-medium uppercase tracking-wider w-16 text-center">Actions</th>
                                         </tr>
                                     </thead>
                                     <tbody className="font-mono text-[12px]">
@@ -520,59 +520,59 @@ export default function ComputePage() {
                                                     selectedService === service.containerName ? null : service.containerName
                                                 )}
                                                 className={clsx(
-                                                    "hover:bg-[#2b2d30] transition-colors cursor-pointer group",
-                                                    selectedService === service.containerName && "bg-[#2b2d30]"
+                                                    "hover:bg-obsidian-panel transition-colors cursor-pointer group",
+                                                    selectedService === service.containerName && "bg-obsidian-panel"
                                                 )}
                                             >
-                                                <td className="p-1.5 border-r border-b border-[#393b40] text-center">
+                                                <td className="p-1.5 border-r border-b border-obsidian-border text-center">
                                                     {statusIcon(service.status)}
                                                 </td>
-                                                <td className="p-1.5 px-3 border-r border-b border-[#393b40]">
+                                                <td className="p-1.5 px-3 border-r border-b border-obsidian-border">
                                                     <div className="flex items-center gap-2">
                                                         <span className={clsx(info.color)}>{service.icon}</span>
                                                         <div>
-                                                            <div className="text-[#bcbec4] font-medium text-[12px]">{service.name}</div>
-                                                            <div className="text-[10px] text-[#6c707e]">{service.description}</div>
+                                                            <div className="text-foreground font-medium text-[12px]">{service.name}</div>
+                                                            <div className="text-[10px] text-obsidian-muted">{service.description}</div>
                                                         </div>
                                                     </div>
                                                 </td>
-                                                <td className="p-1.5 px-3 border-r border-b border-[#393b40] text-[#a9b7c6] text-[11px]">
+                                                <td className="p-1.5 px-3 border-r border-b border-obsidian-border text-foreground text-[11px]">
                                                     {service.containerName}
                                                 </td>
-                                                <td className="p-1.5 px-3 border-r border-b border-[#393b40] text-[#6c707e] text-[11px]">
+                                                <td className="p-1.5 px-3 border-r border-b border-obsidian-border text-obsidian-muted text-[11px]">
                                                     {service.image}
                                                 </td>
-                                                <td className="p-1.5 px-3 border-r border-b border-[#393b40]">
+                                                <td className="p-1.5 px-3 border-r border-b border-obsidian-border">
                                                     {service.externalPort ? (
-                                                        <span className="text-[#bcbec4] text-[11px]">:{service.externalPort}</span>
+                                                        <span className="text-foreground text-[11px]">:{service.externalPort}</span>
                                                     ) : (
-                                                        <span className="text-[#6c707e] text-[10px] italic">internal</span>
+                                                        <span className="text-obsidian-muted text-[10px] italic">internal</span>
                                                     )}
                                                 </td>
-                                                <td className="p-1.5 px-3 border-r border-b border-[#393b40] text-[11px]">
+                                                <td className="p-1.5 px-3 border-r border-b border-obsidian-border text-[11px]">
                                                     {statusLabel(service.status, !!service.externalPort)}
                                                 </td>
-                                                <td className="p-1.5 px-3 border-r border-b border-[#393b40] text-[11px]">
+                                                <td className="p-1.5 px-3 border-r border-b border-obsidian-border text-[11px]">
                                                     {service.responseTime ? (
                                                         <span className={clsx(
-                                                            service.responseTime < 100 ? "text-[#6aab73]" :
-                                                                service.responseTime < 500 ? "text-[#e5c07b]" :
-                                                                    "text-[#ff5261]"
+                                                            service.responseTime < 100 ? "text-obsidian-success" :
+                                                                service.responseTime < 500 ? "text-obsidian-warning" :
+                                                                    "text-obsidian-danger"
                                                         )}>
                                                             {service.responseTime}ms
                                                         </span>
                                                     ) : (
-                                                        <span className="text-[#6c707e]">—</span>
+                                                        <span className="text-obsidian-muted">—</span>
                                                     )}
                                                 </td>
-                                                <td className="p-1.5 px-3 border-b border-[#393b40] text-center">
+                                                <td className="p-1.5 px-3 border-b border-obsidian-border text-center">
                                                     {service.uiUrl && (
                                                         <a
                                                             href={service.uiUrl}
                                                             target="_blank"
                                                             rel="noopener noreferrer"
                                                             onClick={(e) => e.stopPropagation()}
-                                                            className="inline-flex items-center gap-1 px-2 py-0.5 bg-[#3c3f41] hover:bg-[#4c5052] border border-[#555] rounded text-[10px] text-[#bcbec4] transition-colors"
+                                                            className="inline-flex items-center gap-1 px-2 py-0.5 bg-obsidian-panel-hover hover:bg-obsidian-muted/20 border border-obsidian-border rounded text-foreground transition-colors"
                                                             title={`Open ${service.name} UI`}
                                                         >
                                                             <ArrowUpRight className="w-3 h-3" />
@@ -589,19 +589,19 @@ export default function ComputePage() {
                 </div>
 
                 {/* ─── Status Bar ─── */}
-                <div className="h-6 bg-[#2b2d30] border-t border-[#393b40] flex items-center px-3 text-[10px] text-[#6c707e] gap-4 shrink-0">
+                <div className="h-6 bg-obsidian-panel border-t border-obsidian-border flex items-center px-3 text-[10px] text-obsidian-muted gap-4 shrink-0">
                     <div className="flex items-center gap-1">
                         <Boxes className="w-3 h-3" />
-                        <span className="text-[#bcbec4]">{totalCount}</span> services
+                        <span className="text-foreground">{totalCount}</span> services
                     </div>
                     <div className="flex items-center gap-1">
-                        <CheckCircle2 className="w-3 h-3 text-[#6aab73]" />
-                        <span className="text-[#6aab73]">{healthyCount}</span> healthy
+                        <CheckCircle2 className="w-3 h-3 text-obsidian-success" />
+                        <span className="text-obsidian-success">{healthyCount}</span> healthy
                     </div>
                     {unhealthyCount > 0 && (
                         <div className="flex items-center gap-1">
-                            <XCircle className="w-3 h-3 text-[#ff5261]" />
-                            <span className="text-[#ff5261]">{unhealthyCount}</span> down
+                            <XCircle className="w-3 h-3 text-obsidian-danger" />
+                            <span className="text-obsidian-danger">{unhealthyCount}</span> down
                         </div>
                     )}
                     {unknownCount > 0 && (
@@ -610,7 +610,7 @@ export default function ComputePage() {
                             <span>{unknownCount}</span> unknown
                         </div>
                     )}
-                    <div className="ml-auto flex items-center gap-1 text-[#6c707e]">
+                    <div className="ml-auto flex items-center gap-1 text-obsidian-muted">
                         <Globe className="w-3 h-3" />
                         <span>agentic-network</span>
                         <span className="mx-1">·</span>

@@ -27,7 +27,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body
-        className={`${barlow.variable} ${dmMono.variable} antialiased bg-[#141414] text-[#e3e4d8]`}
+        className={`${barlow.variable} ${dmMono.variable} antialiased bg-obsidian-bg text-foreground`}
       >
         {children}
       </body>

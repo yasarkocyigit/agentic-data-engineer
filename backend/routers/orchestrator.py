@@ -52,7 +52,7 @@ async def get_airflow_token() -> str:
             json={"username": SA_USERNAME, "password": SA_PASSWORD},
         )
 
-        if res.status_code != 200:
+        if res.status_code not in (200, 201):
             raise HTTPException(
                 status_code=502,
                 detail=f"Airflow auth failed ({res.status_code}): {res.text}",

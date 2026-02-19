@@ -134,42 +134,42 @@ function HomeContent() {
   };
 
   return (
-    <div className="flex h-screen bg-[#1e1f22] text-[#bcbec4] font-sans overflow-hidden">
+    <div className="flex h-screen bg-obsidian-bg text-foreground font-sans overflow-hidden">
       <Sidebar />
 
       {/* Main Content */}
       <main className="flex-1 flex flex-col min-w-0 overflow-hidden relative">
 
         {/* Top Toolbar */}
-        <header className="h-9 bg-[#2b2d30] border-b border-[#393b40] flex items-center justify-between px-4 shrink-0">
+        <header className="h-9 bg-obsidian-panel border-b border-obsidian-border flex items-center justify-between px-4 shrink-0">
           <div className="flex items-center gap-2 text-[12px]">
-            <span className="font-bold text-[#bcbec4]">Workspace</span>
-            <span className="text-[#6c707e]">/</span>
-            <span className="text-[#bcbec4]">{openFile ? openFile.name : 'Dashboard'}</span>
+            <span className="font-bold text-foreground">Workspace</span>
+            <span className="text-obsidian-muted">/</span>
+            <span className="text-foreground">{openFile ? openFile.name : 'Dashboard'}</span>
           </div>
 
           <div className="flex items-center space-x-3">
-            <div className="flex items-center px-2 py-0.5 bg-[#3c3f41] border border-[#555] rounded text-[11px] text-[#bcbec4] gap-2">
-              <span className="w-1.5 h-1.5 rounded-full bg-[#499c54]"></span>
+            <div className="flex items-center px-2 py-0.5 bg-obsidian-panel-hover border border-obsidian-border rounded text-[11px] text-foreground gap-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-obsidian-success"></span>
               ClawdBot: Online
             </div>
-            <Bell className="w-3.5 h-3.5 text-[#6c707e] hover:text-[#bcbec4] cursor-pointer" />
-            <Settings className="w-3.5 h-3.5 text-[#6c707e] hover:text-[#bcbec4] cursor-pointer" />
+            <Bell className="w-3.5 h-3.5 text-obsidian-muted hover:text-foreground cursor-pointer" />
+            <Settings className="w-3.5 h-3.5 text-obsidian-muted hover:text-foreground cursor-pointer" />
           </div>
         </header>
 
         {/* File Viewer or Dashboard */}
         {openFile || fileLoading || fileError ? (
-          <div className={`flex-1 flex flex-col min-h-0 ${fullscreen ? 'fixed inset-0 z-50 bg-[#1e1f22]' : ''}`}>
+          <div className={`flex-1 flex flex-col min-h-0 ${fullscreen ? 'fixed inset-0 z-50 bg-obsidian-bg' : ''}`}>
             {/* Tab Bar */}
-            <div className="h-8 bg-[#2b2d30] border-b border-[#393b40] flex items-center shrink-0">
-              <div className="flex items-center h-full bg-[#1e1f22] border-r border-[#393b40] px-3 gap-2">
+            <div className="h-8 bg-obsidian-panel border-b border-obsidian-border flex items-center shrink-0">
+              <div className="flex items-center h-full bg-obsidian-bg border-r border-obsidian-border px-3 gap-2">
                 <FileCode className="w-3.5 h-3.5" style={{ color: getLanguageColor(openFile?.language || 'plaintext') }} />
-                <span className="text-[12px] text-[#bcbec4]">{openFile?.name || 'Loading...'}</span>
+                <span className="text-[12px] text-foreground">{openFile?.name || 'Loading...'}</span>
                 {openFile && (
-                  <span className="text-[9px] text-[#6c707e] ml-1">{openFile.language}</span>
+                  <span className="text-[9px] text-obsidian-muted ml-1">{openFile.language}</span>
                 )}
-                <button onClick={closeFile} className="ml-2 text-[#6c707e] hover:text-white transition-colors">
+                <button onClick={closeFile} className="ml-2 text-obsidian-muted hover:text-white transition-colors">
                   <X className="w-3 h-3" />
                 </button>
               </div>
@@ -178,7 +178,7 @@ function HomeContent() {
                 {openFile && (openFile.language === 'markdown' || openFile.language === 'html') && (
                   <button
                     onClick={() => setShowRawMarkdown(!showRawMarkdown)}
-                    className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] text-[#6c707e] hover:text-[#bcbec4] hover:bg-[#393b40] transition-colors"
+                    className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] text-obsidian-muted hover:text-foreground hover:bg-[#393b40] transition-colors"
                     title={showRawMarkdown ? 'Preview' : 'Source'}
                   >
                     {showRawMarkdown ? <Eye className="w-3 h-3" /> : <Code2 className="w-3 h-3" />}
@@ -186,13 +186,13 @@ function HomeContent() {
                   </button>
                 )}
                 {openFile && (
-                  <span className="text-[10px] text-[#6c707e]">
+                  <span className="text-[10px] text-obsidian-muted">
                     {openFile.lineCount} lines · {formatBytes(openFile.size)}
                   </span>
                 )}
                 <button
                   onClick={() => setFullscreen(!fullscreen)}
-                  className="text-[#6c707e] hover:text-white transition-colors"
+                  className="text-obsidian-muted hover:text-white transition-colors"
                   title={fullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
                 >
                   {fullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
@@ -201,15 +201,15 @@ function HomeContent() {
             </div>
 
             {/* File Content */}
-            <div className="flex-1 overflow-auto bg-[#1e1f22]">
+            <div className="flex-1 overflow-auto bg-obsidian-bg">
               {fileLoading && (
                 <div className="flex items-center justify-center h-full">
-                  <div className="text-[#6c707e] text-sm animate-pulse">Loading file...</div>
+                  <div className="text-obsidian-muted text-sm animate-pulse">Loading file...</div>
                 </div>
               )}
               {fileError && (
                 <div className="flex items-center justify-center h-full">
-                  <div className="text-[#e06c75] text-sm">{fileError}</div>
+                  <div className="text-obsidian-danger text-sm">{fileError}</div>
                 </div>
               )}
               {openFile && openFile.language === 'markdown' && !showRawMarkdown ? (
@@ -264,7 +264,7 @@ function HomeContent() {
 
             {/* Bottom Status Bar */}
             {openFile && (
-              <div className="h-6 bg-[#2b2d30] border-t border-[#393b40] flex items-center px-3 text-[10px] text-[#6c707e] gap-4 shrink-0">
+              <div className="h-6 bg-obsidian-panel border-t border-obsidian-border flex items-center px-3 text-[10px] text-obsidian-muted gap-4 shrink-0">
                 <span className="flex items-center gap-1">
                   <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: getLanguageColor(openFile.language) }} />
                   {openFile.language}
@@ -280,66 +280,66 @@ function HomeContent() {
           <div className="flex-1 flex flex-col p-0 overflow-hidden">
 
             {/* Top Section: stats */}
-            <div className="h-[140px] border-b border-[#393b40] bg-[#2b2d30] flex">
-              <div className="flex-1 border-r border-[#393b40] p-3">
+            <div className="h-[140px] border-b border-obsidian-border bg-obsidian-panel flex">
+              <div className="flex-1 border-r border-obsidian-border p-3">
                 <div className="flex justify-between items-start mb-2">
-                  <span className="text-[11px] text-[#6c707e] font-bold uppercase">Airflow DAGs</span>
-                  <Activity className="w-3.5 h-3.5 text-[#499c54]" />
+                  <span className="text-[11px] text-obsidian-muted font-bold uppercase">Airflow DAGs</span>
+                  <Activity className="w-3.5 h-3.5 text-obsidian-success" />
                 </div>
-                <div className="text-2xl font-mono text-[#bcbec4]">12 / 12</div>
-                <div className="flex items-center mt-2 text-[11px] text-[#499c54]">
+                <div className="text-2xl font-mono text-foreground">12 / 12</div>
+                <div className="flex items-center mt-2 text-[11px] text-obsidian-success">
                   <CheckCircle className="w-3 h-3 mr-1" /> All Operational
                 </div>
               </div>
 
-              <div className="flex-1 border-r border-[#393b40] p-3">
+              <div className="flex-1 border-r border-obsidian-border p-3">
                 <div className="flex justify-between items-start mb-2">
-                  <span className="text-[11px] text-[#6c707e] font-bold uppercase">Agent Status</span>
-                  <Bot className="w-3.5 h-3.5 text-[#3574f0]" />
+                  <span className="text-[11px] text-obsidian-muted font-bold uppercase">Agent Status</span>
+                  <Bot className="w-3.5 h-3.5 text-obsidian-info" />
                 </div>
-                <div className="text-xl font-mono text-[#bcbec4]">Thinking...</div>
-                <div className="flex items-center mt-2 text-[11px] text-[#3574f0]">
+                <div className="text-xl font-mono text-foreground">Thinking...</div>
+                <div className="flex items-center mt-2 text-[11px] text-obsidian-info">
                   <GitPullRequest className="w-3 h-3 mr-1" /> Reviewing PR #42
                 </div>
               </div>
 
-              <div className="flex-1 border-r border-[#393b40] p-3">
+              <div className="flex-1 border-r border-obsidian-border p-3">
                 <div className="flex justify-between items-start mb-2">
-                  <span className="text-[11px] text-[#6c707e] font-bold uppercase">System Load</span>
-                  <Cpu className="w-3.5 h-3.5 text-[#bcbec4]" />
+                  <span className="text-[11px] text-obsidian-muted font-bold uppercase">System Load</span>
+                  <Cpu className="w-3.5 h-3.5 text-foreground" />
                 </div>
-                <div className="text-2xl font-mono text-[#bcbec4]">34%</div>
-                <div className="w-full bg-[#3c3f41] h-1 mt-3 rounded-full overflow-hidden">
-                  <div className="bg-[#3574f0] h-full w-[34%]"></div>
+                <div className="text-2xl font-mono text-foreground">34%</div>
+                <div className="w-full bg-obsidian-panel-hover h-1 mt-3 rounded-full overflow-hidden">
+                  <div className="bg-obsidian-info h-full w-[34%]"></div>
                 </div>
               </div>
 
               <div className="flex-1 p-3">
                 <div className="flex justify-between items-start mb-2">
-                  <span className="text-[11px] text-[#6c707e] font-bold uppercase">Data Volume</span>
-                  <Database className="w-3.5 h-3.5 text-[#9aa7b0]" />
+                  <span className="text-[11px] text-obsidian-muted font-bold uppercase">Data Volume</span>
+                  <Database className="w-3.5 h-3.5 text-obsidian-muted" />
                 </div>
-                <div className="text-2xl font-mono text-[#bcbec4]">1.2 TB</div>
-                <div className="mt-2 text-[11px] text-[#6c707e]">+12GB today</div>
+                <div className="text-2xl font-mono text-foreground">1.2 TB</div>
+                <div className="mt-2 text-[11px] text-obsidian-muted">+12GB today</div>
               </div>
             </div>
 
             {/* Bottom Section: Split Pane */}
             <div className="flex-1 flex min-h-0">
               {/* Left: Console / Output */}
-              <div className="flex-[2] border-r border-[#393b40] flex flex-col bg-[#1e1f22]">
-                <div className="h-7 bg-[#3c3f41] border-b border-[#393b40] flex items-center px-3 justify-between">
+              <div className="flex-[2] border-r border-obsidian-border flex flex-col bg-obsidian-bg">
+                <div className="h-7 bg-obsidian-panel-hover border-b border-obsidian-border flex items-center px-3 justify-between">
                   <div className="flex items-center gap-2">
-                    <Terminal className="w-3.5 h-3.5 text-[#6c707e]" />
-                    <span className="text-[11px] font-bold text-[#bcbec4]">Agent Console Output</span>
+                    <Terminal className="w-3.5 h-3.5 text-obsidian-muted" />
+                    <span className="text-[11px] font-bold text-foreground">Agent Console Output</span>
                   </div>
                 </div>
                 <div className="flex-1 overflow-auto p-2 font-mono text-[11px] leading-5">
-                  <div className="text-[#6c707e]">[10:42:15] <span className="text-[#3574f0]">INFO</span> Started metadata analysis of `medallion_pipeline.py`</div>
-                  <div className="text-[#6c707e]">[10:42:25] <span className="text-[#9aa7b0]">ACTION</span> Executing `pip install pandas==2.1.0` in Docker container...</div>
-                  <div className="text-[#6c707e]">[10:43:02] <span className="text-[#499c54]">SUCCESS</span> Dependencies resolved.</div>
-                  <div className="text-[#6c707e]">[10:43:10] <span className="text-[#ffc66d]">PR OPEN</span> Created PR #43: &quot;Fix dependency issue&quot;</div>
-                  <div className="flex items-center text-[#bcbec4] mt-1">
+                  <div className="text-obsidian-muted">[10:42:15] <span className="text-obsidian-info">INFO</span> Started metadata analysis of `medallion_pipeline.py`</div>
+                  <div className="text-obsidian-muted">[10:42:25] <span className="text-obsidian-muted">ACTION</span> Executing `pip install pandas==2.1.0` in Docker container...</div>
+                  <div className="text-obsidian-muted">[10:43:02] <span className="text-obsidian-success">SUCCESS</span> Dependencies resolved.</div>
+                  <div className="text-obsidian-muted">[10:43:10] <span className="text-obsidian-warning">PR OPEN</span> Created PR #43: &quot;Fix dependency issue&quot;</div>
+                  <div className="flex items-center text-foreground mt-1">
                     <span className="mr-1">{'>'}</span>
                     <span className="w-1.5 h-3 bg-[#bcbec4] animate-pulse"></span>
                   </div>
@@ -347,17 +347,17 @@ function HomeContent() {
               </div>
 
               {/* Right: Iceberg Catalog */}
-              <div className="flex-1 flex flex-col bg-[#2b2d30]">
-                <div className="h-7 bg-[#3c3f41] border-b border-[#393b40] flex items-center px-3 justify-between">
-                  <span className="text-[11px] font-bold text-[#bcbec4]">Iceberg Catalog</span>
-                  <Search className="w-3 h-3 text-[#6c707e]" />
+              <div className="flex-1 flex flex-col bg-obsidian-panel">
+                <div className="h-7 bg-obsidian-panel-hover border-b border-obsidian-border flex items-center px-3 justify-between">
+                  <span className="text-[11px] font-bold text-foreground">Iceberg Catalog</span>
+                  <Search className="w-3 h-3 text-obsidian-muted" />
                 </div>
                 <div className="flex-1 overflow-auto">
                   <table className="w-full text-left border-collapse">
-                    <thead className="bg-[#3c3f41]">
+                    <thead className="bg-obsidian-panel-hover">
                       <tr>
-                        <th className="p-1 px-3 border-b border-[#393b40] text-[10px] text-[#6c707e] font-normal">Table</th>
-                        <th className="p-1 px-3 border-b border-[#393b40] text-[10px] text-[#6c707e] font-normal text-right">Modified</th>
+                        <th className="p-1 px-3 border-b border-obsidian-border text-[10px] text-obsidian-muted font-normal">Table</th>
+                        <th className="p-1 px-3 border-b border-obsidian-border text-[10px] text-obsidian-muted font-normal text-right">Modified</th>
                       </tr>
                     </thead>
                     <tbody className="text-[11px]">
@@ -366,12 +366,12 @@ function HomeContent() {
                         { name: 'customer_silver', time: '15m' },
                         { name: 'revenue_gold', time: '1h' }
                       ].map((item, i) => (
-                        <tr key={i} className="hover:bg-[#3c3f41]">
-                          <td className="p-1 px-3 border-b border-[#393b40] text-[#a9b7c6] flex items-center gap-2">
-                            <Table className="w-3 h-3 text-[#3574f0]" />
+                        <tr key={i} className="hover:bg-obsidian-panel-hover">
+                          <td className="p-1 px-3 border-b border-obsidian-border text-foreground flex items-center gap-2">
+                            <Table className="w-3 h-3 text-obsidian-info" />
                             {item.name}
                           </td>
-                          <td className="p-1 px-3 border-b border-[#393b40] text-[#6c707e] text-right">{item.time}</td>
+                          <td className="p-1 px-3 border-b border-obsidian-border text-obsidian-muted text-right">{item.time}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -389,8 +389,8 @@ function HomeContent() {
 export default function Home() {
   return (
     <Suspense fallback={
-      <div className="flex h-screen bg-[#1e1f22] text-[#bcbec4] items-center justify-center">
-        <div className="animate-pulse text-[#6c707e]">Loading...</div>
+      <div className="flex h-screen bg-obsidian-bg text-foreground items-center justify-center">
+        <div className="animate-pulse text-obsidian-muted">Loading...</div>
       </div>
     }>
       <HomeContent />

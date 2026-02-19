@@ -1,32 +1,28 @@
 import type { NextConfig } from "next";
 
+const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:8000';
+const GITEA_URL = process.env.GITEA_DIRECT_URL || 'http://localhost:3030';
+
 const nextConfig: NextConfig = {
   reactCompiler: true,
   async rewrites() {
-    const giteaDest = 'http://localhost:3030';
     return {
       beforeFiles: [
-        // Gitea explicit proxy
-        { source: '/gitea-proxy/:path*', destination: `${giteaDest}/:path*` },
-        // Gitea static assets (CSS, JS, images, fonts)
-        { source: '/assets/:path*', destination: `${giteaDest}/assets/:path*` },
-        // Gitea avatars
-        { source: '/avatars/:path*', destination: `${giteaDest}/avatars/:path*` },
-        // Gitea internal paths
-        { source: '/-/:path*', destination: `${giteaDest}/-/:path*` },
+        // ── FastAPI backend: all Gitea API proxy endpoints ──
+        { source: '/api/gitea/:path*', destination: `${BACKEND_URL}/gitea/:path*` },
+        // ── Gitea direct proxy (static assets, UI pages) ──
+        { source: '/gitea-proxy/:path*', destination: `${GITEA_URL}/:path*` },
+        { source: '/assets/:path*', destination: `${GITEA_URL}/assets/:path*` },
+        { source: '/avatars/:path*', destination: `${GITEA_URL}/avatars/:path*` },
+        { source: '/-/:path*', destination: `${GITEA_URL}/-/:path*` },
       ],
       afterFiles: [],
       fallback: [
-        // Gitea user pages (login, settings, etc.)
-        { source: '/user/:path*', destination: `${giteaDest}/user/:path*` },
-        // Gitea explore
-        { source: '/explore/:path*', destination: `${giteaDest}/explore/:path*` },
-        // Gitea repo pages (when accessed via admin/reponame)
-        { source: '/admin/:path*', destination: `${giteaDest}/admin/:path*` },
-        // Gitea API
-        { source: '/api/v1/:path*', destination: `${giteaDest}/api/v1/:path*` },
-        // Gitea repo creation
-        { source: '/repo/:path*', destination: `${giteaDest}/repo/:path*` },
+        { source: '/user/:path*', destination: `${GITEA_URL}/user/:path*` },
+        { source: '/explore/:path*', destination: `${GITEA_URL}/explore/:path*` },
+        { source: '/admin/:path*', destination: `${GITEA_URL}/admin/:path*` },
+        { source: '/api/v1/:path*', destination: `${GITEA_URL}/api/v1/:path*` },
+        { source: '/repo/:path*', destination: `${GITEA_URL}/repo/:path*` },
       ],
     };
   },
