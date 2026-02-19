@@ -286,6 +286,34 @@ async def get_file_content(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/gitea/repos/{owner}/{repo}/file")
+async def create_file_content(owner: str, repo: str, req: FileUpdateRequest):
+    """Create a new file."""
+    # For creation, SHA is not needed/should be ignored.
+    # Gitea API uses POST for creation.
+    try:
+        body = {
+            "message": req.message,
+            "content": req.content,
+            "branch": req.branch,
+        }
+        # If the Pydantic model requires SHA, we just ignore it here.
+        # But we should probably make SHA optional in the model if we want to be clean,
+        # but for now we can reuse the model and just not send SHA to Gitea.
+        
+        data = await gitea_fetch(
+            f"/repos/{owner}/{repo}/contents/{req.path}",
+            method="POST",
+            body=body,
+        )
+        return {"ok": True, "commit": data.get("commit", {})}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("[Gitea] POST /file error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.put("/gitea/repos/{owner}/{repo}/file")
 async def update_file_content(owner: str, repo: str, req: FileUpdateRequest):
     """Update (commit) a file's content."""

@@ -165,10 +165,10 @@ function fileColor(name: string): string {
     const ext = name.split('.').pop()?.toLowerCase();
     if (!ext) return '#6c707e';
     const map: Record<string, string> = {
-        py: '#4c8bb6', ts: '#3178c6', tsx: '#3178c6', js: '#f1e05a', jsx: '#f1e05a',
-        json: '#c7a84e', yml: '#cb3f49', yaml: '#cb3f49', md: '#50a14f',
-        sh: '#40c463', bash: '#40c463', sql: '#e6b12a', html: '#e34c26', css: '#563d7c',
-        dockerfile: '#384d54',
+        py: '#4e94c0', ts: '#4b8ec2', tsx: '#4b8ec2', js: '#b8a84e', jsx: '#b8a84e',
+        json: '#8a9a6e', yml: '#8a6ea0', yaml: '#8a6ea0', md: '#6ea870',
+        sh: '#6ea870', bash: '#6ea870', sql: '#82aaff', html: '#c07a60', css: '#6e6ea0',
+        dockerfile: '#4e8a7e', gitignore: '#6c707e', env: '#6c707e',
     };
     return map[ext] || '#6c707e';
 }
@@ -196,17 +196,17 @@ async function fetchJsonWithTimeout(url: string, timeoutMs = 10000) {
 function HealthDot({ status }: { status: 'online' | 'offline' | 'checking' }) {
     if (status === 'checking') return (
         <div className="flex items-center gap-1 text-obsidian-muted">
-            <Loader2 className="w-3 h-3 animate-spin" /><span className="text-[10px]">Checking...</span>
+            <Loader2 className="w-3.5 h-3.5 animate-spin" /><span className="text-[10px]">Checking...</span>
         </div>
     );
     if (status === 'online') return (
         <div className="flex items-center gap-1 text-obsidian-success">
-            <CheckCircle2 className="w-3 h-3" /><span className="text-[10px]">Connected</span>
+            <CheckCircle2 className="w-3.5 h-3.5" /><span className="text-[10px]">Connected</span>
         </div>
     );
     return (
         <div className="flex items-center gap-1 text-obsidian-danger">
-            <AlertCircle className="w-3 h-3" /><span className="text-[10px]">Offline</span>
+            <AlertCircle className="w-3.5 h-3.5" /><span className="text-[10px]">Offline</span>
         </div>
     );
 }
@@ -237,17 +237,17 @@ function ActionBadge({ status, conclusion }: { status: string; conclusion?: stri
 function PRBadge({ pr }: { pr: PullRequest }) {
     if (pr.merged) return (
         <span className="inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[10px] font-medium border bg-obsidian-primary/10 text-obsidian-primary border-obsidian-primary/20">
-            <GitMerge className="w-3 h-3" /> Merged
+            <GitMerge className="w-3.5 h-3.5" /> Merged
         </span>
     );
     if (pr.state === 'closed') return (
         <span className="inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[10px] font-medium border bg-obsidian-danger/10 text-obsidian-danger border-obsidian-danger/20">
-            <XCircle className="w-3 h-3" /> Closed
+            <XCircle className="w-3.5 h-3.5" /> Closed
         </span>
     );
     return (
         <span className="inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[10px] font-medium border bg-obsidian-success/10 text-obsidian-success border-obsidian-success/20">
-            <GitPullRequest className="w-3 h-3" /> Open
+            <GitPullRequest className="w-3.5 h-3.5" /> Open
         </span>
     );
 }
@@ -330,26 +330,27 @@ export default function CICDPage() {
             base: 'vs-dark',
             inherit: true,
             rules: [
-                { token: 'comment', foreground: '6272a4', fontStyle: 'italic' },
-                { token: 'keyword', foreground: 'ff79c6', fontStyle: 'bold' },
-                { token: 'string', foreground: 'f1fa8c' },
-                { token: 'number', foreground: 'bd93f9' },
-                { token: 'operator', foreground: 'ffb86c' },
-                { token: 'identifier', foreground: 'f8f8f2' },
-                { token: 'function', foreground: '8be9fd' },
-                { token: 'class.identifier', foreground: '50fa7b' },
-                { token: 'type.identifier', foreground: '50fa7b' },
-                { token: 'delimiter', foreground: 'f8f8f2' },
+                { token: 'comment', foreground: '546e7a', fontStyle: 'italic' },
+                { token: 'keyword', foreground: 'c792ea', fontStyle: 'bold' },
+                { token: 'string', foreground: 'c3e88d' },
+                { token: 'number', foreground: 'f78c6c' },
+                { token: 'operator', foreground: '89ddff' },
+                { token: 'identifier', foreground: 'eeffff' },
+                { token: 'function', foreground: '82aaff' },
+                { token: 'class.identifier', foreground: 'ffcb6b' },
+                { token: 'type.identifier', foreground: 'ffcb6b' },
+                { token: 'delimiter', foreground: 'eeffff' },
             ],
             colors: {
-                'editor.background': '#111215',
-                'editor.foreground': '#f8f8f2',
-                'editor.selectionBackground': '#44475a',
-                'editor.lineHighlightBackground': '#44475a',
-                'editorCursor.foreground': '#ff79c6',
-                'editorWhitespace.foreground': '#3b4048',
-                'editorIndentGuide.background': '#3b4048',
-                'editorLineNumber.foreground': '#6272a4',
+                'editor.background': '#111113',
+                'editor.foreground': '#eeffff',
+                'editor.selectionBackground': '#2d4264',
+                'editor.lineHighlightBackground': '#1a1a1e',
+                'editorCursor.foreground': '#818cf8',
+                'editorWhitespace.foreground': '#2a2a30',
+                'editorIndentGuide.background1': '#2a2a30',
+                'editorLineNumber.foreground': '#3a3a4a',
+                'editorLineNumber.activeForeground': '#6b7280',
             }
         });
         monacoInstance.editor.setTheme('obsidian');
@@ -694,7 +695,7 @@ export default function CICDPage() {
     const handleMergePR = async (prNumber: number, style: string = 'merge') => {
         if (!selectedRepo) return;
         const [owner, name] = selectedRepo.full_name.split('/');
-        if (!confirm(`Merge PR #${prNumber}? This cannot be undone.`)) return;
+        // Removed native confirm for better UX
         try {
             const res = await fetch(`/api/gitea/repos/${owner}/${name}/pulls/${prNumber}/merge`, {
                 method: 'POST',
@@ -717,7 +718,7 @@ export default function CICDPage() {
     const handleClosePR = async (prNumber: number) => {
         if (!selectedRepo) return;
         const [owner, name] = selectedRepo.full_name.split('/');
-        if (!confirm(`Close PR #${prNumber}?`)) return;
+        // Removed native confirm for better UX
         try {
             const res = await fetch(`/api/gitea/repos/${owner}/${name}/pulls/${prNumber}/close`, {
                 method: 'PATCH',
@@ -771,7 +772,7 @@ export default function CICDPage() {
             const isDir = entry.type === 'dir';
             const isExpanded = expandedDirs.has(entry.path);
             const Icon = isDir ? (isExpanded ? FolderOpen : Folder) : fileIcon(entry.name);
-            const color = isDir ? '#c7a84e' : fileColor(entry.name);
+            const color = isDir ? '#6895a8' : fileColor(entry.name);
             const isSelected = selectedFile === entry.path;
 
             return (
@@ -812,6 +813,44 @@ export default function CICDPage() {
         { key: 'actions', label: 'Actions', icon: Play, count: actionRuns.length },
     ];
 
+    // ─── Create File ───
+    const [showCreateFile, setShowCreateFile] = useState(false);
+    const [newFilePath, setNewFilePath] = useState('');
+
+    const handleCreateFile = async () => {
+        if (!selectedRepo || !newFilePath) return;
+        const [owner, name] = selectedRepo.full_name.split('/');
+        try {
+            // Use POST for creation
+            const res = await fetch(`/api/gitea/repos/${owner}/${name}/file`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    path: newFilePath,
+                    content: btoa(' '), // Empty file (space) to ensure it's not empty string if API requires content
+                    message: `Create ${newFilePath}`,
+                    sha: '0000000000000000000000000000000000000000', // Dummy SHA to satisfy Pydantic model
+                    branch: activeBranch,
+                }),
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({ detail: res.statusText }));
+                alert(`Failed to create file: ${err.detail || res.statusText}`);
+                return;
+            }
+            alert(`File "${newFilePath}" created!`);
+            setShowCreateFile(false);
+            setNewFilePath('');
+            // Refresh tree and select the new file
+            await fetchTree(owner, name, '', activeBranch);
+            // Optionally select it for editing immediately
+            // handleFileClick(newFilePath); 
+        } catch (e) {
+            alert(`Failed to create file: ${e instanceof Error ? e.message : 'Unknown error'}`);
+        }
+    };
+
+
     return (
         <div className="flex h-screen bg-obsidian-bg text-foreground font-sans overflow-hidden">
             {!isFullscreen && <Sidebar />}
@@ -820,7 +859,7 @@ export default function CICDPage() {
                 {/* ─── Top Bar ─── */}
                 <div className="h-9 bg-obsidian-panel border-b border-obsidian-border flex items-center px-4 justify-between shrink-0">
                     <div className="flex items-center gap-3 text-[12px]">
-                        <GitPullRequest className="w-3.5 h-3.5 text-obsidian-danger" />
+                        <GitPullRequest className="w-3.5 h-3.5" style={{ color: '#a78bfa' }} />
                         <span className="text-foreground font-medium">Source Control</span>
                         <span className="text-obsidian-muted">·</span>
                         <span className="text-obsidian-muted">Gitea {giteaVersion && `v${giteaVersion}`}</span>
@@ -850,7 +889,7 @@ export default function CICDPage() {
                         <div className="flex-1 flex flex-col items-center justify-center gap-4 text-obsidian-muted">
                             {health === 'offline' ? (
                                 <div className="flex flex-col items-center gap-3">
-                                    <GitPullRequest className="w-12 h-12 text-obsidian-danger opacity-40" />
+                                    <GitPullRequest className="w-12 h-12 opacity-40" style={{ color: '#a78bfa' }} />
                                     <p className="text-[13px] text-obsidian-muted">Gitea is not running</p>
                                     <code className="text-[10px] text-obsidian-danger font-mono bg-obsidian-panel rounded px-3 py-1.5">docker compose up -d gitea</code>
                                     <button onClick={() => { checkHealth(); fetchRepos(); }} className="px-4 py-1.5 bg-obsidian-danger/15 text-obsidian-danger rounded text-[11px] font-medium hover:bg-obsidian-danger/25">Retry</button>
@@ -874,7 +913,7 @@ export default function CICDPage() {
                             <div className="bg-obsidian-panel border-b border-obsidian-border shrink-0">
                                 <div className="flex items-center justify-between px-4 h-10">
                                     <div className="flex items-center gap-2 min-w-0">
-                                        <GitPullRequest className="w-3.5 h-3.5 text-obsidian-danger shrink-0" />
+                                        <GitPullRequest className="w-3.5 h-3.5 shrink-0" style={{ color: '#a78bfa' }} />
                                         <span className="text-[12px] font-bold text-foreground truncate">{selectedRepo.full_name}</span>
                                         {/* Branch switcher */}
                                         <div className="relative">
@@ -882,7 +921,7 @@ export default function CICDPage() {
                                                 onClick={() => setShowBranchDropdown(!showBranchDropdown)}
                                                 className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-obsidian-info/15 text-obsidian-info font-mono hover:bg-obsidian-info/25 transition-colors"
                                             >
-                                                <GitBranch className="w-3 h-3" />
+                                                <GitBranch className="w-3.5 h-3.5" />
                                                 {activeBranch || selectedRepo.default_branch}
                                                 <ChevronDown className="w-2.5 h-2.5" />
                                             </button>
@@ -895,7 +934,7 @@ export default function CICDPage() {
                                                                 className={clsx("w-full text-left px-3 py-1.5 text-[11px] font-mono flex items-center gap-2 transition-colors",
                                                                     activeBranch === b.name ? "text-obsidian-info bg-obsidian-info/10" : "text-foreground hover:bg-obsidian-border-active"
                                                                 )}>
-                                                                <GitBranch className="w-3 h-3 shrink-0 opacity-60" />
+                                                                <GitBranch className="w-3.5 h-3.5 shrink-0 opacity-60" />
                                                                 <span className="truncate">{b.name}</span>
                                                                 {b.protected && <span className="ml-auto text-[9px] text-obsidian-muted shrink-0">protected</span>}
                                                             </button>
@@ -911,11 +950,11 @@ export default function CICDPage() {
                                             className="p-1 hover:bg-[#3c3f41] rounded text-obsidian-muted hover:text-foreground transition-colors"
                                             title="Copy clone URL"
                                         >
-                                            <Code2 className="w-3 h-3" />
+                                            <Code2 className="w-3.5 h-3.5" />
                                         </button>
                                         <a href={selectedRepo.html_url} target="_blank" rel="noopener noreferrer"
                                             className="p-1 hover:bg-[#3c3f41] rounded text-obsidian-muted hover:text-foreground transition-colors">
-                                            <ExternalLink className="w-3 h-3" />
+                                            <ExternalLink className="w-3.5 h-3.5" />
                                         </a>
                                         <button onClick={() => { setSelectedRepo(null); setSelectedFile(null); setFileContent(''); setSelectedCommit(null); }}
                                             className="p-1 hover:bg-[#3c3f41] rounded text-obsidian-muted hover:text-foreground transition-colors">
@@ -950,7 +989,44 @@ export default function CICDPage() {
                                     /* ─── Files Tab ─── */
                                     <div className="flex-1 flex overflow-hidden">
                                         {/* File Tree */}
-                                        <div className="w-[260px] border-r border-obsidian-border overflow-auto shrink-0 py-1">
+                                        <div className="w-[260px] border-r border-obsidian-border overflow-auto shrink-0 py-1 flex flex-col">
+                                            {/* File Tree Actions */}
+                                            <div className="px-2 py-1 flex items-center justify-between text-[10px] text-obsidian-muted border-b border-obsidian-border/30 mb-1">
+                                                <span>Explorer</span>
+                                                <button
+                                                    onClick={() => setShowCreateFile(!showCreateFile)}
+                                                    className="p-1 hover:bg-obsidian-border-active rounded hover:text-foreground transition-colors"
+                                                    title="New File"
+                                                >
+                                                    <Plus className="w-3.5 h-3.5" />
+                                                </button>
+                                            </div>
+
+                                            {/* Create File Input */}
+                                            {showCreateFile && (
+                                                <div className="px-2 py-1 mb-2">
+                                                    <div className="flex items-center gap-1 bg-obsidian-bg border border-obsidian-info/50 rounded px-1.5 py-1">
+                                                        <FileIcon className="w-3.5 h-3.5 text-obsidian-muted shrink-0" />
+                                                        <input
+                                                            autoFocus
+                                                            type="text"
+                                                            placeholder="path/to/file.txt"
+                                                            className="w-full bg-transparent text-[11px] outline-none text-foreground placeholder-obsidian-muted/50"
+                                                            value={newFilePath}
+                                                            onChange={e => setNewFilePath(e.target.value)}
+                                                            onKeyDown={e => {
+                                                                if (e.key === 'Enter') handleCreateFile();
+                                                                if (e.key === 'Escape') setShowCreateFile(false);
+                                                            }}
+                                                        />
+                                                    </div>
+                                                    <div className="flex justify-end gap-1 mt-1">
+                                                        <button onClick={() => setShowCreateFile(false)} className="text-[9px] px-1.5 py-0.5 text-obsidian-muted hover:text-foreground rounded hover:bg-obsidian-border-active">Cancel</button>
+                                                        <button onClick={handleCreateFile} disabled={!newFilePath} className="text-[9px] px-1.5 py-0.5 bg-obsidian-info/20 text-obsidian-info rounded hover:bg-obsidian-info/30 disabled:opacity-50">Create</button>
+                                                    </div>
+                                                </div>
+                                            )}
+
                                             {renderTree('', 0)}
                                             {(treeEntries['/']?.length === 0) && (
                                                 <div className="text-center py-8 text-obsidian-muted text-[11px]">Empty repository</div>
@@ -1031,7 +1107,7 @@ export default function CICDPage() {
                                                                     disabled={!editMessage || editSaving}
                                                                     className="px-3 py-1.5 bg-obsidian-success text-white rounded text-[10px] font-medium hover:bg-obsidian-success disabled:opacity-40 flex items-center gap-1"
                                                                 >
-                                                                    {editSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
+                                                                    {editSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
                                                                     Commit
                                                                 </button>
                                                                 <button onClick={() => { setEditMode(false); setEditMessage(''); }} className="px-2 py-1.5 text-[10px] text-obsidian-muted hover:text-foreground">Cancel</button>
@@ -1229,7 +1305,7 @@ export default function CICDPage() {
                                             ))}
                                             <button onClick={() => setShowCreatePR(!showCreatePR)}
                                                 className="ml-auto flex items-center gap-1 px-2 py-1 bg-obsidian-success/15 text-obsidian-success rounded text-[10px] font-medium hover:bg-obsidian-success/25">
-                                                <Plus className="w-3 h-3" /> New PR
+                                                <Plus className="w-3.5 h-3.5" /> New PR
                                             </button>
                                         </div>
 
@@ -1292,7 +1368,7 @@ export default function CICDPage() {
                                                         </div>
                                                         {pr.comments > 0 && (
                                                             <div className="flex items-center gap-0.5 text-[10px] text-obsidian-muted shrink-0">
-                                                                <MessageSquare className="w-3 h-3" />{pr.comments}
+                                                                <MessageSquare className="w-3.5 h-3.5" />{pr.comments}
                                                             </div>
                                                         )}
                                                     </div>
@@ -1358,7 +1434,7 @@ export default function CICDPage() {
                                                 {selectedPR === pr.number && prDetail && prDetail.files && prDetail.files.length > 0 && (
                                                     <div className="border-t border-obsidian-border/50">
                                                         <div className="px-4 py-2 text-[10px] text-obsidian-muted font-medium border-b border-obsidian-border/30 flex items-center gap-2 bg-obsidian-panel/40">
-                                                            <FileCode className="w-3 h-3" />
+                                                            <FileCode className="w-3.5 h-3.5" />
                                                             {prDetail.files.length} changed file{prDetail.files.length !== 1 ? 's' : ''}
                                                             <span className="text-obsidian-success ml-auto">+{prDetail.files.reduce((s, f) => s + (f.additions || 0), 0)}</span>
                                                             <span className="text-obsidian-danger ml-1">-{prDetail.files.reduce((s, f) => s + (f.deletions || 0), 0)}</span>
@@ -1402,7 +1478,7 @@ export default function CICDPage() {
                                             <span className="text-[11px] text-obsidian-muted">{branches.length} branches</span>
                                             <button onClick={() => setShowCreateBranch(!showCreateBranch)}
                                                 className="ml-auto flex items-center gap-1 px-2 py-1 bg-obsidian-info/15 text-obsidian-info rounded text-[10px] font-medium hover:bg-obsidian-info/25">
-                                                <Plus className="w-3 h-3" /> New Branch
+                                                <Plus className="w-3.5 h-3.5" /> New Branch
                                             </button>
                                         </div>
 

@@ -47,17 +47,17 @@ export default function VisualizePage() {
                         {/* Status Badge */}
                         {status === 'checking' ? (
                             <div className="flex items-center gap-1 text-obsidian-muted">
-                                <Loader2 className="w-3 h-3 animate-spin" />
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
                                 <span className="text-[10px]">Checking...</span>
                             </div>
                         ) : status === 'online' ? (
                             <div className="flex items-center gap-1 text-obsidian-success">
-                                <CheckCircle2 className="w-3 h-3" />
+                                <CheckCircle2 className="w-3.5 h-3.5" />
                                 <span className="text-[10px]">Connected</span>
                             </div>
                         ) : (
                             <div className="flex items-center gap-1 text-obsidian-danger">
-                                <AlertCircle className="w-3 h-3" />
+                                <AlertCircle className="w-3.5 h-3.5" />
                                 <span className="text-[10px]">Offline</span>
                             </div>
                         )}
@@ -66,14 +66,14 @@ export default function VisualizePage() {
                     <div className="flex items-center gap-1.5">
                         <button
                             onClick={checkHealth}
-                            className="p-1 hover:bg-[#393b40] rounded text-obsidian-muted hover:text-foreground transition-colors"
+                            className="p-1 hover:bg-obsidian-panel-hover rounded text-obsidian-muted hover:text-foreground transition-colors"
                             title="Check connection"
                         >
                             <RefreshCw className="w-3.5 h-3.5" />
                         </button>
                         <button
                             onClick={() => setIsFullscreen(!isFullscreen)}
-                            className="p-1 hover:bg-[#393b40] rounded text-obsidian-muted hover:text-foreground transition-colors"
+                            className="p-1 hover:bg-obsidian-panel-hover rounded text-obsidian-muted hover:text-foreground transition-colors"
                             title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
                         >
                             {isFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
@@ -82,7 +82,7 @@ export default function VisualizePage() {
                             href={SUPERSET_URL}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="p-1 hover:bg-[#393b40] rounded text-obsidian-muted hover:text-foreground transition-colors"
+                            className="p-1 hover:bg-obsidian-panel-hover rounded text-obsidian-muted hover:text-foreground transition-colors"
                             title="Open in new tab"
                         >
                             <ExternalLink className="w-3.5 h-3.5" />

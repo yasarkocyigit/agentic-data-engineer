@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, Suspense } from 'react';
-import { Database, Folder, Table as TableIcon, ChevronRight, Settings, Search, Maximize2, MoreHorizontal, Home, Archive, Terminal, Server, Columns, HardDrive, FileText, FileCode, File as FileIcon, Image as ImageIcon, GitBranch, GitPullRequest, BarChart3, Copy, Play, List, Type } from 'lucide-react';
+import { Database, Folder, FolderOpen, Table as TableIcon, ChevronRight, Settings, Search, Maximize2, MoreHorizontal, Home, Archive, Terminal, Server, Columns, HardDrive, FileText, FileCode, File as FileIcon, Image as ImageIcon, GitBranch, GitPullRequest, BarChart3, Copy, Play, List, Type } from 'lucide-react';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import clsx from 'clsx';
 
@@ -128,10 +128,12 @@ const Sidebar = () => {
 
     // File tree renderer
     const renderFileTree = (nodes: any[], level = 0) => {
-        return nodes.map(node => {
+        return nodes.map((node, index, array) => {
             const isDir = node.type === 'directory';
             const isExpanded = expandedFiles.has(node.path);
-            const Icon = isDir ? Folder : getFileTypeIcon(node.name, node.extension);
+            const Icon = isDir
+                ? (isExpanded ? FolderOpen : Folder)
+                : getFileTypeIcon(node.name, node.extension);
 
             // Format file size
             const formatSize = (bytes?: number) => {
@@ -142,11 +144,21 @@ const Sidebar = () => {
             };
 
             return (
-                <div key={node.path}>
+                <div key={node.path} className="relative">
+                    {/* Indentation Guides */}
+                    {level > 0 && Array.from({ length: level }).map((_, i) => (
+                        <div
+                            key={i}
+                            className="absolute w-[1px] bg-obsidian-border h-full"
+                            style={{ left: `${(i * 12) + 11}px` }}
+                        />
+                    ))}
+
                     <div
                         className={clsx(
-                            "flex items-center gap-1.5 py-[1px] px-2 cursor-pointer hover:bg-obsidian-panel-hover text-foreground select-none text-[13px]",
-                            !isDir && activeFile === node.path && 'bg-obsidian-info text-white'
+                            "flex items-center gap-1.5 cursor-pointer hover:bg-obsidian-panel-hover text-obsidian-muted select-none text-[13px] h-[22px]",
+                            !isDir && activeFile === node.path && 'bg-gradient-to-r from-obsidian-info/20 to-transparent text-white shadow-[inset_2px_0_0_0_#3794ff]',
+                            !isDir && activeFile !== node.path && 'text-obsidian-muted'
                         )}
                         onClick={() => {
                             if (isDir) {
@@ -158,24 +170,23 @@ const Sidebar = () => {
                         style={{ paddingLeft: `${(level * 12) + 8}px` }}
                     >
                         <div className="w-4 h-4 flex items-center justify-center flex-shrink-0">
-                            {isDir ? (
+                            {isDir && (
                                 <ChevronRight className={`w-3.5 h-3.5 text-obsidian-muted transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
-                            ) : (
-                                <div className="w-4" />
                             )}
+                            {!isDir && <div className="w-3.5" />}
                         </div>
-                        <Icon className={`w-4 h-4 flex-shrink-0 ${isDir ? 'text-obsidian-folder' :
-                            node.extension === 'py' ? 'text-obsidian-python' :
-                                ['ts', 'tsx'].includes(node.extension) ? 'text-obsidian-typescript' :
-                                    node.extension === 'sql' ? 'text-obsidian-sql' :
-                                        ['yml', 'yaml'].includes(node.extension) ? 'text-obsidian-yaml' :
-                                            node.extension === 'md' ? 'text-obsidian-markdown' :
-                                                ['sh', 'bash'].includes(node.extension) ? 'text-obsidian-success' :
+                        <Icon className={`w-4 h-4 flex-shrink-0 ${isDir ? 'text-[#6895a8]' :
+                            node.extension === 'py' ? 'text-[#4e94c0]' :
+                                ['ts', 'tsx'].includes(node.extension) ? 'text-[#4b8ec2]' :
+                                    node.extension === 'sql' ? 'text-[#82aaff]' :
+                                        ['yml', 'yaml'].includes(node.extension) ? 'text-[#8a6ea0]' :
+                                            node.extension === 'md' ? 'text-[#6ea8b0]' :
+                                                ['sh', 'bash'].includes(node.extension) ? 'text-[#6ea870]' :
                                                     'text-obsidian-muted'
                             }`} />
                         <span className="truncate">{node.name}</span>
                         {!isDir && node.size && (
-                            <span className="ml-auto text-[10px] text-obsidian-muted opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
+                            <span className="ml-auto text-[10px] text-obsidian-muted opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pr-2">
                                 {formatSize(node.size)}
                             </span>
                         )}
@@ -470,7 +481,7 @@ const Sidebar = () => {
 
             items.push({
                 label: 'SELECT TOP 100',
-                icon: <Play className="w-3 h-3 text-[#6aab73]" />,
+                icon: <Play className="w-3.5 h-3.5 text-[#6aab73]" />,
                 action: () => {
                     const event = new CustomEvent('openclaw:run-query', {
                         detail: { query: `SELECT * FROM ${fullName} LIMIT 100`, engine: isPg ? 'postgres' : 'trino' }
@@ -480,7 +491,7 @@ const Sidebar = () => {
             });
             items.push({
                 label: 'Generate SELECT',
-                icon: <List className="w-3 h-3 text-obsidian-info" />,
+                icon: <List className="w-3.5 h-3.5 text-obsidian-info" />,
                 action: () => {
                     const event = new CustomEvent('openclaw:insert-query', {
                         detail: { query: `SELECT\n    *\nFROM ${fullName}\nLIMIT 100;` }
@@ -490,7 +501,7 @@ const Sidebar = () => {
             });
             items.push({
                 label: 'SHOW COLUMNS',
-                icon: <Columns className="w-3 h-3 text-[#b07cd8]" />,
+                icon: <Columns className="w-3.5 h-3.5 text-[#b07cd8]" />,
                 action: () => {
                     if (!isPg) {
                         const event = new CustomEvent('openclaw:run-query', {
@@ -505,14 +516,14 @@ const Sidebar = () => {
 
         items.push({
             label: 'Copy Name',
-            icon: <Copy className="w-3 h-3 text-obsidian-muted" />,
+            icon: <Copy className="w-3.5 h-3.5 text-obsidian-muted" />,
             action: () => copyToClipboard(node.name)
         });
 
         if (node.type === 'column' && node.dataType) {
             items.push({
                 label: `Copy Type: ${node.dataType}`,
-                icon: <Type className="w-3 h-3 text-obsidian-muted" />,
+                icon: <Type className="w-3.5 h-3.5 text-obsidian-muted" />,
                 action: () => copyToClipboard(node.dataType)
             });
         }
@@ -568,30 +579,29 @@ const Sidebar = () => {
             return (
                 <div key={node.id}>
                     <div
-                        className={clsx(
-                            "flex items-center gap-1.5 py-[1px] px-2 cursor-pointer hover:bg-obsidian-panel-hover text-foreground select-none text-[13px] group",
-                            level > 0 && "ml-3"
-                        )}
+                        className="flex items-center gap-1.5 py-[2px] cursor-pointer select-none text-[12px] group transition-colors rounded-sm"
+                        style={{ color: 'rgba(255,255,255,0.55)', paddingLeft: level > 0 ? `${(level * 12) + 8}px` : '8px' }}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.04)')}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
                         onClick={() => isPg ? togglePgNode(node) : toggleNode(node)}
                         onDoubleClick={() => handleDoubleClick(node, isPg)}
                         onContextMenu={(e) => handleContextMenu(e, node, isPg)}
-                        style={{ paddingLeft: level > 0 ? `${(level * 12) + 8}px` : '8px' }}
                     >
                         <div className="w-4 h-4 flex items-center justify-center flex-shrink-0">
                             {node.children && node.children.length > 0 ? (
-                                <ChevronRight className={clsx("w-3.5 h-3.5 text-obsidian-muted transition-transform", isExpanded && "rotate-90")} />
+                                <ChevronRight className={clsx("w-3 h-3 transition-transform", isExpanded && "rotate-90")} style={{ color: 'rgba(255,255,255,0.3)' }} />
                             ) : (
                                 <div className="w-4" />
                             )}
                         </div>
 
-                        <Icon className={clsx("w-4 h-4 flex-shrink-0 transition-colors",
-                            node.type === 'database' ? (isPg ? "text-obsidian-postgres" : "text-obsidian-trino") :
-                                node.type === 'schema' ? "text-obsidian-folder" :
-                                    node.type === 'table' ? "text-[#5b9bd5]" : "text-[#a9b7c6]"
-                        )} />
+                        <Icon className="w-3.5 h-3.5 flex-shrink-0 transition-colors" style={{
+                            color: node.type === 'database' ? (isPg ? '#22d3ee' : '#818cf8') :
+                                node.type === 'schema' ? 'rgba(255,255,255,0.35)' :
+                                    node.type === 'table' ? '#60a5fa' : 'rgba(255,255,255,0.25)'
+                        }} />
 
-                        <span className={clsx("truncate", node.type === 'column' ? "opacity-90" : "")}>{node.name}</span>
+                        <span className={clsx("truncate", node.type === 'column' ? "opacity-70" : "")}>{node.name}</span>
 
                         {node.dataType && (() => {
                             const dc = getDataTypeColor(node.dataType);
@@ -616,49 +626,85 @@ const Sidebar = () => {
     };
 
     return (
-        <div className="flex h-full select-none">
+        <aside className="h-full shrink-0 z-40 relative flex select-none" style={{ background: 'rgba(9,9,11,0.96)', borderRight: '1px solid rgba(255,255,255,0.06)' }}>
             {/* Activity Bar */}
-            <div className="w-12 bg-obsidian-panel border-r border-obsidian-border flex flex-col items-center py-2 space-y-4 z-10 shrink-0">
+            <div className="w-[52px] flex flex-col items-center py-2 shrink-0" style={{ borderRight: '1px solid rgba(255,255,255,0.06)', background: 'rgba(0,0,0,0.25)' }}>
                 {navItems.map((item) => {
                     const Icon = item.icon;
                     const isActive = pathname === item.path || (item.path !== '/' && pathname.startsWith(item.path));
                     return (
                         <Link to={item.path} key={item.path} title={item.name}>
-                            <div className={clsx(
-                                "p-2 rounded cursor-pointer transition-colors relative group",
-                                isActive ? "bg-[#4c5052]" : "hover:bg-obsidian-panel-hover"
-                            )}>
-                                <Icon className={clsx(
-                                    "w-5 h-5",
-                                    isActive ? "text-foreground" : "text-obsidian-muted group-hover:text-foreground"
-                                )} />
-                                {isActive && <div className="absolute left-0 top-0 bottom-0 w-[3px] bg-obsidian-info rounded-r"></div>}
+                            <div
+                                className="w-10 h-10 flex items-center justify-center rounded-lg mb-0.5 cursor-pointer transition-all relative group"
+                                style={{
+                                    background: isActive ? 'rgba(99,102,241,0.18)' : 'transparent',
+                                }}
+                                onMouseEnter={(e) => { if (!isActive) (e.currentTarget as HTMLDivElement).style.background = 'rgba(255,255,255,0.06)'; }}
+                                onMouseLeave={(e) => { if (!isActive) (e.currentTarget as HTMLDivElement).style.background = 'transparent'; }}
+                            >
+                                <Icon
+                                    className="transition-colors"
+                                    style={{
+                                        width: 20,
+                                        height: 20,
+                                        color: isActive ? '#a5b4fc' : 'rgba(255,255,255,0.4)',
+                                        strokeWidth: 1.25,
+                                    }}
+                                />
+                                {/* Active left indicator */}
+                                {isActive && (
+                                    <div
+                                        className="absolute left-0 top-[8px] bottom-[8px] w-[2.5px] rounded-r-full"
+                                        style={{ background: 'linear-gradient(180deg, #818cf8, #67e8f9)' }}
+                                    />
+                                )}
+                                {/* Tooltip */}
+                                <div className="absolute left-full ml-3 px-2.5 py-1 rounded-md text-[11px] whitespace-nowrap pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity z-50 font-medium"
+                                    style={{
+                                        background: '#18181c',
+                                        border: '1px solid rgba(255,255,255,0.08)',
+                                        color: 'rgba(255,255,255,0.8)',
+                                        boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+                                    }}>
+                                    {item.name}
+                                </div>
                             </div>
                         </Link>
                     );
                 })}
                 <div className="mt-auto pb-2">
-                    <div className="p-2 cursor-pointer hover:bg-obsidian-panel-hover rounded text-obsidian-muted hover:text-foreground">
-                        <Settings className="w-5 h-5" />
+                    <div className="w-10 h-10 flex items-center justify-center rounded-lg cursor-pointer transition-all group relative"
+                        onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = 'rgba(255,255,255,0.06)'; }}
+                        onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = 'transparent'; }}
+                    >
+                        <Settings style={{ width: 20, height: 20, color: 'rgba(255,255,255,0.35)', strokeWidth: 1.25 }} />
+                        <div className="absolute left-full ml-3 px-2.5 py-1 rounded-md text-[11px] whitespace-nowrap pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity z-50 font-medium"
+                            style={{ background: '#18181c', border: '1px solid rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.8)', boxShadow: '0 4px 12px rgba(0,0,0,0.4)' }}>
+                            Settings
+                        </div>
                     </div>
                 </div>
             </div>
 
             {/* Sidebar Content */}
-            <div className="w-[250px] bg-obsidian-panel border-r border-obsidian-border flex flex-col h-full text-foreground text-[12px] font-sans select-none">
+            <div className="w-[220px] flex flex-col h-full text-[12px] font-sans select-none" style={{ background: 'transparent' }}>
                 {/* Header */}
-                <div className="h-9 flex items-center px-3 border-b border-obsidian-border bg-obsidian-panel justify-between shrink-0">
-                    <span className="font-bold tracking-tight text-foreground">
-                        {pathname === '/data' ? 'Database Explorer' :
-                            pathname === '/workflows' ? 'Project Structure' :
-                                pathname === '/lineage' ? 'Data Lineage' :
+                <div className="h-9 flex items-center px-3 justify-between shrink-0" style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                    <span className="font-semibold tracking-tight" style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                        {pathname === '/data' ? 'Explorer' :
+                            pathname === '/workflows' ? 'Structure' :
+                                pathname === '/lineage' ? 'Lineage' :
                                     pathname === '/visualize' ? 'Dashboards' :
                                         pathname === '/compute' ? 'Infrastructure' :
                                             pathname === '/cicd' ? 'Repositories' : 'Explorer'}
                     </span>
-                    <div className="flex gap-1">
-                        <Search className="w-3.5 h-3.5 text-obsidian-muted cursor-pointer hover:text-foreground" />
-                        <Maximize2 className="w-3.5 h-3.5 text-obsidian-muted cursor-pointer hover:text-foreground" />
+                    <div className="flex gap-0.5">
+                        <div className="btn-icon w-5 h-5" style={{ color: 'rgba(255,255,255,0.4)' }}>
+                            <Search style={{ width: 12, height: 12 }} />
+                        </div>
+                        <div className="btn-icon w-5 h-5" style={{ color: 'rgba(255,255,255,0.4)' }}>
+                            <Maximize2 style={{ width: 12, height: 12 }} />
+                        </div>
                     </div>
                 </div>
 
@@ -667,26 +713,26 @@ const Sidebar = () => {
                     {pathname === '/data' ? (
                         <>
                             {/* Engine Tabs */}
-                            <div className="flex items-center gap-1 px-2 mb-2">
+                            <div className="flex items-center gap-1 px-2 mb-3">
                                 <button
                                     onClick={() => setDbEngine('trino')}
-                                    className={clsx(
-                                        "flex-1 px-2 py-1 rounded text-[10px] font-medium transition-all",
-                                        dbEngine === 'trino'
-                                            ? "bg-obsidian-info/20 text-obsidian-info border border-[#3574f0]/30"
-                                            : "text-obsidian-muted hover:text-foreground hover:bg-obsidian-panel-hover"
-                                    )}
+                                    className="flex-1 px-2 py-1 rounded-md text-[10px] font-medium transition-all"
+                                    style={{
+                                        background: dbEngine === 'trino' ? 'rgba(99,102,241,0.15)' : 'transparent',
+                                        color: dbEngine === 'trino' ? '#818cf8' : 'rgba(255,255,255,0.25)',
+                                        border: dbEngine === 'trino' ? '1px solid rgba(99,102,241,0.3)' : '1px solid transparent',
+                                    }}
                                 >
                                     Trino
                                 </button>
                                 <button
                                     onClick={() => setDbEngine('postgres')}
-                                    className={clsx(
-                                        "flex-1 px-2 py-1 rounded text-[10px] font-medium transition-all",
-                                        dbEngine === 'postgres'
-                                            ? "bg-[#336791]/20 text-[#5b9bd5] border border-[#336791]/30"
-                                            : "text-obsidian-muted hover:text-foreground hover:bg-obsidian-panel-hover"
-                                    )}
+                                    className="flex-1 px-2 py-1 rounded-md text-[10px] font-medium transition-all"
+                                    style={{
+                                        background: dbEngine === 'postgres' ? 'rgba(34,211,238,0.12)' : 'transparent',
+                                        color: dbEngine === 'postgres' ? '#22d3ee' : 'rgba(255,255,255,0.25)',
+                                        border: dbEngine === 'postgres' ? '1px solid rgba(34,211,238,0.25)' : '1px solid transparent',
+                                    }}
                                 >
                                     PostgreSQL
                                 </button>
@@ -725,7 +771,7 @@ const Sidebar = () => {
                                             }));
                                         }}
                                     >
-                                        <GitPullRequest className="w-4 h-4 text-obsidian-danger flex-shrink-0" />
+                                        <GitPullRequest className="w-4 h-4 flex-shrink-0" style={{ color: '#a78bfa' }} />
                                         <span className="truncate">{repo.name}</span>
                                         {repo.language && (
                                             <span className="ml-auto text-[9px] text-obsidian-muted">{repo.language}</span>
@@ -752,14 +798,16 @@ const Sidebar = () => {
                 </div>
 
                 {/* Bottom Panel (Services/Status) */}
-                <div className="h-[200px] border-t border-obsidian-border bg-obsidian-panel flex flex-col shrink-0">
-                    <div className="h-7 flex items-center px-3 border-b border-obsidian-border gap-2">
-                        <span className="font-semibold text-foreground">Services</span>
-                        <div className="ml-auto flex gap-1">
-                            <MoreHorizontal className="w-3.5 h-3.5 text-obsidian-muted" />
+                <div style={{ height: 210, borderTop: '1px solid rgba(255,255,255,0.05)', flexShrink: 0 }} className="flex flex-col">
+                    <div className="h-7 flex items-center px-3 gap-2 shrink-0" style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                        <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.3)' }}>Services</span>
+                        <div className="ml-auto">
+                            <div className="btn-icon w-5 h-5" style={{ color: 'rgba(255,255,255,0.4)' }}>
+                                <MoreHorizontal style={{ width: 12, height: 12 }} />
+                            </div>
                         </div>
                     </div>
-                    <div className="flex-1 overflow-y-auto p-2 space-y-1">
+                    <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
                         <ServiceItem name="Airflow (API)" status="running" />
                         <ServiceItem name="Trino (Coordinator)" status="running" />
                         <ServiceItem name="Spark Master" status="running" />
@@ -775,17 +823,24 @@ const Sidebar = () => {
             {contextMenu && (
                 <div
                     ref={contextMenuRef}
-                    className="fixed z-[9999] bg-obsidian-panel border border-obsidian-border rounded-md shadow-2xl py-1 min-w-[180px]"
-                    style={{ left: contextMenu.x, top: contextMenu.y }}
+                    className="fixed z-[9999] rounded-xl shadow-2xl py-1 min-w-[180px]"
+                    style={{
+                        left: contextMenu.x, top: contextMenu.y,
+                        background: '#0d0d12',
+                        border: '1px solid rgba(255,255,255,0.09)',
+                    }}
                     onClick={(e) => e.stopPropagation()}
                 >
                     {contextMenu.items.map((item, idx) =>
                         item.separator ? (
-                            <div key={idx} className="h-[1px] bg-obsidian-border my-1" />
+                            <div key={idx} className="h-[1px] my-1" style={{ background: 'rgba(255,255,255,0.06)' }} />
                         ) : (
                             <button
                                 key={idx}
-                                className="w-full px-3 py-1.5 text-left text-[11px] text-foreground hover:bg-obsidian-info/20 flex items-center gap-2 transition-colors"
+                                className="w-full px-3 py-1.5 text-left text-[11px] flex items-center gap-2 transition-colors rounded-md mx-1"
+                                style={{ color: 'rgba(255,255,255,0.65)', width: 'calc(100% - 8px)' }}
+                                onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(99,102,241,0.15)')}
+                                onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
                                 onClick={() => {
                                     item.action();
                                     setContextMenu(null);
@@ -798,19 +853,25 @@ const Sidebar = () => {
                     )}
                 </div>
             )}
-        </div>
+        </aside>
     );
 };
 
 const ServiceItem = ({ name, status }: { name: string, status: string }) => (
-    <div className="flex items-center py-[1px] hover:bg-obsidian-panel-hover rounded cursor-pointer px-1">
-        <div className={clsx("w-2 h-2 rounded-full mr-2", status === 'running' ? "bg-green-500" : "bg-red-500")}></div>
-        <span className="text-foreground">{name}</span>
+    <div className="flex items-center py-[3px] px-2 rounded-md cursor-pointer transition-colors group"
+        style={{ color: 'rgba(255,255,255,0.45)' }}
+        onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.03)')}
+        onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+    >
+        <div className="w-1.5 h-1.5 rounded-full mr-2 flex-shrink-0" style={{
+            background: status === 'running' ? '#4caf50' : '#e57373',
+        }} />
+        <span style={{ fontSize: 11 }}>{name}</span>
     </div>
 );
 
 const SidebarWrapper = () => (
-    <Suspense fallback={<div className="flex h-full bg-obsidian-panel" />}>
+    <Suspense fallback={<div className="flex h-full" style={{ background: '#09090b' }} />}>
         <Sidebar />
     </Suspense>
 );

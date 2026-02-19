@@ -6,53 +6,53 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
-// ─── One Dark Pro Theme ───
+// ─── Material Obsidian Theme (matches /data Monaco editor) ───
 const codeDarkTheme: { [key: string]: React.CSSProperties } = {
-  'code[class*="language-"]': { color: '#abb2bf', background: 'none', fontFamily: 'inherit', textAlign: 'left', whiteSpace: 'pre', wordSpacing: 'normal', wordBreak: 'normal', wordWrap: 'normal', lineHeight: '1.5', tabSize: 4, hyphens: 'none' },
-  'pre[class*="language-"]': { color: '#abb2bf', background: '#1e1f22', padding: '1em', margin: '0', overflow: 'auto' },
+  'code[class*="language-"]': { color: '#eeffff', background: 'none', fontFamily: 'inherit', textAlign: 'left', whiteSpace: 'pre', wordSpacing: 'normal', wordBreak: 'normal', wordWrap: 'normal', lineHeight: '1.5', tabSize: 4, hyphens: 'none' },
+  'pre[class*="language-"]': { color: '#eeffff', background: '#111113', padding: '1em', margin: '0', overflow: 'auto' },
   // ── Comments ──
-  'comment': { color: '#7f848e', fontStyle: 'italic' },
-  'prolog': { color: '#7f848e' },
-  'doctype': { color: '#7f848e' },
-  'cdata': { color: '#7f848e' },
+  'comment': { color: '#546e7a', fontStyle: 'italic' },
+  'prolog': { color: '#546e7a' },
+  'doctype': { color: '#546e7a' },
+  'cdata': { color: '#546e7a' },
   // ── Punctuation ──
-  'punctuation': { color: '#abb2bf' },
+  'punctuation': { color: '#89ddff' },
   // ── Properties / Tags ──
-  'property': { color: '#e06c75' },
-  'tag': { color: '#e06c75' },
-  'boolean': { color: '#d19a66' },
-  'number': { color: '#d19a66' },
-  'constant': { color: '#d19a66' },
-  'symbol': { color: '#d19a66' },
-  'deleted': { color: '#e06c75' },
+  'property': { color: '#f07178' },
+  'tag': { color: '#f07178' },
+  'boolean': { color: '#f78c6c' },
+  'number': { color: '#f78c6c' },
+  'constant': { color: '#f78c6c' },
+  'symbol': { color: '#f78c6c' },
+  'deleted': { color: '#f07178' },
   // ── Strings ──
-  'string': { color: '#98c379' },
-  'char': { color: '#98c379' },
-  'attr-value': { color: '#98c379' },
-  'builtin': { color: '#e5c07b' },
-  'inserted': { color: '#98c379' },
+  'string': { color: '#c3e88d' },
+  'char': { color: '#c3e88d' },
+  'attr-value': { color: '#c3e88d' },
+  'builtin': { color: '#ffcb6b' },
+  'inserted': { color: '#c3e88d' },
   // ── Operators / URLs ──
-  'operator': { color: '#56b6c2' },
-  'entity': { color: '#56b6c2' },
-  'url': { color: '#56b6c2' },
+  'operator': { color: '#89ddff' },
+  'entity': { color: '#89ddff' },
+  'url': { color: '#89ddff' },
   // ── Keywords ──
-  'atrule': { color: '#c678dd' },
-  'attr-name': { color: '#d19a66' },
-  'keyword': { color: '#c678dd' },
-  'selector': { color: '#c678dd' },
+  'atrule': { color: '#c792ea' },
+  'attr-name': { color: '#ffcb6b' },
+  'keyword': { color: '#c792ea', fontStyle: 'italic' },
+  'selector': { color: '#c792ea' },
   // ── Functions ──
-  'function': { color: '#61afef' },
-  'class-name': { color: '#e5c07b' },
+  'function': { color: '#82aaff' },
+  'class-name': { color: '#ffcb6b' },
   // ── Regex / Important ──
-  'regex': { color: '#98c379' },
-  'important': { color: '#c678dd', fontWeight: 'bold' },
-  'variable': { color: '#e06c75' },
+  'regex': { color: '#c3e88d' },
+  'important': { color: '#c792ea', fontWeight: 'bold' },
+  'variable': { color: '#f07178' },
   // ── Decorators ──
-  'decorator': { color: '#e5c07b' },
-  'annotation': { color: '#e5c07b' },
-  'triple-quoted-string': { color: '#98c379', fontStyle: 'italic' },
+  'decorator': { color: '#ffcb6b' },
+  'annotation': { color: '#ffcb6b' },
+  'triple-quoted-string': { color: '#c3e88d', fontStyle: 'italic' },
   // ── YAML keys ──
-  'key': { color: '#e06c75' },
+  'key': { color: '#f07178' },
   'bold': { fontWeight: 'bold' },
   'italic': { fontStyle: 'italic' },
 };
@@ -125,13 +125,33 @@ function HomeContent() {
   // Syntax highlighting colors based on language
   const getLanguageColor = (lang: string) => {
     const colors: Record<string, string> = {
-      python: '#4584b6', typescript: '#3178c6', javascript: '#f7df1e',
-      sql: '#e38c00', yaml: '#cb4a32', markdown: '#519aba',
-      shell: '#499c54', html: '#e34c26', css: '#264de4',
-      json: '#5b5ea6', dockerfile: '#0db7ed', plaintext: '#6c707e',
+      python: '#4e94c0', typescript: '#4b8ec2', javascript: '#b8a84e',
+      sql: '#82aaff', yaml: '#8a6ea0', markdown: '#6ea8b0',
+      shell: '#6ea870', html: '#c07a60', css: '#6e6ea0',
+      json: '#8a9a6e', dockerfile: '#4e8a7e', plaintext: '#6c707e',
     };
     return colors[lang] || '#6c707e';
   };
+
+  const [repoName, setRepoName] = useState('Workspace');
+
+  // Fetch Gitea repo name
+  useEffect(() => {
+    async function fetchRepo() {
+      try {
+        const res = await fetch('/api/gitea/repos?limit=1');
+        if (res.ok) {
+          const data = await res.json();
+          if (data.repos && data.repos.length > 0) {
+            setRepoName(data.repos[0].full_name);
+          }
+        }
+      } catch (e) {
+        console.error('Failed to fetch repo name', e);
+      }
+    }
+    fetchRepo();
+  }, []);
 
   return (
     <div className="flex h-screen bg-obsidian-bg text-foreground font-sans overflow-hidden">
@@ -143,7 +163,7 @@ function HomeContent() {
         {/* Top Toolbar */}
         <header className="h-9 bg-obsidian-panel border-b border-obsidian-border flex items-center justify-between px-4 shrink-0">
           <div className="flex items-center gap-2 text-[12px]">
-            <span className="font-bold text-foreground">Workspace</span>
+            <span className="font-bold text-foreground">{repoName}</span>
             <span className="text-obsidian-muted">/</span>
             <span className="text-foreground">{openFile ? openFile.name : 'Dashboard'}</span>
           </div>
@@ -153,8 +173,12 @@ function HomeContent() {
               <span className="w-1.5 h-1.5 rounded-full bg-obsidian-success"></span>
               ClawdBot: Online
             </div>
-            <Bell className="w-3.5 h-3.5 text-obsidian-muted hover:text-foreground cursor-pointer" />
-            <Settings className="w-3.5 h-3.5 text-obsidian-muted hover:text-foreground cursor-pointer" />
+            <div className="btn-icon w-6 h-6" style={{ color: 'rgba(255,255,255,0.4)' }}>
+              <Bell style={{ width: 14, height: 14 }} />
+            </div>
+            <div className="btn-icon w-6 h-6" style={{ color: 'rgba(255,255,255,0.4)' }}>
+              <Settings style={{ width: 14, height: 14 }} />
+            </div>
           </div>
         </header>
 
@@ -162,15 +186,18 @@ function HomeContent() {
         {openFile || fileLoading || fileError ? (
           <div className={`flex-1 flex flex-col min-h-0 ${fullscreen ? 'fixed inset-0 z-50 bg-obsidian-bg' : ''}`}>
             {/* Tab Bar */}
-            <div className="h-8 bg-obsidian-panel border-b border-obsidian-border flex items-center shrink-0">
-              <div className="flex items-center h-full bg-obsidian-bg border-r border-obsidian-border px-3 gap-2">
+            <div className="h-9 bg-obsidian-panel border-b border-obsidian-border flex items-end shrink-0 px-2 gap-1 pt-1">
+              <div className="flex items-center h-full bg-obsidian-bg rounded-t-md px-3 gap-2 relative group min-w-[120px] max-w-[200px]">
+                {/* Top Highlight Feature */}
+                <div className="absolute top-0 left-0 right-0 h-[2px] bg-obsidian-info rounded-t-md"></div>
+
                 <FileCode className="w-3.5 h-3.5" style={{ color: getLanguageColor(openFile?.language || 'plaintext') }} />
-                <span className="text-[12px] text-foreground">{openFile?.name || 'Loading...'}</span>
+                <span className="text-[12px] text-foreground truncate flex-1">{openFile?.name || 'Loading...'}</span>
                 {openFile && (
-                  <span className="text-[9px] text-obsidian-muted ml-1">{openFile.language}</span>
+                  <span className="text-[9px] text-obsidian-muted ml-1 opacity-0 group-hover:opacity-100 transition-opacity">{openFile.language}</span>
                 )}
-                <button onClick={closeFile} className="ml-2 text-obsidian-muted hover:text-white transition-colors">
-                  <X className="w-3 h-3" />
+                <button onClick={closeFile} className="ml-2 text-obsidian-muted hover:text-white transition-colors p-0.5 hover:bg-white/10 rounded-sm">
+                  <X className="w-3.5 h-3.5" />
                 </button>
               </div>
               <div className="flex-1" />
@@ -178,10 +205,10 @@ function HomeContent() {
                 {openFile && (openFile.language === 'markdown' || openFile.language === 'html') && (
                   <button
                     onClick={() => setShowRawMarkdown(!showRawMarkdown)}
-                    className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] text-obsidian-muted hover:text-foreground hover:bg-[#393b40] transition-colors"
+                    className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] text-obsidian-muted hover:text-foreground hover:bg-obsidian-panel-hover transition-colors"
                     title={showRawMarkdown ? 'Preview' : 'Source'}
                   >
-                    {showRawMarkdown ? <Eye className="w-3 h-3" /> : <Code2 className="w-3 h-3" />}
+                    {showRawMarkdown ? <Eye className="w-3.5 h-3.5" /> : <Code2 className="w-3.5 h-3.5" />}
                     {showRawMarkdown ? 'Preview' : 'Source'}
                   </button>
                 )}
@@ -237,7 +264,7 @@ function HomeContent() {
                   customStyle={{
                     margin: 0,
                     padding: '12px 0',
-                    background: '#1e1f22',
+                    background: '#111113',
                     fontSize: '13px',
                     lineHeight: '22px',
                     borderRadius: 0,
@@ -246,8 +273,8 @@ function HomeContent() {
                   lineNumberStyle={{
                     minWidth: '3em',
                     paddingRight: '16px',
-                    color: '#4b5263',
-                    borderRight: '1px solid #393b40',
+                    color: '#3a3a4a',
+                    borderRight: '1px solid #2a2a30',
                     marginRight: '16px',
                     userSelect: 'none',
                   }}
@@ -288,7 +315,7 @@ function HomeContent() {
                 </div>
                 <div className="text-2xl font-mono text-foreground">12 / 12</div>
                 <div className="flex items-center mt-2 text-[11px] text-obsidian-success">
-                  <CheckCircle className="w-3 h-3 mr-1" /> All Operational
+                  <CheckCircle className="w-3.5 h-3.5 mr-1" /> All Operational
                 </div>
               </div>
 
@@ -299,7 +326,7 @@ function HomeContent() {
                 </div>
                 <div className="text-xl font-mono text-foreground">Thinking...</div>
                 <div className="flex items-center mt-2 text-[11px] text-obsidian-info">
-                  <GitPullRequest className="w-3 h-3 mr-1" /> Reviewing PR #42
+                  <GitPullRequest className="w-3.5 h-3.5 mr-1" /> Reviewing PR #42
                 </div>
               </div>
 
@@ -350,7 +377,7 @@ function HomeContent() {
               <div className="flex-1 flex flex-col bg-obsidian-panel">
                 <div className="h-7 bg-obsidian-panel-hover border-b border-obsidian-border flex items-center px-3 justify-between">
                   <span className="text-[11px] font-bold text-foreground">Iceberg Catalog</span>
-                  <Search className="w-3 h-3 text-obsidian-muted" />
+                  <Search className="w-3.5 h-3.5 text-obsidian-muted" />
                 </div>
                 <div className="flex-1 overflow-auto">
                   <table className="w-full text-left border-collapse">
@@ -368,7 +395,7 @@ function HomeContent() {
                       ].map((item, i) => (
                         <tr key={i} className="hover:bg-obsidian-panel-hover">
                           <td className="p-1 px-3 border-b border-obsidian-border text-foreground flex items-center gap-2">
-                            <Table className="w-3 h-3 text-obsidian-info" />
+                            <Table className="w-3.5 h-3.5 text-obsidian-info" />
                             {item.name}
                           </td>
                           <td className="p-1 px-3 border-b border-obsidian-border text-obsidian-muted text-right">{item.time}</td>

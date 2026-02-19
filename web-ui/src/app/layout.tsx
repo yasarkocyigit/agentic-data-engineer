@@ -1,17 +1,16 @@
 import type { Metadata } from "next";
-import { Barlow_Condensed, DM_Mono } from "next/font/google";
+import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
+import StatusBar from "@/components/StatusBar";
 
-const barlow = Barlow_Condensed({
+const inter = Inter({
   subsets: ["latin"],
-  weight: ["100", "200", "300", "400", "500", "600", "700", "800", "900"],
-  variable: "--font-barlow",
+  variable: "--font-inter",
 });
 
-const dmMono = DM_Mono({
+const jetbrainsMono = JetBrains_Mono({
   subsets: ["latin"],
-  weight: ["300", "400", "500"],
-  variable: "--font-dm-mono",
+  variable: "--font-jetbrains-mono",
 });
 
 export const metadata: Metadata = {
@@ -27,9 +26,10 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body
-        className={`${barlow.variable} ${dmMono.variable} antialiased bg-obsidian-bg text-foreground`}
+        className={`${inter.variable} ${jetbrainsMono.variable} antialiased bg-obsidian-bg text-foreground font-sans`}
       >
         {children}
+        <StatusBar />
       </body>
     </html>
   );

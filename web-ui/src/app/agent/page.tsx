@@ -69,7 +69,7 @@ export default function AgentPage() {
                     <div className="flex-1 flex flex-col bg-obsidian-panel">
                         <div className="h-7 bg-obsidian-panel-hover border-b border-obsidian-border flex items-center px-3 justify-between">
                             <span className="text-[11px] font-bold text-foreground">Execution Logs</span>
-                            <Trash2 className="w-3 h-3 text-obsidian-muted hover:text-white cursor-pointer" />
+                            <Trash2 className="w-3.5 h-3.5 text-obsidian-muted hover:text-white cursor-pointer" />
                         </div>
                         <div className="flex-1 overflow-auto p-2 font-mono text-[11px] text-foreground space-y-1">
                             <div><span className="text-obsidian-muted">10:45:01</span> <span className="text-obsidian-success">[DEBUG]</span> Connecting to Airflow API...</div>

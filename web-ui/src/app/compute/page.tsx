@@ -501,7 +501,7 @@ export default function ComputePage() {
                                     <thead className="bg-obsidian-panel-header">
                                         <tr>
                                             <th className="p-1.5 px-3 border-r border-b border-obsidian-border w-8 text-center text-[10px] text-obsidian-muted">
-                                                <Activity className="w-3 h-3 inline" />
+                                                <Activity className="w-3.5 h-3.5 inline" />
                                             </th>
                                             <th className="p-1.5 px-3 border-r border-b border-obsidian-border text-[10px] text-obsidian-muted font-medium uppercase tracking-wider">Service</th>
                                             <th className="p-1.5 px-3 border-r border-b border-obsidian-border text-[10px] text-obsidian-muted font-medium uppercase tracking-wider">Container</th>
@@ -575,7 +575,7 @@ export default function ComputePage() {
                                                             className="inline-flex items-center gap-1 px-2 py-0.5 bg-obsidian-panel-hover hover:bg-obsidian-muted/20 border border-obsidian-border rounded text-foreground transition-colors"
                                                             title={`Open ${service.name} UI`}
                                                         >
-                                                            <ArrowUpRight className="w-3 h-3" />
+                                                            <ArrowUpRight className="w-3.5 h-3.5" />
                                                         </a>
                                                     )}
                                                 </td>
@@ -591,27 +591,27 @@ export default function ComputePage() {
                 {/* ─── Status Bar ─── */}
                 <div className="h-6 bg-obsidian-panel border-t border-obsidian-border flex items-center px-3 text-[10px] text-obsidian-muted gap-4 shrink-0">
                     <div className="flex items-center gap-1">
-                        <Boxes className="w-3 h-3" />
+                        <Boxes className="w-3.5 h-3.5" />
                         <span className="text-foreground">{totalCount}</span> services
                     </div>
                     <div className="flex items-center gap-1">
-                        <CheckCircle2 className="w-3 h-3 text-obsidian-success" />
+                        <CheckCircle2 className="w-3.5 h-3.5 text-obsidian-success" />
                         <span className="text-obsidian-success">{healthyCount}</span> healthy
                     </div>
                     {unhealthyCount > 0 && (
                         <div className="flex items-center gap-1">
-                            <XCircle className="w-3 h-3 text-obsidian-danger" />
+                            <XCircle className="w-3.5 h-3.5 text-obsidian-danger" />
                             <span className="text-obsidian-danger">{unhealthyCount}</span> down
                         </div>
                     )}
                     {unknownCount > 0 && (
                         <div className="flex items-center gap-1">
-                            <AlertTriangle className="w-3 h-3" />
+                            <AlertTriangle className="w-3.5 h-3.5" />
                             <span>{unknownCount}</span> unknown
                         </div>
                     )}
                     <div className="ml-auto flex items-center gap-1 text-obsidian-muted">
-                        <Globe className="w-3 h-3" />
+                        <Globe className="w-3.5 h-3.5" />
                         <span>agentic-network</span>
                         <span className="mx-1">·</span>
                         <span>Auto-refresh: 30s</span>

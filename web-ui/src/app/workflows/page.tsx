@@ -339,7 +339,7 @@ export default function WorkflowsPage() {
                 {/* ─── Filter Bar ─── */}
                 <div className="h-9 bg-obsidian-panel border-b border-obsidian-border flex items-center px-4 gap-3 shrink-0">
                     <div className="flex items-center gap-1.5 bg-obsidian-bg rounded px-2 py-1 flex-1 max-w-xs">
-                        <Search className="w-3 h-3 text-obsidian-muted" />
+                        <Search className="w-3.5 h-3.5 text-obsidian-muted" />
                         <input
                             type="text"
                             placeholder="Search pipelines..."
@@ -349,7 +349,7 @@ export default function WorkflowsPage() {
                         />
                     </div>
                     <div className="flex items-center gap-1.5">
-                        <Tag className="w-3 h-3 text-obsidian-muted" />
+                        <Tag className="w-3.5 h-3.5 text-obsidian-muted" />
                         <button
                             onClick={() => setFilterTag(null)}
                             className={clsx(
@@ -451,7 +451,7 @@ export default function WorkflowsPage() {
                                                     <div className="flex items-center gap-2">
                                                         <span className="text-foreground font-semibold">{dag.display_name}</span>
                                                         {dag.has_import_errors && (
-                                                            <span title="Import errors"><AlertCircle className="w-3 h-3 text-obsidian-danger" /></span>
+                                                            <span title="Import errors"><AlertCircle className="w-3.5 h-3.5 text-obsidian-danger" /></span>
                                                         )}
                                                     </div>
                                                     <div className="flex items-center gap-2 mt-0.5">
@@ -506,8 +506,8 @@ export default function WorkflowsPage() {
                                          border border-obsidian-success/20 transition-colors disabled:opacity-30"
                                                         >
                                                             {actionLoading === `${dag.dag_id}-trigger`
-                                                                ? <Loader2 className="w-3 h-3 animate-spin" />
-                                                                : <Play className="w-3 h-3" />}
+                                                                ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                                                : <Play className="w-3.5 h-3.5" />}
                                                             <span>Run</span>
                                                         </button>
 
@@ -521,8 +521,8 @@ export default function WorkflowsPage() {
                                            border border-obsidian-danger/20 transition-colors disabled:opacity-30"
                                                             >
                                                                 {actionLoading === `${dag.dag_id}-cancel`
-                                                                    ? <Loader2 className="w-3 h-3 animate-spin" />
-                                                                    : <CircleStop className="w-3 h-3" />}
+                                                                    ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                                                    : <CircleStop className="w-3.5 h-3.5" />}
                                                                 <span>Cancel</span>
                                                             </button>
                                                         )}
@@ -539,10 +539,10 @@ export default function WorkflowsPage() {
                                                             )}
                                                         >
                                                             {actionLoading === `${dag.dag_id}-pause` || actionLoading === `${dag.dag_id}-unpause`
-                                                                ? <Loader2 className="w-3 h-3 animate-spin" />
+                                                                ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
                                                                 : dag.is_paused
-                                                                    ? <RotateCcw className="w-3 h-3" />
-                                                                    : <Pause className="w-3 h-3" />}
+                                                                    ? <RotateCcw className="w-3.5 h-3.5" />
+                                                                    : <Pause className="w-3.5 h-3.5" />}
                                                             <span>{dag.is_paused ? 'Enable' : 'Pause'}</span>
                                                         </button>
                                                     </div>
@@ -606,8 +606,8 @@ export default function WorkflowsPage() {
                                         <p className="text-obsidian-muted leading-relaxed">{selectedDagData.description}</p>
                                     )}
                                     <div className="flex items-center gap-4 text-[10px] text-obsidian-muted">
-                                        <span><Calendar className="w-3 h-3 inline mr-1 -mt-0.5" />{selectedDagData.schedule || 'Manual'}</span>
-                                        <span><User className="w-3 h-3 inline mr-1 -mt-0.5" />{selectedDagData.owners.join(', ')}</span>
+                                        <span><Calendar className="w-3.5 h-3.5 inline mr-1 -mt-0.5" />{selectedDagData.schedule || 'Manual'}</span>
+                                        <span><User className="w-3.5 h-3.5 inline mr-1 -mt-0.5" />{selectedDagData.owners.join(', ')}</span>
                                     </div>
                                     {/* Schedule status + toggle */}
                                     <div className="flex items-center gap-2 pt-1">
@@ -630,8 +630,8 @@ export default function WorkflowsPage() {
                                             )}
                                         >
                                             {selectedDagData.is_paused
-                                                ? <><RotateCcw className="w-3 h-3" /> Enable Schedule</>
-                                                : <><Pause className="w-3 h-3" /> Pause Schedule</>}
+                                                ? <><RotateCcw className="w-3.5 h-3.5" /> Enable Schedule</>
+                                                : <><Pause className="w-3.5 h-3.5" /> Pause Schedule</>}
                                         </button>
                                     </div>
                                 </div>
@@ -648,7 +648,7 @@ export default function WorkflowsPage() {
                                             : "text-obsidian-muted hover:text-foreground hover:bg-obsidian-panel/30"
                                     )}
                                 >
-                                    <GitBranch className="w-3 h-3" /> Graph
+                                    <GitBranch className="w-3.5 h-3.5" /> Graph
                                 </button>
                                 <button
                                     onClick={() => setSidebarTab('runs')}
@@ -659,7 +659,7 @@ export default function WorkflowsPage() {
                                             : "text-obsidian-muted hover:text-foreground hover:bg-obsidian-panel/30"
                                     )}
                                 >
-                                    <FileText className="w-3 h-3" /> Runs
+                                    <FileText className="w-3.5 h-3.5" /> Runs
                                 </button>
                                 <button
                                     onClick={() => setSidebarTab('code')}
@@ -670,7 +670,7 @@ export default function WorkflowsPage() {
                                             : "text-obsidian-muted hover:text-foreground hover:bg-obsidian-panel/30"
                                     )}
                                 >
-                                    <Code2 className="w-3 h-3" /> Code
+                                    <Code2 className="w-3.5 h-3.5" /> Code
                                 </button>
                             </div>
 
@@ -684,7 +684,7 @@ export default function WorkflowsPage() {
                                         className="flex items-center gap-1 px-2 py-1 bg-obsidian-success/15 text-obsidian-success rounded text-[10px]
                              font-medium hover:bg-obsidian-success/25 border border-obsidian-success/20 transition-colors disabled:opacity-50"
                                     >
-                                        <Play className="w-3 h-3" /> Trigger New Run
+                                        <Play className="w-3.5 h-3.5" /> Trigger New Run
                                     </button>
                                 </div>
                             )}
@@ -716,8 +716,8 @@ export default function WorkflowsPage() {
                                                             <div className="flex items-center justify-between mb-1">
                                                                 <div className="flex items-center gap-1.5">
                                                                     {isExpanded
-                                                                        ? <ChevronDown className="w-3 h-3 text-obsidian-muted" />
-                                                                        : <ChevronRight className="w-3 h-3 text-obsidian-muted" />}
+                                                                        ? <ChevronDown className="w-3.5 h-3.5 text-obsidian-muted" />
+                                                                        : <ChevronRight className="w-3.5 h-3.5 text-obsidian-muted" />}
                                                                     <StateBadge state={run.state} />
                                                                     {/* Cancel button inline for running runs */}
                                                                     {isRunRunning && (
@@ -772,15 +772,15 @@ export default function WorkflowsPage() {
                                                                                     {/* State icon */}
                                                                                     <div className="mt-0.5">
                                                                                         {ti.state === 'success' ? (
-                                                                                            <CheckCircle2 className="w-3 h-3" style={{ color: taskColor.text }} />
+                                                                                            <CheckCircle2 className="w-3.5 h-3.5" style={{ color: taskColor.text }} />
                                                                                         ) : ti.state === 'failed' ? (
-                                                                                            <XCircle className="w-3 h-3" style={{ color: taskColor.text }} />
+                                                                                            <XCircle className="w-3.5 h-3.5" style={{ color: taskColor.text }} />
                                                                                         ) : ti.state === 'running' ? (
-                                                                                            <Loader2 className="w-3 h-3 animate-spin" style={{ color: taskColor.text }} />
+                                                                                            <Loader2 className="w-3.5 h-3.5 animate-spin" style={{ color: taskColor.text }} />
                                                                                         ) : ti.state === 'skipped' ? (
-                                                                                            <ChevronRight className="w-3 h-3" style={{ color: taskColor.text }} />
+                                                                                            <ChevronRight className="w-3.5 h-3.5" style={{ color: taskColor.text }} />
                                                                                         ) : (
-                                                                                            <Activity className="w-3 h-3" style={{ color: taskColor.text }} />
+                                                                                            <Activity className="w-3.5 h-3.5" style={{ color: taskColor.text }} />
                                                                                         )}
                                                                                     </div>
 
@@ -861,7 +861,7 @@ export default function WorkflowsPage() {
                                                                                                 )}
                                                                                                 {taskCodeLoading ? (
                                                                                                     <div className="flex items-center justify-center py-4 text-obsidian-muted text-[10px]">
-                                                                                                        <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> Loading...
+                                                                                                        <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> Loading...
                                                                                                     </div>
                                                                                                 ) : taskCode ? (
                                                                                                     <>
@@ -888,7 +888,7 @@ export default function WorkflowsPage() {
                                                                                                                 >
                                                                                                                     {fullscreenCode
                                                                                                                         ? <Minimize2 className="w-3.5 h-3.5" />
-                                                                                                                        : <Maximize2 className="w-3 h-3" />
+                                                                                                                        : <Maximize2 className="w-3.5 h-3.5" />
                                                                                                                     }
                                                                                                                 </button>
                                                                                                                 {fullscreenCode && (
