@@ -45,7 +45,7 @@ async def gitea_fetch(path: str, method: str = "GET", body: dict = None) -> dict
         elif method == "PUT":
             res = await client.put(url, **kwargs)
         elif method == "DELETE":
-            res = await client.delete(url, **kwargs)
+            res = await client.request("DELETE", url, **kwargs)
         else:
             raise ValueError(f"Unsupported method: {method}")
 
@@ -93,6 +93,13 @@ class FileUpdateRequest(BaseModel):
     content: str       # base64-encoded content
     message: str       # commit message
     sha: str           # current file SHA (required by Gitea)
+    branch: str = "main"
+
+
+class FileDeleteRequest(BaseModel):
+    path: str
+    message: str       # commit message
+    sha: str           # current file SHA (required by Gitea for deletion)
     branch: str = "main"
 
 
@@ -333,6 +340,27 @@ async def update_file_content(owner: str, repo: str, req: FileUpdateRequest):
         raise
     except Exception as e:
         logger.error("[Gitea] PUT /file error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/gitea/repos/{owner}/{repo}/file")
+async def delete_file_content(owner: str, repo: str, req: FileDeleteRequest):
+    """Delete a file from the repository."""
+    try:
+        data = await gitea_fetch(
+            f"/repos/{owner}/{repo}/contents/{req.path}",
+            method="DELETE",
+            body={
+                "message": req.message,
+                "sha": req.sha,
+                "branch": req.branch,
+            },
+        )
+        return {"ok": True, "commit": data.get("commit", {})}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("[Gitea] DELETE /file error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 

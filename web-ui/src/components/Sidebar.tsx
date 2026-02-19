@@ -659,7 +659,7 @@ const Sidebar = () => {
                                     />
                                 )}
                                 {/* Tooltip */}
-                                <div className="absolute left-full ml-3 px-2.5 py-1 rounded-md text-[11px] whitespace-nowrap pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity z-50 font-medium"
+                                <div className="absolute left-full ml-3 px-2.5 py-1 rounded-md text-[11px] whitespace-nowrap pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity z-50 font-medium active:scale-95"
                                     style={{
                                         background: '#18181c',
                                         border: '1px solid rgba(255,255,255,0.08)',
@@ -678,7 +678,7 @@ const Sidebar = () => {
                         onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = 'transparent'; }}
                     >
                         <Settings style={{ width: 20, height: 20, color: 'rgba(255,255,255,0.35)', strokeWidth: 1.25 }} />
-                        <div className="absolute left-full ml-3 px-2.5 py-1 rounded-md text-[11px] whitespace-nowrap pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity z-50 font-medium"
+                        <div className="absolute left-full ml-3 px-2.5 py-1 rounded-md text-[11px] whitespace-nowrap pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity z-50 font-medium active:scale-95"
                             style={{ background: '#18181c', border: '1px solid rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.8)', boxShadow: '0 4px 12px rgba(0,0,0,0.4)' }}>
                             Settings
                         </div>
@@ -687,137 +687,139 @@ const Sidebar = () => {
             </div>
 
             {/* Sidebar Content */}
-            <div className="w-[220px] flex flex-col h-full text-[12px] font-sans select-none" style={{ background: 'transparent' }}>
-                {/* Header */}
-                <div className="h-9 flex items-center px-3 justify-between shrink-0" style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                    <span className="font-semibold tracking-tight" style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                        {pathname === '/data' ? 'Explorer' :
-                            pathname === '/workflows' ? 'Structure' :
-                                pathname === '/lineage' ? 'Lineage' :
-                                    pathname === '/visualize' ? 'Dashboards' :
-                                        pathname === '/compute' ? 'Infrastructure' :
-                                            pathname === '/cicd' ? 'Repositories' : 'Explorer'}
-                    </span>
-                    <div className="flex gap-0.5">
-                        <div className="btn-icon w-5 h-5" style={{ color: 'rgba(255,255,255,0.4)' }}>
-                            <Search style={{ width: 12, height: 12 }} />
-                        </div>
-                        <div className="btn-icon w-5 h-5" style={{ color: 'rgba(255,255,255,0.4)' }}>
-                            <Maximize2 style={{ width: 12, height: 12 }} />
+            {pathname !== '/data' && (
+                <div className="w-[220px] flex flex-col h-full text-[12px] font-sans select-none" style={{ background: 'transparent' }}>
+                    {/* Header */}
+                    <div className="h-9 flex items-center px-3 justify-between shrink-0" style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                        <span className="font-semibold tracking-tight" style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                            {pathname === '/data' ? 'Explorer' :
+                                pathname === '/workflows' ? 'Structure' :
+                                    pathname === '/lineage' ? 'Lineage' :
+                                        pathname === '/visualize' ? 'Dashboards' :
+                                            pathname === '/compute' ? 'Infrastructure' :
+                                                pathname === '/cicd' ? 'Repositories' : 'Explorer'}
+                        </span>
+                        <div className="flex gap-0.5">
+                            <div className="btn-icon w-5 h-5" style={{ color: 'rgba(255,255,255,0.4)' }}>
+                                <Search style={{ width: 12, height: 12 }} />
+                            </div>
+                            <div className="btn-icon w-5 h-5" style={{ color: 'rgba(255,255,255,0.4)' }}>
+                                <Maximize2 style={{ width: 12, height: 12 }} />
+                            </div>
                         </div>
                     </div>
-                </div>
 
-                {/* Tree View */}
-                <div className="flex-1 overflow-y-auto p-1 py-2">
-                    {pathname === '/data' ? (
-                        <>
-                            {/* Engine Tabs */}
-                            <div className="flex items-center gap-1 px-2 mb-3">
-                                <button
-                                    onClick={() => setDbEngine('trino')}
-                                    className="flex-1 px-2 py-1 rounded-md text-[10px] font-medium transition-all"
-                                    style={{
-                                        background: dbEngine === 'trino' ? 'rgba(99,102,241,0.15)' : 'transparent',
-                                        color: dbEngine === 'trino' ? '#818cf8' : 'rgba(255,255,255,0.25)',
-                                        border: dbEngine === 'trino' ? '1px solid rgba(99,102,241,0.3)' : '1px solid transparent',
-                                    }}
-                                >
-                                    Trino
-                                </button>
-                                <button
-                                    onClick={() => setDbEngine('postgres')}
-                                    className="flex-1 px-2 py-1 rounded-md text-[10px] font-medium transition-all"
-                                    style={{
-                                        background: dbEngine === 'postgres' ? 'rgba(34,211,238,0.12)' : 'transparent',
-                                        color: dbEngine === 'postgres' ? '#22d3ee' : 'rgba(255,255,255,0.25)',
-                                        border: dbEngine === 'postgres' ? '1px solid rgba(34,211,238,0.25)' : '1px solid transparent',
-                                    }}
-                                >
-                                    PostgreSQL
-                                </button>
-                            </div>
-                            {dbEngine === 'trino' ? (
-                                <>
-                                    {dbItems.length === 0 && (
-                                        <div className="ml-4 text-obsidian-muted text-[10px] animate-pulse">Fetching Catalogs...</div>
-                                    )}
-                                    {renderTree(dbItems)}
-                                </>
-                            ) : (
-                                <>
-                                    {pgItems.length === 0 && (
-                                        <div className="ml-4 text-obsidian-muted text-[10px] animate-pulse">Fetching Databases...</div>
-                                    )}
-                                    {renderTree(pgItems, 0, true)}
-                                </>
-                            )}
-                        </>
-                    ) : pathname === '/cicd' ? (
-                        <>
-                            {giteaReposLoading ? (
-                                <div className="ml-4 text-obsidian-muted text-[10px] animate-pulse">Loading repos...</div>
-                            ) : giteaRepos.length === 0 ? (
-                                <div className="ml-4 text-obsidian-muted text-[10px]">No repos found</div>
-                            ) : (
-                                giteaRepos.map((repo: any) => (
-                                    <div
-                                        key={repo.id}
-                                        className="flex items-center gap-1.5 py-[2px] px-2 cursor-pointer hover:bg-obsidian-panel-hover text-foreground select-none text-[13px]"
-                                        style={{ paddingLeft: '8px' }}
-                                        onClick={() => {
-                                            window.dispatchEvent(new CustomEvent('openclaw:select-repo', {
-                                                detail: { repo: repo.full_name }
-                                            }));
+                    {/* Tree View */}
+                    <div className="flex-1 overflow-y-auto p-1 py-2">
+                        {pathname === '/data' ? (
+                            <>
+                                {/* Engine Tabs */}
+                                <div className="flex items-center gap-1 px-2 mb-3">
+                                    <button
+                                        onClick={() => setDbEngine('trino')}
+                                        className="flex-1 px-2 py-1 rounded-md text-[10px] font-medium transition-all"
+                                        style={{
+                                            background: dbEngine === 'trino' ? 'rgba(99,102,241,0.15)' : 'transparent',
+                                            color: dbEngine === 'trino' ? '#818cf8' : 'rgba(255,255,255,0.25)',
+                                            border: dbEngine === 'trino' ? '1px solid rgba(99,102,241,0.3)' : '1px solid transparent',
                                         }}
                                     >
-                                        <GitPullRequest className="w-4 h-4 flex-shrink-0" style={{ color: '#a78bfa' }} />
-                                        <span className="truncate">{repo.name}</span>
-                                        {repo.language && (
-                                            <span className="ml-auto text-[9px] text-obsidian-muted">{repo.language}</span>
+                                        Trino
+                                    </button>
+                                    <button
+                                        onClick={() => setDbEngine('postgres')}
+                                        className="flex-1 px-2 py-1 rounded-md text-[10px] font-medium transition-all"
+                                        style={{
+                                            background: dbEngine === 'postgres' ? 'rgba(34,211,238,0.12)' : 'transparent',
+                                            color: dbEngine === 'postgres' ? '#22d3ee' : 'rgba(255,255,255,0.25)',
+                                            border: dbEngine === 'postgres' ? '1px solid rgba(34,211,238,0.25)' : '1px solid transparent',
+                                        }}
+                                    >
+                                        PostgreSQL
+                                    </button>
+                                </div>
+                                {dbEngine === 'trino' ? (
+                                    <>
+                                        {dbItems.length === 0 && (
+                                            <div className="ml-4 text-obsidian-muted text-[10px] animate-pulse">Fetching Catalogs...</div>
                                         )}
-                                    </div>
-                                ))
-                            )}
-                        </>
-                    ) : pathname === '/' ? (
-                        <>
-                            {fileTreeLoading ? (
-                                <div className="ml-4 text-obsidian-muted text-[10px] animate-pulse">Loading project structure...</div>
-                            ) : fileTree.length === 0 ? (
-                                <div className="ml-4 text-obsidian-muted text-[10px]">No files found</div>
-                            ) : (
-                                renderFileTree(fileTree)
-                            )}
-                        </>
-                    ) : (
-                        <div className="px-4 py-2 text-obsidian-muted italic">
-                            {pathname === '/workflows' && "DAGs Explorer..."}
-                        </div>
-                    )}
-                </div>
+                                        {renderTree(dbItems)}
+                                    </>
+                                ) : (
+                                    <>
+                                        {pgItems.length === 0 && (
+                                            <div className="ml-4 text-obsidian-muted text-[10px] animate-pulse">Fetching Databases...</div>
+                                        )}
+                                        {renderTree(pgItems, 0, true)}
+                                    </>
+                                )}
+                            </>
+                        ) : pathname === '/cicd' ? (
+                            <>
+                                {giteaReposLoading ? (
+                                    <div className="ml-4 text-obsidian-muted text-[10px] animate-pulse">Loading repos...</div>
+                                ) : giteaRepos.length === 0 ? (
+                                    <div className="ml-4 text-obsidian-muted text-[10px]">No repos found</div>
+                                ) : (
+                                    giteaRepos.map((repo: any) => (
+                                        <div
+                                            key={repo.id}
+                                            className="flex items-center gap-1.5 py-[2px] px-2 cursor-pointer hover:bg-obsidian-panel-hover text-foreground select-none text-[13px] transition-all active:scale-95"
+                                            style={{ paddingLeft: '8px' }}
+                                            onClick={() => {
+                                                window.dispatchEvent(new CustomEvent('openclaw:select-repo', {
+                                                    detail: { repo: repo.full_name }
+                                                }));
+                                            }}
+                                        >
+                                            <GitPullRequest className="w-4 h-4 flex-shrink-0" style={{ color: '#a78bfa' }} />
+                                            <span className="truncate">{repo.name}</span>
+                                            {repo.language && (
+                                                <span className="ml-auto text-[9px] text-obsidian-muted">{repo.language}</span>
+                                            )}
+                                        </div>
+                                    ))
+                                )}
+                            </>
+                        ) : pathname === '/' ? (
+                            <>
+                                {fileTreeLoading ? (
+                                    <div className="ml-4 text-obsidian-muted text-[10px] animate-pulse">Loading project structure...</div>
+                                ) : fileTree.length === 0 ? (
+                                    <div className="ml-4 text-obsidian-muted text-[10px]">No files found</div>
+                                ) : (
+                                    renderFileTree(fileTree)
+                                )}
+                            </>
+                        ) : (
+                            <div className="px-4 py-2 text-obsidian-muted italic">
+                                {pathname === '/workflows' && "DAGs Explorer..."}
+                            </div>
+                        )}
+                    </div>
 
-                {/* Bottom Panel (Services/Status) */}
-                <div style={{ height: 210, borderTop: '1px solid rgba(255,255,255,0.05)', flexShrink: 0 }} className="flex flex-col">
-                    <div className="h-7 flex items-center px-3 gap-2 shrink-0" style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                        <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.3)' }}>Services</span>
-                        <div className="ml-auto">
-                            <div className="btn-icon w-5 h-5" style={{ color: 'rgba(255,255,255,0.4)' }}>
-                                <MoreHorizontal style={{ width: 12, height: 12 }} />
+                    {/* Bottom Panel (Services/Status) */}
+                    <div style={{ height: 210, borderTop: '1px solid rgba(255,255,255,0.05)', flexShrink: 0 }} className="flex flex-col">
+                        <div className="h-7 flex items-center px-3 gap-2 shrink-0" style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                            <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.3)' }}>Services</span>
+                            <div className="ml-auto">
+                                <div className="btn-icon w-5 h-5" style={{ color: 'rgba(255,255,255,0.4)' }}>
+                                    <MoreHorizontal style={{ width: 12, height: 12 }} />
+                                </div>
                             </div>
                         </div>
-                    </div>
-                    <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
-                        <ServiceItem name="Airflow (API)" status="running" />
-                        <ServiceItem name="Trino (Coordinator)" status="running" />
-                        <ServiceItem name="Spark Master" status="running" />
-                        <ServiceItem name="MinIO (S3)" status="running" />
-                        <ServiceItem name="Marquez (API)" status="running" />
-                        <ServiceItem name="Superset" status="running" />
-                        <ServiceItem name="Gitea" status="running" />
+                        <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
+                            <ServiceItem name="Airflow (API)" status="running" />
+                            <ServiceItem name="Trino (Coordinator)" status="running" />
+                            <ServiceItem name="Spark Master" status="running" />
+                            <ServiceItem name="MinIO (S3)" status="running" />
+                            <ServiceItem name="Marquez (API)" status="running" />
+                            <ServiceItem name="Superset" status="running" />
+                            <ServiceItem name="Gitea" status="running" />
+                        </div>
                     </div>
                 </div>
-            </div>
+            )}
 
             {/* Context Menu Overlay */}
             {contextMenu && (
@@ -853,12 +855,12 @@ const Sidebar = () => {
                     )}
                 </div>
             )}
-        </aside>
+        </aside >
     );
 };
 
 const ServiceItem = ({ name, status }: { name: string, status: string }) => (
-    <div className="flex items-center py-[3px] px-2 rounded-md cursor-pointer transition-colors group"
+    <div className="flex items-center py-[3px] px-2 rounded-md cursor-pointer transition-colors group active:scale-95"
         style={{ color: 'rgba(255,255,255,0.45)' }}
         onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.03)')}
         onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}

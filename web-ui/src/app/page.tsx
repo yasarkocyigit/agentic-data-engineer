@@ -4,6 +4,7 @@ import { Activity, CheckCircle, Cpu, Database, GitPullRequest, Bot, Terminal, Ex
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import ReactMarkdown from 'react-markdown';
+import clsx from 'clsx';
 import remarkGfm from 'remark-gfm';
 
 // ─── Material Obsidian Theme (matches /data Monaco editor) ───
@@ -169,16 +170,16 @@ function HomeContent() {
           </div>
 
           <div className="flex items-center space-x-3">
-            <div className="flex items-center px-2 py-0.5 bg-obsidian-panel-hover border border-obsidian-border rounded text-[11px] text-foreground gap-2">
-              <span className="w-1.5 h-1.5 rounded-full bg-obsidian-success"></span>
+            <div className="flex items-center px-3 py-1 bg-obsidian-panel-hover border border-obsidian-border rounded-md text-[11px] font-medium text-foreground gap-2 transition-all shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
+              <span className="w-2 h-2 rounded-full bg-obsidian-success animate-pulse shadow-[0_0_8px_rgba(76,175,80,0.8)]"></span>
               ClawdBot: Online
             </div>
-            <div className="btn-icon w-6 h-6" style={{ color: 'rgba(255,255,255,0.4)' }}>
-              <Bell style={{ width: 14, height: 14 }} />
-            </div>
-            <div className="btn-icon w-6 h-6" style={{ color: 'rgba(255,255,255,0.4)' }}>
-              <Settings style={{ width: 14, height: 14 }} />
-            </div>
+            <button className="p-1.5 text-obsidian-muted hover:text-foreground hover:bg-white/5 rounded-md transition-all active:scale-95">
+              <Bell className="w-4 h-4" />
+            </button>
+            <button className="p-1.5 text-obsidian-muted hover:text-foreground hover:bg-white/5 rounded-md transition-all active:scale-95">
+              <Settings className="w-4 h-4" />
+            </button>
           </div>
         </header>
 
@@ -186,26 +187,26 @@ function HomeContent() {
         {openFile || fileLoading || fileError ? (
           <div className={`flex-1 flex flex-col min-h-0 ${fullscreen ? 'fixed inset-0 z-50 bg-obsidian-bg' : ''}`}>
             {/* Tab Bar */}
-            <div className="h-9 bg-obsidian-panel border-b border-obsidian-border flex items-end shrink-0 px-2 gap-1 pt-1">
-              <div className="flex items-center h-full bg-obsidian-bg rounded-t-md px-3 gap-2 relative group min-w-[120px] max-w-[200px]">
-                {/* Top Highlight Feature */}
-                <div className="absolute top-0 left-0 right-0 h-[2px] bg-obsidian-info rounded-t-md"></div>
+            <div className="h-10 bg-black/60 border-b border-obsidian-border/30 flex items-end shrink-0 px-2 gap-1 pt-2 shadow-sm">
+              <div className="flex items-center h-full bg-obsidian-bg rounded-t-lg mx-1 px-4 gap-2 relative group min-w-[140px] max-w-[220px] shadow-[0_-2px_10px_rgba(0,0,0,0.5)] border-t border-x border-obsidian-border/30">
+                {/* Top Glowing Highlight Feature */}
+                <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-obsidian-info to-obsidian-purple rounded-t-lg opacity-80 shadow-[0_0_8px_rgba(34,211,238,0.5)]"></div>
 
-                <FileCode className="w-3.5 h-3.5" style={{ color: getLanguageColor(openFile?.language || 'plaintext') }} />
-                <span className="text-[12px] text-foreground truncate flex-1">{openFile?.name || 'Loading...'}</span>
+                <FileCode className="w-3.5 h-3.5 drop-shadow-md" style={{ color: getLanguageColor(openFile?.language || 'plaintext') }} />
+                <span className="text-[12px] font-medium text-foreground truncate flex-1 tracking-wide">{openFile?.name || 'Loading...'}</span>
                 {openFile && (
-                  <span className="text-[9px] text-obsidian-muted ml-1 opacity-0 group-hover:opacity-100 transition-opacity">{openFile.language}</span>
+                  <span className="text-[9px] text-obsidian-muted ml-1 opacity-0 group-hover:opacity-100 transition-opacity uppercase tracking-widest">{openFile.language}</span>
                 )}
-                <button onClick={closeFile} className="ml-2 text-obsidian-muted hover:text-white transition-colors p-0.5 hover:bg-white/10 rounded-sm">
-                  <X className="w-3.5 h-3.5" />
+                <button onClick={closeFile} className="ml-2 text-obsidian-muted hover:text-white transition-all p-1 hover:bg-white/10 rounded-md active:scale-90 bg-black/20">
+                  <X className="w-3 h-3" />
                 </button>
               </div>
               <div className="flex-1" />
-              <div className="flex items-center gap-2 px-3">
+              <div className="flex items-center gap-2 px-3 pb-1">
                 {openFile && (openFile.language === 'markdown' || openFile.language === 'html') && (
                   <button
                     onClick={() => setShowRawMarkdown(!showRawMarkdown)}
-                    className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] text-obsidian-muted hover:text-foreground hover:bg-obsidian-panel-hover transition-colors"
+                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] uppercase tracking-wider font-bold text-obsidian-muted hover:text-foreground hover:bg-white/10 transition-all active:scale-95 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] border border-obsidian-border/30"
                     title={showRawMarkdown ? 'Preview' : 'Source'}
                   >
                     {showRawMarkdown ? <Eye className="w-3.5 h-3.5" /> : <Code2 className="w-3.5 h-3.5" />}
@@ -213,16 +214,16 @@ function HomeContent() {
                   </button>
                 )}
                 {openFile && (
-                  <span className="text-[10px] text-obsidian-muted">
-                    {openFile.lineCount} lines · {formatBytes(openFile.size)}
+                  <span className="text-[10px] text-obsidian-muted font-mono bg-black/40 px-2 py-0.5 rounded-md border border-obsidian-border/20">
+                    {openFile.lineCount}L · {formatBytes(openFile.size)}
                   </span>
                 )}
                 <button
                   onClick={() => setFullscreen(!fullscreen)}
-                  className="text-obsidian-muted hover:text-white transition-colors"
+                  className="text-obsidian-muted hover:text-white transition-all p-1.5 hover:bg-white/10 rounded-md active:scale-90"
                   title={fullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
                 >
-                  {fullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+                  {fullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
                 </button>
               </div>
             </div>
@@ -307,98 +308,112 @@ function HomeContent() {
           <div className="flex-1 flex flex-col p-0 overflow-hidden">
 
             {/* Top Section: stats */}
-            <div className="h-[140px] border-b border-obsidian-border bg-obsidian-panel flex">
-              <div className="flex-1 border-r border-obsidian-border p-3">
-                <div className="flex justify-between items-start mb-2">
-                  <span className="text-[11px] text-obsidian-muted font-bold uppercase">Airflow DAGs</span>
-                  <Activity className="w-3.5 h-3.5 text-obsidian-success" />
+            <div className="h-[140px] border-b border-obsidian-border/50 bg-obsidian-bg/80 flex shrink-0">
+              {/* Card 1: DAGs */}
+              <div className="flex-1 border-r border-obsidian-border/50 p-5 flex flex-col justify-between hover:bg-white/5 transition-colors">
+                <div className="flex justify-between items-start">
+                  <span className="text-[10px] text-obsidian-muted font-bold uppercase tracking-widest">Airflow DAGs</span>
+                  <Activity className="w-4 h-4 text-obsidian-success drop-shadow-[0_0_8px_rgba(76,175,80,0.4)]" />
                 </div>
-                <div className="text-2xl font-mono text-foreground">12 / 12</div>
-                <div className="flex items-center mt-2 text-[11px] text-obsidian-success">
-                  <CheckCircle className="w-3.5 h-3.5 mr-1" /> All Operational
-                </div>
-              </div>
-
-              <div className="flex-1 border-r border-obsidian-border p-3">
-                <div className="flex justify-between items-start mb-2">
-                  <span className="text-[11px] text-obsidian-muted font-bold uppercase">Agent Status</span>
-                  <Bot className="w-3.5 h-3.5 text-obsidian-info" />
-                </div>
-                <div className="text-xl font-mono text-foreground">Thinking...</div>
-                <div className="flex items-center mt-2 text-[11px] text-obsidian-info">
-                  <GitPullRequest className="w-3.5 h-3.5 mr-1" /> Reviewing PR #42
+                <div>
+                  <div className="text-3xl font-mono text-white tracking-tight">12 / 12</div>
+                  <div className="flex items-center mt-1 text-[11px] text-obsidian-success/90 font-medium">
+                    <CheckCircle className="w-3.5 h-3.5 mr-1" /> All Operational
+                  </div>
                 </div>
               </div>
 
-              <div className="flex-1 border-r border-obsidian-border p-3">
-                <div className="flex justify-between items-start mb-2">
-                  <span className="text-[11px] text-obsidian-muted font-bold uppercase">System Load</span>
-                  <Cpu className="w-3.5 h-3.5 text-foreground" />
+              {/* Card 2: Agent */}
+              <div className="flex-1 border-r border-obsidian-border/50 p-5 flex flex-col justify-between hover:bg-white/5 transition-colors">
+                <div className="flex justify-between items-start">
+                  <span className="text-[10px] text-obsidian-muted font-bold uppercase tracking-widest">Agent Status</span>
+                  <Bot className="w-4 h-4 text-obsidian-info drop-shadow-[0_0_8px_rgba(34,211,238,0.4)]" />
                 </div>
-                <div className="text-2xl font-mono text-foreground">34%</div>
-                <div className="w-full bg-obsidian-panel-hover h-1 mt-3 rounded-full overflow-hidden">
-                  <div className="bg-obsidian-info h-full w-[34%]"></div>
+                <div>
+                  <div className="text-[22px] font-mono text-white tracking-tight truncate">Thinking...</div>
+                  <div className="flex items-center mt-1 text-[11px] text-obsidian-info/90 font-medium">
+                    <GitPullRequest className="w-3.5 h-3.5 mr-1" /> Reviewing PR #42
+                  </div>
                 </div>
               </div>
 
-              <div className="flex-1 p-3">
-                <div className="flex justify-between items-start mb-2">
-                  <span className="text-[11px] text-obsidian-muted font-bold uppercase">Data Volume</span>
-                  <Database className="w-3.5 h-3.5 text-obsidian-muted" />
+              {/* Card 3: System Load */}
+              <div className="flex-1 border-r border-obsidian-border/50 p-5 flex flex-col justify-between hover:bg-white/5 transition-colors">
+                <div className="flex justify-between items-start">
+                  <span className="text-[10px] text-obsidian-muted font-bold uppercase tracking-widest">System Load</span>
+                  <Cpu className="w-4 h-4 text-foreground drop-shadow-[0_0_8px_rgba(255,255,255,0.4)]" />
                 </div>
-                <div className="text-2xl font-mono text-foreground">1.2 TB</div>
-                <div className="mt-2 text-[11px] text-obsidian-muted">+12GB today</div>
+                <div>
+                  <div className="text-3xl font-mono text-white tracking-tight">34%</div>
+                  <div className="w-full bg-black/40 h-1.5 mt-2 rounded-full overflow-hidden shadow-inner">
+                    <div className="bg-gradient-to-r from-obsidian-info to-obsidian-purple h-full w-[34%] rounded-full shadow-[0_0_10px_rgba(34,211,238,0.5)]"></div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Card 4: Data Volume */}
+              <div className="flex-1 p-5 flex flex-col justify-between hover:bg-white/5 transition-colors">
+                <div className="flex justify-between items-start">
+                  <span className="text-[10px] text-obsidian-muted font-bold uppercase tracking-widest">Data Volume</span>
+                  <Database className="w-4 h-4 text-obsidian-muted drop-shadow-[0_0_8px_rgba(139,148,158,0.3)]" />
+                </div>
+                <div>
+                  <div className="text-3xl font-mono text-white tracking-tight">1.2 TB</div>
+                  <div className="mt-1 text-[11px] text-obsidian-muted/90 font-medium">+12GB today</div>
+                </div>
               </div>
             </div>
 
             {/* Bottom Section: Split Pane */}
             <div className="flex-1 flex min-h-0">
               {/* Left: Console / Output */}
-              <div className="flex-[2] border-r border-obsidian-border flex flex-col bg-obsidian-bg">
-                <div className="h-7 bg-obsidian-panel-hover border-b border-obsidian-border flex items-center px-3 justify-between">
+              <div className="flex-[2] border-r border-obsidian-border/50 flex flex-col bg-black/40">
+                <div className="h-8 bg-black/60 border-b border-obsidian-border/30 flex items-center px-4 justify-between shrink-0 shadow-sm">
                   <div className="flex items-center gap-2">
-                    <Terminal className="w-3.5 h-3.5 text-obsidian-muted" />
-                    <span className="text-[11px] font-bold text-foreground">Agent Console Output</span>
+                    <Terminal className="w-3.5 h-3.5 text-obsidian-purple" />
+                    <span className="text-[10px] font-bold text-obsidian-muted uppercase tracking-widest">Agent Console Output</span>
                   </div>
                 </div>
-                <div className="flex-1 overflow-auto p-2 font-mono text-[11px] leading-5">
-                  <div className="text-obsidian-muted">[10:42:15] <span className="text-obsidian-info">INFO</span> Started metadata analysis of `medallion_pipeline.py`</div>
-                  <div className="text-obsidian-muted">[10:42:25] <span className="text-obsidian-muted">ACTION</span> Executing `pip install pandas==2.1.0` in Docker container...</div>
-                  <div className="text-obsidian-muted">[10:43:02] <span className="text-obsidian-success">SUCCESS</span> Dependencies resolved.</div>
-                  <div className="text-obsidian-muted">[10:43:10] <span className="text-obsidian-warning">PR OPEN</span> Created PR #43: &quot;Fix dependency issue&quot;</div>
-                  <div className="flex items-center text-foreground mt-1">
-                    <span className="mr-1">{'>'}</span>
-                    <span className="w-1.5 h-3 bg-[#bcbec4] animate-pulse"></span>
+                <div className="flex-1 overflow-auto p-4 font-mono text-[11px] leading-6 custom-scrollbar">
+                  <div className="text-obsidian-muted group hover:bg-white/5 px-2 -mx-2 rounded transition-colors"><span className="text-[#546e7a]">[10:42:15]</span> <span className="text-obsidian-info glow-text font-bold">INFO...</span> Started metadata analysis of `medallion_pipeline.py`</div>
+                  <div className="text-obsidian-muted group hover:bg-white/5 px-2 -mx-2 rounded transition-colors"><span className="text-[#546e7a]">[10:42:25]</span> <span className="text-obsidian-muted font-bold">ACTION.</span> Executing `pip install pandas==2.1.0` in Docker container...</div>
+                  <div className="text-obsidian-muted group hover:bg-white/5 px-2 -mx-2 rounded transition-colors"><span className="text-[#546e7a]">[10:43:02]</span> <span className="text-obsidian-success glow-text font-bold">SUCCESS</span> Dependencies resolved.</div>
+                  <div className="text-obsidian-muted group hover:bg-white/5 px-2 -mx-2 rounded transition-colors"><span className="text-[#546e7a]">[10:43:10]</span> <span className="text-obsidian-warning glow-text font-bold">PR OPEN</span> Created PR #43: "Fix dependency issue"</div>
+                  <div className="flex items-center text-foreground mt-2 px-2 -mx-2">
+                    <span className="mr-2 text-obsidian-info">❯</span>
+                    <span className="w-2 h-3.5 bg-obsidian-info/80 animate-pulse shadow-[0_0_8px_rgba(34,211,238,0.5)]"></span>
                   </div>
                 </div>
               </div>
 
               {/* Right: Iceberg Catalog */}
-              <div className="flex-1 flex flex-col bg-obsidian-panel">
-                <div className="h-7 bg-obsidian-panel-hover border-b border-obsidian-border flex items-center px-3 justify-between">
-                  <span className="text-[11px] font-bold text-foreground">Iceberg Catalog</span>
+              <div className="flex-1 flex flex-col bg-obsidian-panel/30">
+                <div className="h-8 bg-black/40 border-b border-obsidian-border/30 flex items-center px-4 justify-between shrink-0 shadow-sm">
+                  <span className="text-[10px] font-bold text-obsidian-muted uppercase tracking-widest">Iceberg Catalog</span>
                   <Search className="w-3.5 h-3.5 text-obsidian-muted" />
                 </div>
-                <div className="flex-1 overflow-auto">
+                <div className="flex-1 overflow-auto p-2 custom-scrollbar">
                   <table className="w-full text-left border-collapse">
-                    <thead className="bg-obsidian-panel-hover">
+                    <thead>
                       <tr>
-                        <th className="p-1 px-3 border-b border-obsidian-border text-[10px] text-obsidian-muted font-normal">Table</th>
-                        <th className="p-1 px-3 border-b border-obsidian-border text-[10px] text-obsidian-muted font-normal text-right">Modified</th>
+                        <th className="p-2 px-3 pb-3 text-[10px] text-obsidian-muted font-bold uppercase tracking-wider">Table</th>
+                        <th className="p-2 px-3 pb-3 text-[10px] text-obsidian-muted font-bold uppercase tracking-wider text-right">Modified</th>
                       </tr>
                     </thead>
-                    <tbody className="text-[11px]">
+                    <tbody className="text-[12px]">
                       {[
-                        { name: 'orders_bronze', time: '2m' },
-                        { name: 'customer_silver', time: '15m' },
-                        { name: 'revenue_gold', time: '1h' }
+                        { name: 'orders_bronze', time: '2m', color: 'text-[#cd7332]' },
+                        { name: 'customer_silver', time: '15m', color: 'text-[#c0c0c0]' },
+                        { name: 'revenue_gold', time: '1h', color: 'text-[#ffd700]' }
                       ].map((item, i) => (
-                        <tr key={i} className="hover:bg-obsidian-panel-hover">
-                          <td className="p-1 px-3 border-b border-obsidian-border text-foreground flex items-center gap-2">
-                            <Table className="w-3.5 h-3.5 text-obsidian-info" />
-                            {item.name}
+                        <tr key={i} className="group cursor-pointer">
+                          <td className="p-2 px-3 border-b border-obsidian-border/20 text-foreground flex items-center gap-2.5 transition-colors group-hover:bg-white/5 rounded-l-md border-l-2 border-transparent group-hover:border-obsidian-info">
+                            <Table className={clsx("w-4 h-4", item.color)} />
+                            <span className="group-hover:text-white transition-colors">{item.name}</span>
                           </td>
-                          <td className="p-1 px-3 border-b border-obsidian-border text-obsidian-muted text-right">{item.time}</td>
+                          <td className="p-2 px-3 border-b border-obsidian-border/20 text-obsidian-muted text-right transition-colors group-hover:bg-white/5 rounded-r-md group-hover:text-foreground">
+                            {item.time}
+                          </td>
                         </tr>
                       ))}
                     </tbody>

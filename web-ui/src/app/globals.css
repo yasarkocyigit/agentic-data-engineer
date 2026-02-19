@@ -48,31 +48,50 @@
   --color-obsidian-folder: rgba(255, 255, 255, 0.4);
 }
 
-/* Premium Solid Utilities — no blur, pixel-perfect */
+/* ─── Premium Solid Utilities & Cinematic Depth ─── */
 .glass {
   background: #111113;
+  /* Multi-layered soft shadow for depth */
+  box-shadow: 0 4px 24px -2px rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  /* Hairline Top Border */
   border-right: 1px solid #1f1f23;
 }
 
 .glass-panel {
   background: #111113;
+  position: relative;
+  /* Hairline Top Border */
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
-/* ─── Global Premium Icon Style ───
-   Lucide icons render as SVGs. Setting stroke-width globally
-   gives every icon in the app the thin, VS Code-like precision. */
+/* Cinematic Grain (Noise) overlay for glass panels to eliminate banding */
+.glass-panel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+  opacity: 0.03;
+  border-radius: inherit;
+}
+
+/* ─── Global Premium Icon Style ─── */
 svg[class*="lucide"] {
   stroke-width: 1.25;
 }
 
-/* Icon-only button utility */
+/* Icon-only button utility & Micro-Interactions */
 .btn-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border-radius: 6px;
-  transition: background 0.15s ease, color 0.15s ease;
+  /* Silky smooth cubic-bezier for hover/active states */
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
   cursor: pointer;
+  /* Prevent text selection when rapid clicking */
+  user-select: none;
 }
 
 .btn-icon:hover {
@@ -81,6 +100,8 @@ svg[class*="lucide"] {
 
 .btn-icon:active {
   background: rgba(255, 255, 255, 0.12);
+  /* Tactile Scale-Down Effect */
+  transform: scale(0.96);
 }
 
 
@@ -114,12 +135,24 @@ svg[class*="lucide"] {
   }
 }
 
+/* Custom Premium Selection Color */
+::selection {
+  background: rgba(99, 102, 241, 0.3);
+  /* Obsidian Indigo */
+  color: #ffffff;
+}
+
 body {
   background: var(--background);
   color: var(--foreground);
   --font-sans: var(--font-inter);
   --font-mono: var(--font-jetbrains-mono);
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+
+  /* Advanced Typography Rendering */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
   overflow: hidden;
 }
 

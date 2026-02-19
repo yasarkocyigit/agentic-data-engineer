@@ -112,7 +112,7 @@ export default function VisualizePage() {
                                 </div>
                                 <button
                                     onClick={() => { checkHealth(); setIframeKey(k => k + 1); }}
-                                    className="px-4 py-1.5 bg-[#e5c07b]/15 text-obsidian-warning rounded text-[11px] font-medium hover:bg-[#e5c07b]/25 transition-colors"
+                                    className="px-4 py-1.5 bg-[#e5c07b]/15 text-obsidian-warning rounded text-[11px] font-medium hover:bg-[#e5c07b]/25 transition-colors active:scale-95"
                                 >
                                     Retry Connection
                                 </button>

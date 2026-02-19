@@ -6,7 +6,8 @@ import {
     Play, RefreshCw, Pause, Search, ChevronRight, ChevronDown,
     Clock, AlertCircle, CheckCircle2, XCircle,
     Loader2, Tag, User, Calendar, Zap,
-    Activity, CircleStop, RotateCcw, Code2, FileText, Maximize2, Minimize2, GitBranch
+    Activity, CircleStop, RotateCcw, Code2, FileText, Maximize2, Minimize2, GitBranch,
+    AlignLeft
 } from 'lucide-react';
 import clsx from 'clsx';
 import { getStateColor } from '@/lib/airflow/types';
@@ -155,6 +156,14 @@ export default function WorkflowsPage() {
     const [fullscreenCode, setFullscreenCode] = useState(false);
     const [fullscreenSidebar, setFullscreenSidebar] = useState(false);
 
+    // Task Action Loading
+    const [taskActionLoading, setTaskActionLoading] = useState<string | null>(null);
+
+    // Task-level Logs Viewer
+    const [taskLogs, setTaskLogs] = useState<{ task_id: string; try_number: number; content: string } | null>(null);
+    const [taskLogsLoading, setTaskLogsLoading] = useState(false);
+    const [viewingTaskLogs, setViewingTaskLogs] = useState<string | null>(null);
+
     // ─── Fetch DAGs ───
     const fetchDags = useCallback(async () => {
         setLoading(true);
@@ -280,6 +289,26 @@ export default function WorkflowsPage() {
         }
     };
 
+    const handleTaskAction = async (dagId: string, runId: string, taskId: string, action: 'clear') => {
+        setTaskActionLoading(`${taskId}-${action}`);
+        try {
+            const res = await fetch(`/api/orchestrator/dags/${dagId}/runs/${runId}/tasks/${taskId}/action`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action }),
+            });
+            const data = await res.json();
+            if (data.error) throw new Error(data.error);
+            // Refresh task instances and runs
+            fetchTaskInstances(dagId, runId);
+            fetchRuns(dagId);
+        } catch (err: unknown) {
+            console.error('Task action failed:', err);
+        } finally {
+            setTaskActionLoading(null);
+        }
+    };
+
     // ─── Expand a run to see task details ───
     const toggleRunExpand = (runId: string) => {
         if (expandedRun === runId) {
@@ -338,7 +367,7 @@ export default function WorkflowsPage() {
 
                 {/* ─── Filter Bar ─── */}
                 <div className="h-9 bg-obsidian-panel border-b border-obsidian-border flex items-center px-4 gap-3 shrink-0">
-                    <div className="flex items-center gap-1.5 bg-obsidian-bg rounded px-2 py-1 flex-1 max-w-xs">
+                    <div className="flex items-center gap-1.5 bg-obsidian-bg rounded px-2 py-1 flex-1 max-w-xs transition-all active:scale-95">
                         <Search className="w-3.5 h-3.5 text-obsidian-muted" />
                         <input
                             type="text"
@@ -376,7 +405,7 @@ export default function WorkflowsPage() {
 
                 {/* ─── Error Toast ─── */}
                 {actionError && (
-                    <div className="mx-4 mt-1 px-3 py-2 bg-obsidian-danger/10 border border-obsidian-danger/30 rounded text-[11px] text-obsidian-danger-light flex items-center gap-2 shrink-0">
+                    <div className="mx-4 mt-1 px-3 py-2 bg-obsidian-danger/10 border border-obsidian-danger/30 rounded text-[11px] text-obsidian-danger-light flex items-center gap-2 shrink-0 transition-all active:scale-95">
                         <AlertCircle className="w-3.5 h-3.5 text-obsidian-danger shrink-0" />
                         <span className="flex-1 truncate">{actionError}</span>
                         <button onClick={() => setActionError(null)} className="text-obsidian-danger hover:text-white text-[10px] font-bold">✕</button>
@@ -405,7 +434,7 @@ export default function WorkflowsPage() {
                                 <span className="text-[11px] text-obsidian-muted max-w-sm text-center">{error}</span>
                                 <button
                                     onClick={fetchDags}
-                                    className="mt-2 px-3 py-1.5 bg-obsidian-info/20 text-obsidian-info rounded text-[11px] hover:bg-obsidian-info/30 transition-colors"
+                                    className="mt-2 px-3 py-1.5 bg-obsidian-info/20 text-obsidian-info rounded text-[11px] hover:bg-obsidian-info/30 transition-colors active:scale-95"
                                 >
                                     Retry Connection
                                 </button>
@@ -460,7 +489,7 @@ export default function WorkflowsPage() {
                                                             {dag.owners.join(', ')}
                                                         </span>
                                                         {dag.tags.slice(0, 3).map(tag => (
-                                                            <span key={tag} className="text-[8px] px-1.5 py-0.5 rounded bg-obsidian-panel-hover text-obsidian-muted">
+                                                            <span key={tag} className="text-[8px] px-1.5 py-0.5 rounded bg-obsidian-panel-hover text-obsidian-muted transition-all active:scale-95">
                                                                 {tag}
                                                             </span>
                                                         ))}
@@ -503,7 +532,7 @@ export default function WorkflowsPage() {
                                                             disabled={!!actionLoading}
                                                             className="flex items-center gap-1 px-2 py-1 rounded text-[9px] font-semibold
                                          bg-obsidian-success/10 text-obsidian-success hover:bg-obsidian-success/25
-                                         border border-obsidian-success/20 transition-colors disabled:opacity-30"
+                                         border border-obsidian-success/20 transition-colors disabled:opacity-30 active:scale-95"
                                                         >
                                                             {actionLoading === `${dag.dag_id}-trigger`
                                                                 ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -518,7 +547,7 @@ export default function WorkflowsPage() {
                                                                 disabled={!!actionLoading}
                                                                 className="flex items-center gap-1 px-2 py-1 rounded text-[9px] font-semibold
                                            bg-obsidian-danger/10 text-obsidian-danger hover:bg-obsidian-danger/25
-                                           border border-obsidian-danger/20 transition-colors disabled:opacity-30"
+                                           border border-obsidian-danger/20 transition-colors disabled:opacity-30 active:scale-95"
                                                             >
                                                                 {actionLoading === `${dag.dag_id}-cancel`
                                                                     ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -682,7 +711,7 @@ export default function WorkflowsPage() {
                                         onClick={() => handleAction(selectedDag, 'trigger')}
                                         disabled={!!actionLoading}
                                         className="flex items-center gap-1 px-2 py-1 bg-obsidian-success/15 text-obsidian-success rounded text-[10px]
-                             font-medium hover:bg-obsidian-success/25 border border-obsidian-success/20 transition-colors disabled:opacity-50"
+                             font-medium hover:bg-obsidian-success/25 border border-obsidian-success/20 transition-colors disabled:opacity-50 active:scale-95"
                                     >
                                         <Play className="w-3.5 h-3.5" /> Trigger New Run
                                     </button>
@@ -726,7 +755,7 @@ export default function WorkflowsPage() {
                                                                             disabled={!!actionLoading}
                                                                             className="flex items-center gap-1 ml-1 px-1.5 py-0.5 rounded text-[8px] font-semibold
                                                bg-obsidian-danger/10 text-obsidian-danger hover:bg-obsidian-danger/25
-                                               border border-obsidian-danger/20 transition-colors disabled:opacity-30"
+                                               border border-obsidian-danger/20 transition-colors disabled:opacity-30 active:scale-95"
                                                                         >
                                                                             <CircleStop className="w-2.5 h-2.5" />
                                                                             Cancel
@@ -806,6 +835,53 @@ export default function WorkflowsPage() {
                                                                                                     </span>
                                                                                                 )}
                                                                                             </span>
+                                                                                            {/* Clear / Retry Task button */}
+                                                                                            <button
+                                                                                                onClick={(e) => { e.stopPropagation(); handleTaskAction(selectedDag!, expandedRun!, ti.task_id, 'clear'); }}
+                                                                                                disabled={!!taskActionLoading}
+                                                                                                className="flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[8px] font-semibold border transition-colors bg-obsidian-warning/10 text-obsidian-warning border-obsidian-warning/20 hover:bg-obsidian-warning/25 disabled:opacity-30 active:scale-95"
+                                                                                                title="Clear Task (Retry)"
+                                                                                            >
+                                                                                                {taskActionLoading === `${ti.task_id}-clear` ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <RotateCcw className="w-2.5 h-2.5" />}
+                                                                                                Clear
+                                                                                            </button>
+
+                                                                                            {/* View Logs button */}
+                                                                                            <button
+                                                                                                onClick={async (e) => {
+                                                                                                    e.stopPropagation();
+                                                                                                    if (viewingTaskLogs === ti.task_id) {
+                                                                                                        setViewingTaskLogs(null);
+                                                                                                        setTaskLogs(null);
+                                                                                                        return;
+                                                                                                    }
+                                                                                                    setViewingTaskLogs(ti.task_id);
+                                                                                                    setTaskLogsLoading(true);
+                                                                                                    try {
+                                                                                                        const res = await fetch(`/api/orchestrator/dags/${selectedDag}/runs/${expandedRun}/tasks/${ti.task_id}/logs/${ti.try_number}`);
+                                                                                                        const data = await res.json();
+                                                                                                        if (data.error || data.detail) {
+                                                                                                            setTaskLogs({ task_id: ti.task_id, try_number: ti.try_number, content: `Error: ${data.error || data.detail}` });
+                                                                                                        } else {
+                                                                                                            setTaskLogs({ task_id: ti.task_id, try_number: ti.try_number, content: data.content || data.text || 'No logs found' });
+                                                                                                        }
+                                                                                                    } catch {
+                                                                                                        setTaskLogs({ task_id: ti.task_id, try_number: ti.try_number, content: 'Failed to load logs' });
+                                                                                                    } finally {
+                                                                                                        setTaskLogsLoading(false);
+                                                                                                    }
+                                                                                                }}
+                                                                                                className={clsx(
+                                                                                                    "flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[8px] font-semibold border transition-colors active:scale-95",
+                                                                                                    viewingTaskLogs === ti.task_id
+                                                                                                        ? "bg-obsidian-info/20 text-obsidian-info border-obsidian-info/30"
+                                                                                                        : "bg-obsidian-panel/30 text-obsidian-muted hover:text-foreground hover:bg-obsidian-panel/50 border-obsidian-border/50"
+                                                                                                )}
+                                                                                            >
+                                                                                                <AlignLeft className="w-2.5 h-2.5" />
+                                                                                                {viewingTaskLogs === ti.task_id ? 'Hide Logs' : 'Logs'}
+                                                                                            </button>
+
                                                                                             {/* View Code button for tasks that run scripts */}
                                                                                             {(ti.operator === 'SparkSubmitOperator' || ti.operator === 'PythonOperator') && (
                                                                                                 <button
@@ -825,8 +901,8 @@ export default function WorkflowsPage() {
                                                                                                                 body: JSON.stringify({ task_id: ti.task_id }),
                                                                                                             });
                                                                                                             const data = await res.json();
-                                                                                                            if (data.error) {
-                                                                                                                setTaskCode({ task_id: ti.task_id, filename: 'Error', content: `# ${data.error}` });
+                                                                                                            if (data.error || data.detail) {
+                                                                                                                setTaskCode({ task_id: ti.task_id, filename: 'Error', content: `# ${data.error || data.detail}` });
                                                                                                             } else {
                                                                                                                 setTaskCode(data);
                                                                                                             }
@@ -837,14 +913,14 @@ export default function WorkflowsPage() {
                                                                                                         }
                                                                                                     }}
                                                                                                     className={clsx(
-                                                                                                        "flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[8px] font-semibold border transition-colors",
+                                                                                                        "flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[8px] font-semibold border transition-colors active:scale-95",
                                                                                                         viewingTaskCode === ti.task_id
                                                                                                             ? "bg-obsidian-info/20 text-obsidian-info border-obsidian-info/30"
                                                                                                             : "bg-obsidian-panel/30 text-obsidian-muted hover:text-foreground hover:bg-obsidian-panel/50 border-obsidian-border/50"
                                                                                                     )}
                                                                                                 >
                                                                                                     <Code2 className="w-2.5 h-2.5" />
-                                                                                                    {viewingTaskCode === ti.task_id ? 'Hide Code' : 'View Code'}
+                                                                                                    {viewingTaskCode === ti.task_id ? 'Hide Code' : 'Code'}
                                                                                                 </button>
                                                                                             )}
                                                                                         </div>
@@ -928,9 +1004,33 @@ export default function WorkflowsPage() {
                                                                                                 ) : null}
                                                                                             </div>
                                                                                         )}
+                                                                                        {/* Inline Task Logs Viewer */}
+                                                                                        {viewingTaskLogs === ti.task_id && (
+                                                                                            <div className="mt-2 rounded border border-obsidian-border overflow-hidden bg-[#111113]">
+                                                                                                {taskLogsLoading ? (
+                                                                                                    <div className="flex items-center justify-center py-4 text-obsidian-muted text-[10px]">
+                                                                                                        <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> Fetching logs...
+                                                                                                    </div>
+                                                                                                ) : taskLogs ? (
+                                                                                                    <div className="flex flex-col">
+                                                                                                        <div className="bg-obsidian-panel border-b border-obsidian-border flex items-center justify-between px-2 py-1 shrink-0">
+                                                                                                            <div className="flex items-center gap-2">
+                                                                                                                <AlignLeft className="w-3 h-3 text-obsidian-info" />
+                                                                                                                <span className="text-foreground font-mono font-medium text-[9px]">Log Output (Try {taskLogs.try_number})</span>
+                                                                                                            </div>
+                                                                                                        </div>
+                                                                                                        <div className="overflow-auto max-h-[400px] p-2 bg-[#0c0c0e]">
+                                                                                                            <pre className="text-[10px] text-obsidian-muted font-mono whitespace-pre-wrap break-all leading-[14px]">
+                                                                                                                {taskLogs.content}
+                                                                                                            </pre>
+                                                                                                        </div>
+                                                                                                    </div>
+                                                                                                ) : null}
+                                                                                            </div>
+                                                                                        )}
                                                                                         {/* Failed task: prominent error box */}
                                                                                         {isFailed && (
-                                                                                            <div className="mt-1.5 px-2 py-1.5 bg-obsidian-danger/10 rounded border border-obsidian-danger/20 text-[10px]">
+                                                                                            <div className="mt-1.5 px-2 py-1.5 bg-obsidian-danger/10 rounded border border-obsidian-danger/20 text-[10px] transition-all active:scale-95">
                                                                                                 <span className="text-obsidian-danger font-semibold">✕ Task failed</span>
                                                                                                 <span className="text-[#ff7b86] ml-1">
                                                                                                     after {formatDuration(ti.duration)}
@@ -968,7 +1068,7 @@ export default function WorkflowsPage() {
                                         </div>
                                     ) : dagSource ? (
                                         <>
-                                            <div className="px-3 py-1.5 bg-obsidian-panel border-b border-obsidian-border flex items-center justify-between shrink-0">
+                                            <div className="px-3 py-1.5 bg-obsidian-panel border-b border-obsidian-border flex items-center justify-between shrink-0 transition-all active:scale-95">
                                                 <span className="text-[10px] text-obsidian-muted font-mono">{selectedDag}.py</span>
                                                 <span className="text-[9px] text-obsidian-muted">v{dagSource.version}</span>
                                             </div>

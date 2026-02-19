@@ -8,7 +8,7 @@ import {
     Clock, Zap, ChevronDown, ChevronRight,
     Workflow, BarChart3, GitBranch, PieChart,
     Loader2, CheckCircle2, XCircle, AlertTriangle,
-    Globe, ArrowUpRight, Container, GitFork
+    Globe, ArrowUpRight, Container, GitFork, Play, Square
 } from 'lucide-react';
 
 // ─── Types ───
@@ -282,6 +282,25 @@ export default function ComputePage() {
         'devops': true,
     });
     const [selectedService, setSelectedService] = useState<string | null>(null);
+    const [loadingAction, setLoadingAction] = useState<string | null>(null);
+
+    // ─── Docker Actions ───
+    const handleDockerAction = async (action: 'start' | 'stop' | 'restart', containerName: string) => {
+        setLoadingAction(containerName);
+        try {
+            const response = await fetch(`/api/docker/${action}/${containerName}`, { method: 'POST' });
+            if (response.ok) {
+                // Wait briefly for container to process state, then check health
+                setTimeout(() => checkHealth(), 1500);
+            } else {
+                console.error(`Failed to ${action} ${containerName}`);
+            }
+        } catch (error) {
+            console.error(error);
+        } finally {
+            setLoadingAction(null);
+        }
+    };
 
     // ─── Health Check ───
     const checkHealth = useCallback(async () => {
@@ -565,19 +584,45 @@ export default function ComputePage() {
                                                         <span className="text-obsidian-muted">—</span>
                                                     )}
                                                 </td>
-                                                <td className="p-1.5 px-3 border-b border-obsidian-border text-center">
-                                                    {service.uiUrl && (
-                                                        <a
-                                                            href={service.uiUrl}
-                                                            target="_blank"
-                                                            rel="noopener noreferrer"
-                                                            onClick={(e) => e.stopPropagation()}
-                                                            className="inline-flex items-center gap-1 px-2 py-0.5 bg-obsidian-panel-hover hover:bg-obsidian-muted/20 border border-obsidian-border rounded text-foreground transition-colors"
-                                                            title={`Open ${service.name} UI`}
+                                                <td className="p-1.5 px-3 border-b border-obsidian-border">
+                                                    <div className="flex items-center justify-end gap-1">
+                                                        {service.uiUrl && (
+                                                            <a
+                                                                href={service.uiUrl}
+                                                                target="_blank"
+                                                                rel="noopener noreferrer"
+                                                                onClick={(e) => e.stopPropagation()}
+                                                                className="btn-icon w-6 h-6 hover:bg-obsidian-muted/20 text-obsidian-muted hover:text-foreground active:scale-95"
+                                                                title={`Open ${service.name} UI`}
+                                                            >
+                                                                <ArrowUpRight className="w-3.5 h-3.5" />
+                                                            </a>
+                                                        )}
+                                                        <button
+                                                            onClick={(e) => { e.stopPropagation(); handleDockerAction(service.status === 'healthy' ? 'restart' : 'start', service.containerName); }}
+                                                            disabled={loadingAction === service.containerName}
+                                                            className="btn-icon w-6 h-6 hover:bg-obsidian-muted/20 text-obsidian-muted hover:text-foreground active:scale-95"
+                                                            title={service.status === 'healthy' ? 'Restart Container' : 'Start Container'}
                                                         >
-                                                            <ArrowUpRight className="w-3.5 h-3.5" />
-                                                        </a>
-                                                    )}
+                                                            {loadingAction === service.containerName ? (
+                                                                <Loader2 className="w-3.5 h-3.5 animate-spin text-obsidian-info" />
+                                                            ) : service.status === 'healthy' ? (
+                                                                <RefreshCw className="w-3.5 h-3.5" />
+                                                            ) : (
+                                                                <Play className="w-3.5 h-3.5 text-obsidian-success fill-obsidian-success/20" />
+                                                            )}
+                                                        </button>
+                                                        {service.status === 'healthy' && (
+                                                            <button
+                                                                onClick={(e) => { e.stopPropagation(); handleDockerAction('stop', service.containerName); }}
+                                                                disabled={loadingAction === service.containerName}
+                                                                className="btn-icon w-6 h-6 hover:bg-obsidian-danger/20 text-obsidian-muted hover:text-obsidian-danger active:scale-95"
+                                                                title="Stop Container"
+                                                            >
+                                                                <Square className="w-3.5 h-3.5" />
+                                                            </button>
+                                                        )}
+                                                    </div>
                                                 </td>
                                             </tr>
                                         ))}

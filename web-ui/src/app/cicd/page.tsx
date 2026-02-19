@@ -5,7 +5,7 @@ import {
     CheckCircle2, Maximize2, Minimize2, Search, Star, Clock,
     GitBranch, GitCommit, Play, XCircle, ChevronRight, X, PackageOpen,
     Folder, FileCode, FileText, File as FileIcon, FolderOpen,
-    Plus, ArrowUpRight, GitMerge, MessageSquare, ChevronDown, Eye, Code2
+    Plus, ArrowUpRight, GitMerge, MessageSquare, ChevronDown, Eye, Code2, Trash2
 } from 'lucide-react';
 import clsx from 'clsx';
 import { Sidebar } from '@/components/Sidebar';
@@ -236,17 +236,17 @@ function ActionBadge({ status, conclusion }: { status: string; conclusion?: stri
 
 function PRBadge({ pr }: { pr: PullRequest }) {
     if (pr.merged) return (
-        <span className="inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[10px] font-medium border bg-obsidian-primary/10 text-obsidian-primary border-obsidian-primary/20">
+        <span className="inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[10px] font-medium border bg-obsidian-primary/10 text-obsidian-primary border-obsidian-primary/20 transition-all active:scale-95">
             <GitMerge className="w-3.5 h-3.5" /> Merged
         </span>
     );
     if (pr.state === 'closed') return (
-        <span className="inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[10px] font-medium border bg-obsidian-danger/10 text-obsidian-danger border-obsidian-danger/20">
+        <span className="inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[10px] font-medium border bg-obsidian-danger/10 text-obsidian-danger border-obsidian-danger/20 transition-all active:scale-95">
             <XCircle className="w-3.5 h-3.5" /> Closed
         </span>
     );
     return (
-        <span className="inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[10px] font-medium border bg-obsidian-success/10 text-obsidian-success border-obsidian-success/20">
+        <span className="inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[10px] font-medium border bg-obsidian-success/10 text-obsidian-success border-obsidian-success/20 transition-all active:scale-95">
             <GitPullRequest className="w-3.5 h-3.5" /> Open
         </span>
     );
@@ -534,6 +534,7 @@ export default function CICDPage() {
         if (!selectedRepo) return;
         if (!confirm(`Delete branch "${branchName}"? This cannot be undone.`)) return;
         const [owner, name] = selectedRepo.full_name.split('/');
+        console.log('Deleting branch:', owner, name, branchName);
         try {
             const res = await fetch(`/api/gitea/repos/${owner}/${name}/branches/${branchName}`, { method: 'DELETE' });
             if (!res.ok) { alert('Failed to delete branch'); return; }
@@ -572,6 +573,39 @@ export default function CICDPage() {
             alert(`Failed to save: ${e instanceof Error ? e.message : 'Unknown error'}`);
         } finally { setEditSaving(false); }
     }, [selectedRepo, selectedFile, editContent, editMessage, editSha, activeBranch, fetchFileContent, fetchCommits]);
+
+    // ─── Delete File ───
+    const handleDeleteFile = useCallback(async () => {
+        if (!selectedRepo || !selectedFile) return;
+        if (!confirm(`Delete file "${selectedFile}"? This cannot be undone.`)) return;
+        const [owner, name] = selectedRepo.full_name.split('/');
+        setFileLoading(true);
+        try {
+            const res = await fetch(`/api/gitea/repos/${owner}/${name}/file`, {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    path: selectedFile,
+                    message: `Delete ${selectedFile}`,
+                    sha: editSha,
+                    branch: activeBranch,
+                }),
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({ detail: res.statusText }));
+                alert(`Failed to delete file: ${err.detail || res.statusText}`);
+                setFileLoading(false);
+                return;
+            }
+            setSelectedFile(null);
+            setFileContent('');
+            await fetchTree(owner, name, '', activeBranch);
+            await fetchCommits(owner, name, activeBranch);
+        } catch (e) {
+            alert(`Failed to delete file: ${e instanceof Error ? e.message : 'Unknown error'}`);
+            setFileLoading(false);
+        }
+    }, [selectedRepo, selectedFile, editSha, activeBranch, fetchTree, fetchCommits]);
 
     // ─── Effects ───
     useEffect(() => { checkHealth(); fetchRepos(); }, [checkHealth, fetchRepos]);
@@ -891,8 +925,8 @@ export default function CICDPage() {
                                 <div className="flex flex-col items-center gap-3">
                                     <GitPullRequest className="w-12 h-12 opacity-40" style={{ color: '#a78bfa' }} />
                                     <p className="text-[13px] text-obsidian-muted">Gitea is not running</p>
-                                    <code className="text-[10px] text-obsidian-danger font-mono bg-obsidian-panel rounded px-3 py-1.5">docker compose up -d gitea</code>
-                                    <button onClick={() => { checkHealth(); fetchRepos(); }} className="px-4 py-1.5 bg-obsidian-danger/15 text-obsidian-danger rounded text-[11px] font-medium hover:bg-obsidian-danger/25">Retry</button>
+                                    <code className="text-[10px] text-obsidian-danger font-mono bg-obsidian-panel rounded px-3 py-1.5 transition-all active:scale-95">docker compose up -d gitea</code>
+                                    <button onClick={() => { checkHealth(); fetchRepos(); }} className="px-4 py-1.5 bg-obsidian-danger/15 text-obsidian-danger rounded text-[11px] font-medium hover:bg-obsidian-danger/25 transition-all active:scale-95">Retry</button>
                                 </div>
                             ) : loading ? (
                                 <Loader2 className="w-6 h-6 text-obsidian-danger animate-spin" />
@@ -919,7 +953,7 @@ export default function CICDPage() {
                                         <div className="relative">
                                             <button
                                                 onClick={() => setShowBranchDropdown(!showBranchDropdown)}
-                                                className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-obsidian-info/15 text-obsidian-info font-mono hover:bg-obsidian-info/25 transition-colors"
+                                                className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-obsidian-info/15 text-obsidian-info font-mono hover:bg-obsidian-info/25 transition-colors active:scale-95"
                                             >
                                                 <GitBranch className="w-3.5 h-3.5" />
                                                 {activeBranch || selectedRepo.default_branch}
@@ -928,7 +962,7 @@ export default function CICDPage() {
                                             {showBranchDropdown && (
                                                 <>
                                                     <div className="fixed inset-0 z-10" onClick={() => setShowBranchDropdown(false)} />
-                                                    <div className="absolute top-full left-0 mt-1 min-w-[180px] bg-obsidian-panel border border-obsidian-border rounded-md shadow-2xl z-20 py-1 max-h-60 overflow-auto">
+                                                    <div className="absolute top-full left-0 mt-1 min-w-[180px] bg-obsidian-panel/80 backdrop-blur-md border border-obsidian-border rounded-md shadow-2xl z-20 py-1 max-h-60 overflow-auto">
                                                         {branches.map(b => (
                                                             <button key={b.name} onClick={() => switchBranch(b.name)}
                                                                 className={clsx("w-full text-left px-3 py-1.5 text-[11px] font-mono flex items-center gap-2 transition-colors",
@@ -974,7 +1008,7 @@ export default function CICDPage() {
                                             <tab.icon className="w-3.5 h-3.5" />
                                             {tab.label}
                                             {tab.count !== undefined && tab.count > 0 && (
-                                                <span className="text-[9px] bg-obsidian-border-active rounded-full px-1.5 py-0.5 text-obsidian-muted">{tab.count}</span>
+                                                <span className="text-[9px] bg-obsidian-border-active rounded-full px-1.5 py-0.5 text-obsidian-muted transition-all active:scale-95">{tab.count}</span>
                                             )}
                                         </button>
                                     ))}
@@ -1004,8 +1038,8 @@ export default function CICDPage() {
 
                                             {/* Create File Input */}
                                             {showCreateFile && (
-                                                <div className="px-2 py-1 mb-2">
-                                                    <div className="flex items-center gap-1 bg-obsidian-bg border border-obsidian-info/50 rounded px-1.5 py-1">
+                                                <div className="px-2 py-1 mb-2 bg-obsidian-panel/50 backdrop-blur-md rounded-md">
+                                                    <div className="flex items-center gap-1 bg-obsidian-bg border border-obsidian-info/50 rounded px-1.5 py-1 transition-all active:scale-95">
                                                         <FileIcon className="w-3.5 h-3.5 text-obsidian-muted shrink-0" />
                                                         <input
                                                             autoFocus
@@ -1021,8 +1055,8 @@ export default function CICDPage() {
                                                         />
                                                     </div>
                                                     <div className="flex justify-end gap-1 mt-1">
-                                                        <button onClick={() => setShowCreateFile(false)} className="text-[9px] px-1.5 py-0.5 text-obsidian-muted hover:text-foreground rounded hover:bg-obsidian-border-active">Cancel</button>
-                                                        <button onClick={handleCreateFile} disabled={!newFilePath} className="text-[9px] px-1.5 py-0.5 bg-obsidian-info/20 text-obsidian-info rounded hover:bg-obsidian-info/30 disabled:opacity-50">Create</button>
+                                                        <button onClick={() => setShowCreateFile(false)} className="text-[9px] px-1.5 py-0.5 text-obsidian-muted hover:text-foreground rounded hover:bg-obsidian-border-active transition-all active:scale-95">Cancel</button>
+                                                        <button onClick={handleCreateFile} disabled={!newFilePath} className="text-[9px] px-1.5 py-0.5 bg-obsidian-info/20 text-obsidian-info rounded hover:bg-obsidian-info/30 disabled:opacity-50 transition-all active:scale-95">Create</button>
                                                     </div>
                                                 </div>
                                             )}
@@ -1055,13 +1089,22 @@ export default function CICDPage() {
                                                             </button>
                                                         )}
                                                         {!editMode ? (
-                                                            <button
-                                                                onClick={() => { setEditContent(fileContent); setEditMode(true); }}
-                                                                className="flex items-center gap-1 px-2 py-0.5 text-[9px] font-medium bg-obsidian-border-active text-foreground rounded hover:bg-obsidian-info/20 hover:text-obsidian-info transition-colors"
-                                                                title="Edit file"
-                                                            >
-                                                                ✏️ Edit
-                                                            </button>
+                                                            <div className="flex items-center gap-2">
+                                                                <button
+                                                                    onClick={() => { setEditContent(fileContent); setEditMode(true); }}
+                                                                    className="flex items-center gap-1 px-2 py-0.5 text-[9px] font-medium bg-obsidian-border-active text-foreground rounded hover:bg-obsidian-info/20 hover:text-obsidian-info transition-colors active:scale-95"
+                                                                    title="Edit file"
+                                                                >
+                                                                    ✏️ Edit
+                                                                </button>
+                                                                <button
+                                                                    onClick={handleDeleteFile}
+                                                                    className="flex items-center gap-1 px-2 py-0.5 text-[9px] font-medium bg-obsidian-danger/10 text-obsidian-danger rounded hover:bg-obsidian-danger/20 transition-colors active:scale-95"
+                                                                    title="Delete file"
+                                                                >
+                                                                    <Trash2 className="w-3 h-3" />
+                                                                </button>
+                                                            </div>
                                                         ) : (
                                                             <div className="flex items-center gap-1">
                                                                 <span className="text-[9px] text-obsidian-warning">editing</span>
@@ -1100,17 +1143,17 @@ export default function CICDPage() {
                                                                     placeholder="Commit message..."
                                                                     value={editMessage}
                                                                     onChange={e => setEditMessage(e.target.value)}
-                                                                    className="flex-1 bg-obsidian-bg border border-obsidian-border rounded px-2 py-1.5 text-[11px] text-foreground placeholder-obsidian-muted outline-none"
+                                                                    className="flex-1 bg-obsidian-bg border border-obsidian-border rounded px-2 py-1.5 text-[11px] text-foreground placeholder-obsidian-muted outline-none transition-all active:scale-95"
                                                                 />
                                                                 <button
                                                                     onClick={handleSaveFile}
                                                                     disabled={!editMessage || editSaving}
-                                                                    className="px-3 py-1.5 bg-obsidian-success text-white rounded text-[10px] font-medium hover:bg-obsidian-success disabled:opacity-40 flex items-center gap-1"
+                                                                    className="px-3 py-1.5 bg-obsidian-success text-white rounded text-[10px] font-medium hover:bg-obsidian-success disabled:opacity-40 flex items-center gap-1 transition-all active:scale-95"
                                                                 >
                                                                     {editSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
                                                                     Commit
                                                                 </button>
-                                                                <button onClick={() => { setEditMode(false); setEditMessage(''); }} className="px-2 py-1.5 text-[10px] text-obsidian-muted hover:text-foreground">Cancel</button>
+                                                                <button onClick={() => { setEditMode(false); setEditMessage(''); }} className="px-2 py-1.5 text-[10px] text-obsidian-muted hover:text-foreground transition-all active:scale-95">Cancel</button>
                                                             </div>
                                                         </div>
                                                     ) : (
@@ -1145,7 +1188,7 @@ export default function CICDPage() {
                                                                                 const match = /language-(\w+)/.exec(className || '');
                                                                                 const inline = !match;
                                                                                 if (inline) {
-                                                                                    return <code className="bg-obsidian-panel text-obsidian-danger px-1.5 py-0.5 rounded text-[13px] font-mono" {...props}>{children}</code>;
+                                                                                    return <code className="bg-obsidian-panel text-obsidian-danger px-1.5 py-0.5 rounded text-[13px] font-mono transition-all active:scale-95" {...props}>{children}</code>;
                                                                                 }
                                                                                 return (
                                                                                     <SyntaxHighlighter
@@ -1242,7 +1285,7 @@ export default function CICDPage() {
                                                 ) : (
                                                     <div>
                                                         {/* Commit header */}
-                                                        <div className="px-4 py-3 border-b border-obsidian-border bg-obsidian-panel">
+                                                        <div className="px-4 py-3 border-b border-obsidian-border bg-obsidian-panel transition-all active:scale-95">
                                                             <p className="text-[13px] text-foreground font-medium mb-2">{selectedCommit.commit?.message?.split('\n')[0]}</p>
                                                             {selectedCommit.commit?.message?.split('\n').slice(1).join('\n').trim() && (
                                                                 <p className="text-[11px] text-obsidian-muted mb-2 whitespace-pre-wrap">{selectedCommit.commit.message.split('\n').slice(1).join('\n').trim()}</p>
@@ -1263,7 +1306,7 @@ export default function CICDPage() {
                                                         {/* Files with diffs */}
                                                         {selectedCommit.files?.map(file => (
                                                             <div key={file.filename} className="border-b border-obsidian-border/50">
-                                                                <div className="flex items-center gap-2 px-4 py-2 bg-obsidian-panel/50 cursor-pointer hover:bg-obsidian-panel"
+                                                                <div className="flex items-center gap-2 px-4 py-2 bg-obsidian-panel/50 cursor-pointer hover:bg-obsidian-panel transition-all active:scale-95"
                                                                     onClick={() => {
                                                                         const next = new Set(expandedDiffs);
                                                                         next.has(file.filename) ? next.delete(file.filename) : next.add(file.filename);
@@ -1296,7 +1339,7 @@ export default function CICDPage() {
                                     /* ─── Pull Requests Tab ─── */
                                     <div className="flex-1 overflow-auto">
                                         {/* PR Controls */}
-                                        <div className="flex items-center gap-2 px-4 py-2 border-b border-obsidian-border bg-obsidian-panel">
+                                        <div className="flex items-center gap-2 px-4 py-2 border-b border-obsidian-border bg-obsidian-panel transition-all active:scale-95">
                                             {(['all', 'open', 'closed'] as const).map(s => (
                                                 <button key={s} onClick={() => { setPrState(s); if (selectedRepo) { const [o, n] = selectedRepo.full_name.split('/'); fetchPulls(o, n, s); } }}
                                                     className={clsx("px-2 py-1 rounded text-[10px] font-medium transition-all",
@@ -1304,35 +1347,35 @@ export default function CICDPage() {
                                                     )}>{s.charAt(0).toUpperCase() + s.slice(1)}</button>
                                             ))}
                                             <button onClick={() => setShowCreatePR(!showCreatePR)}
-                                                className="ml-auto flex items-center gap-1 px-2 py-1 bg-obsidian-success/15 text-obsidian-success rounded text-[10px] font-medium hover:bg-obsidian-success/25">
+                                                className="ml-auto flex items-center gap-1 px-2 py-1 bg-obsidian-success/15 text-obsidian-success rounded text-[10px] font-medium hover:bg-obsidian-success/25 transition-all active:scale-95">
                                                 <Plus className="w-3.5 h-3.5" /> New PR
                                             </button>
                                         </div>
 
                                         {/* Create PR Form */}
                                         {showCreatePR && (
-                                            <div className="px-4 py-3 border-b border-obsidian-border bg-obsidian-panel/50 space-y-2">
+                                            <div className="px-4 py-3 border-b border-obsidian-border bg-obsidian-panel/50 backdrop-blur-md space-y-2 transition-all active:scale-95">
                                                 <div className="flex gap-2">
                                                     <select value={prHead} onChange={e => setPrHead(e.target.value)}
-                                                        className="flex-1 bg-obsidian-bg border border-obsidian-border rounded px-2 py-1 text-[11px] text-foreground outline-none">
+                                                        className="flex-1 bg-obsidian-bg border border-obsidian-border rounded px-2 py-1 text-[11px] text-foreground outline-none transition-all active:scale-95">
                                                         <option value="">Head branch...</option>
                                                         {branches.map(b => <option key={b.name} value={b.name}>{b.name}</option>)}
                                                     </select>
                                                     <ArrowUpRight className="w-4 h-4 text-obsidian-muted shrink-0 self-center" />
                                                     <select value={prBase} onChange={e => setPrBase(e.target.value)}
-                                                        className="flex-1 bg-obsidian-bg border border-obsidian-border rounded px-2 py-1 text-[11px] text-foreground outline-none">
+                                                        className="flex-1 bg-obsidian-bg border border-obsidian-border rounded px-2 py-1 text-[11px] text-foreground outline-none transition-all active:scale-95">
                                                         <option value="">Base branch...</option>
                                                         {branches.map(b => <option key={b.name} value={b.name}>{b.name}</option>)}
                                                     </select>
                                                 </div>
                                                 <input type="text" placeholder="PR title..." value={prTitle} onChange={e => setPrTitle(e.target.value)}
-                                                    className="w-full bg-obsidian-bg border border-obsidian-border rounded px-2 py-1.5 text-[11px] text-foreground placeholder-obsidian-muted outline-none" />
+                                                    className="w-full bg-obsidian-bg border border-obsidian-border rounded px-2 py-1.5 text-[11px] text-foreground placeholder-obsidian-muted outline-none transition-all active:scale-95" />
                                                 <textarea placeholder="Description (optional)..." value={prBody} onChange={e => setPrBody(e.target.value)} rows={3}
-                                                    className="w-full bg-obsidian-bg border border-obsidian-border rounded px-2 py-1.5 text-[11px] text-foreground placeholder-obsidian-muted outline-none resize-none" />
+                                                    className="w-full bg-obsidian-bg border border-obsidian-border rounded px-2 py-1.5 text-[11px] text-foreground placeholder-obsidian-muted outline-none resize-none transition-all active:scale-95" />
                                                 <div className="flex gap-2">
                                                     <button onClick={handleCreatePR} disabled={!prTitle || !prHead || !prBase}
-                                                        className="px-3 py-1 bg-obsidian-success text-white rounded text-[10px] font-medium hover:bg-obsidian-success disabled:opacity-40">Create</button>
-                                                    <button onClick={() => setShowCreatePR(false)} className="px-3 py-1 text-obsidian-muted text-[10px] hover:text-foreground">Cancel</button>
+                                                        className="px-3 py-1 bg-obsidian-success text-white rounded text-[10px] font-medium hover:bg-obsidian-success disabled:opacity-40 transition-all active:scale-95">Create</button>
+                                                    <button onClick={() => setShowCreatePR(false)} className="px-3 py-1 text-obsidian-muted text-[10px] hover:text-foreground transition-all active:scale-95">Cancel</button>
                                                 </div>
                                             </div>
                                         )}
@@ -1380,33 +1423,33 @@ export default function CICDPage() {
                                                             <>
                                                                 <button
                                                                     onClick={(e) => { e.stopPropagation(); handleApprovePR(pr.number); }}
-                                                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-obsidian-success/10 text-obsidian-success border border-obsidian-success/20 rounded-md text-[11px] font-medium hover:bg-obsidian-success/20 transition-colors"
+                                                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-obsidian-success/10 text-obsidian-success border border-obsidian-success/20 rounded-md text-[11px] font-medium hover:bg-obsidian-success/20 transition-colors active:scale-95"
                                                                 >
                                                                     <CheckCircle2 className="w-3.5 h-3.5" /> Approve
                                                                 </button>
                                                                 <div className="w-px h-4 bg-obsidian-border-active/50 mx-1"></div>
                                                                 <button
                                                                     onClick={(e) => { e.stopPropagation(); handleMergePR(pr.number, 'merge'); }}
-                                                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-obsidian-info/10 text-obsidian-info border border-obsidian-info/20 rounded-md text-[11px] font-medium hover:bg-obsidian-info/20 transition-colors"
+                                                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-obsidian-info/10 text-obsidian-info border border-obsidian-info/20 rounded-md text-[11px] font-medium hover:bg-obsidian-info/20 transition-colors active:scale-95"
                                                                 >
                                                                     <GitMerge className="w-3.5 h-3.5" /> Merge
                                                                 </button>
                                                                 <button
                                                                     onClick={(e) => { e.stopPropagation(); handleMergePR(pr.number, 'squash'); }}
-                                                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-obsidian-warning/10 text-obsidian-warning border border-obsidian-warning/20 rounded-md text-[11px] font-medium hover:bg-obsidian-warning/20 transition-colors"
+                                                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-obsidian-warning/10 text-obsidian-warning border border-obsidian-warning/20 rounded-md text-[11px] font-medium hover:bg-obsidian-warning/20 transition-colors active:scale-95"
                                                                 >
                                                                     <Minimize2 className="w-3.5 h-3.5" /> Squash
                                                                 </button>
                                                                 <button
                                                                     onClick={(e) => { e.stopPropagation(); handleMergePR(pr.number, 'rebase'); }}
                                                                     title="Rebase and Merge"
-                                                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-obsidian-warning/10 text-obsidian-warning border border-obsidian-warning/20 rounded-md text-[11px] font-medium hover:bg-obsidian-warning/20 transition-colors"
+                                                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-obsidian-warning/10 text-obsidian-warning border border-obsidian-warning/20 rounded-md text-[11px] font-medium hover:bg-obsidian-warning/20 transition-colors active:scale-95"
                                                                 >
                                                                     <RefreshCw className="w-3.5 h-3.5" /> Rebase
                                                                 </button>
                                                                 <button
                                                                     onClick={(e) => { e.stopPropagation(); handleClosePR(pr.number); }}
-                                                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-obsidian-danger/10 text-obsidian-danger border border-obsidian-danger/20 rounded-md text-[11px] font-medium hover:bg-obsidian-danger/20 transition-colors ml-auto"
+                                                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-obsidian-danger/10 text-obsidian-danger border border-obsidian-danger/20 rounded-md text-[11px] font-medium hover:bg-obsidian-danger/20 transition-colors ml-auto active:scale-95"
                                                                 >
                                                                     <XCircle className="w-3.5 h-3.5" /> Close
                                                                 </button>
@@ -1433,7 +1476,7 @@ export default function CICDPage() {
                                                 )}
                                                 {selectedPR === pr.number && prDetail && prDetail.files && prDetail.files.length > 0 && (
                                                     <div className="border-t border-obsidian-border/50">
-                                                        <div className="px-4 py-2 text-[10px] text-obsidian-muted font-medium border-b border-obsidian-border/30 flex items-center gap-2 bg-obsidian-panel/40">
+                                                        <div className="px-4 py-2 text-[10px] text-obsidian-muted font-medium border-b border-obsidian-border/30 flex items-center gap-2 bg-obsidian-panel/40 transition-all active:scale-95">
                                                             <FileCode className="w-3.5 h-3.5" />
                                                             {prDetail.files.length} changed file{prDetail.files.length !== 1 ? 's' : ''}
                                                             <span className="text-obsidian-success ml-auto">+{prDetail.files.reduce((s, f) => s + (f.additions || 0), 0)}</span>
@@ -1442,7 +1485,7 @@ export default function CICDPage() {
                                                         {prDetail.files.map((file, fi) => (
                                                             <div key={fi} className="border-b border-obsidian-border/20">
                                                                 <div
-                                                                    className="px-4 py-1.5 flex items-center gap-2 cursor-pointer hover:bg-obsidian-panel/60 bg-obsidian-bg/30"
+                                                                    className="px-4 py-1.5 flex items-center gap-2 cursor-pointer hover:bg-obsidian-panel/60 bg-obsidian-bg/30 transition-all active:scale-95"
                                                                     onClick={e => { e.stopPropagation(); setExpandedDiffs(prev => { const nx = new Set(prev); nx.has(file.filename) ? nx.delete(file.filename) : nx.add(file.filename); return nx; }); }}
                                                                 >
                                                                     <ChevronRight className={"w-3 h-3 text-obsidian-muted shrink-0 transition-transform" + (expandedDiffs.has(file.filename) ? " rotate-90" : "")} />
@@ -1474,27 +1517,27 @@ export default function CICDPage() {
                                     /* ─── Branches Tab ─── */
                                     <div className="flex-1 overflow-auto">
                                         {/* Create Branch */}
-                                        <div className="flex items-center gap-2 px-4 py-2 border-b border-obsidian-border bg-obsidian-panel">
+                                        <div className="flex items-center gap-2 px-4 py-2 border-b border-obsidian-border bg-obsidian-panel transition-all active:scale-95">
                                             <span className="text-[11px] text-obsidian-muted">{branches.length} branches</span>
                                             <button onClick={() => setShowCreateBranch(!showCreateBranch)}
-                                                className="ml-auto flex items-center gap-1 px-2 py-1 bg-obsidian-info/15 text-obsidian-info rounded text-[10px] font-medium hover:bg-obsidian-info/25">
+                                                className="ml-auto flex items-center gap-1 px-2 py-1 bg-obsidian-info/15 text-obsidian-info rounded text-[10px] font-medium hover:bg-obsidian-info/25 transition-all active:scale-95">
                                                 <Plus className="w-3.5 h-3.5" /> New Branch
                                             </button>
                                         </div>
 
                                         {showCreateBranch && (
-                                            <div className="px-4 py-3 border-b border-obsidian-border bg-obsidian-panel/50 space-y-2">
+                                            <div className="px-4 py-3 border-b border-obsidian-border bg-obsidian-panel/50 backdrop-blur-md space-y-2 transition-all active:scale-95">
                                                 <input type="text" placeholder="Branch name..." value={newBranchName} onChange={e => setNewBranchName(e.target.value)}
-                                                    className="w-full bg-obsidian-bg border border-obsidian-border rounded px-2 py-1.5 text-[11px] text-foreground placeholder-obsidian-muted outline-none" />
+                                                    className="w-full bg-obsidian-bg border border-obsidian-border rounded px-2 py-1.5 text-[11px] text-foreground placeholder-obsidian-muted outline-none transition-all active:scale-95" />
                                                 <div className="flex items-center gap-2">
                                                     <span className="text-[10px] text-obsidian-muted">from</span>
                                                     <select value={baseBranch} onChange={e => setBaseBranch(e.target.value)}
-                                                        className="flex-1 bg-obsidian-bg border border-obsidian-border rounded px-2 py-1 text-[11px] text-foreground outline-none">
+                                                        className="flex-1 bg-obsidian-bg border border-obsidian-border rounded px-2 py-1 text-[11px] text-foreground outline-none transition-all active:scale-95">
                                                         <option value="">{selectedRepo?.default_branch || 'main'}</option>
                                                         {branches.map(b => <option key={b.name} value={b.name}>{b.name}</option>)}
                                                     </select>
                                                     <button onClick={handleCreateBranch} disabled={!newBranchName}
-                                                        className="px-3 py-1 bg-obsidian-info text-white rounded text-[10px] font-medium hover:bg-obsidian-info disabled:opacity-40">Create</button>
+                                                        className="px-3 py-1 bg-obsidian-info text-white rounded text-[10px] font-medium hover:bg-obsidian-info disabled:opacity-40 transition-all active:scale-95">Create</button>
                                                 </div>
                                             </div>
                                         )}
@@ -1502,15 +1545,15 @@ export default function CICDPage() {
                                         {branches.length === 0 ? (
                                             <div className="text-center py-8 text-obsidian-muted text-[11px]">No branches</div>
                                         ) : branches.map(branch => (
-                                            <div key={branch.name} className="px-4 py-3 border-b border-obsidian-border/30 hover:bg-obsidian-panel/50">
+                                            <div key={branch.name} className="px-4 py-3 border-b border-obsidian-border/30 hover:bg-obsidian-panel/50 transition-all active:scale-95">
                                                 <div className="flex items-center gap-2">
                                                     <GitBranch className="w-3.5 h-3.5 text-obsidian-success shrink-0" />
                                                     <span className="text-[12px] text-foreground font-mono">{branch.name}</span>
                                                     {branch.name === selectedRepo?.default_branch && (
-                                                        <span className="text-[8px] px-1.5 py-0.5 rounded bg-obsidian-info/15 text-obsidian-info font-semibold uppercase">default</span>
+                                                        <span className="text-[8px] px-1.5 py-0.5 rounded bg-obsidian-info/15 text-obsidian-info font-semibold uppercase transition-all active:scale-95">default</span>
                                                     )}
                                                     {branch.protected && (
-                                                        <span className="text-[8px] px-1.5 py-0.5 rounded bg-obsidian-warning/15 text-obsidian-warning font-semibold uppercase">protected</span>
+                                                        <span className="text-[8px] px-1.5 py-0.5 rounded bg-obsidian-warning/15 text-obsidian-warning font-semibold uppercase transition-all active:scale-95">protected</span>
                                                     )}
                                                 </div>
                                                 <div className="mt-1 text-[10px] text-obsidian-muted pl-5 truncate">
@@ -1520,14 +1563,14 @@ export default function CICDPage() {
                                                     <button
                                                         onClick={() => switchBranch(branch.name)}
                                                         disabled={activeBranch === branch.name}
-                                                        className="flex items-center gap-1 px-2 py-0.5 text-[9px] bg-obsidian-border-active text-foreground rounded hover:bg-obsidian-info/20 hover:text-obsidian-info disabled:opacity-40 disabled:cursor-default transition-colors"
+                                                        className="flex items-center gap-1 px-2 py-0.5 text-[9px] bg-obsidian-border-active text-foreground rounded hover:bg-obsidian-info/20 hover:text-obsidian-info disabled:opacity-40 disabled:cursor-default transition-colors active:scale-95"
                                                     >
                                                         {activeBranch === branch.name ? '✓ Active' : '⇄ Switch'}
                                                     </button>
                                                     {branch.name !== selectedRepo?.default_branch && !branch.protected && (
                                                         <button
                                                             onClick={() => handleDeleteBranch(branch.name)}
-                                                            className="flex items-center gap-1 px-2 py-0.5 text-[9px] bg-obsidian-danger/10 text-obsidian-danger rounded hover:bg-obsidian-danger/20 transition-colors"
+                                                            className="flex items-center gap-1 px-2 py-0.5 text-[9px] bg-obsidian-danger/10 text-obsidian-danger rounded hover:bg-obsidian-danger/20 transition-colors active:scale-95"
                                                         >
                                                             🗑 Delete
                                                         </button>
@@ -1541,13 +1584,13 @@ export default function CICDPage() {
                                 ) : detailTab === 'tags' ? (
                                     /* ─── Tags Tab ─── */
                                     <div className="flex-1 overflow-auto">
-                                        <div className="px-4 py-2 border-b border-obsidian-border bg-obsidian-panel text-[11px] text-obsidian-muted">
+                                        <div className="px-4 py-2 border-b border-obsidian-border bg-obsidian-panel text-[11px] text-obsidian-muted transition-all active:scale-95">
                                             {tags.length} tag{tags.length !== 1 ? 's' : ''}
                                         </div>
                                         {tags.length === 0 ? (
                                             <div className="text-center py-8 text-obsidian-muted text-[11px]">No tags</div>
                                         ) : tags.map(tag => (
-                                            <div key={tag.name} className="px-4 py-3 border-b border-obsidian-border/30 hover:bg-obsidian-panel/50 flex items-center gap-2">
+                                            <div key={tag.name} className="px-4 py-3 border-b border-obsidian-border/30 hover:bg-obsidian-panel/50 flex items-center gap-2 transition-all active:scale-95">
                                                 <Star className="w-3.5 h-3.5 text-obsidian-warning shrink-0" />
                                                 <span className="text-[12px] font-mono text-foreground">{tag.name}</span>
                                                 <span className="ml-2 text-[10px] text-obsidian-muted font-mono">{tag.commit?.sha?.slice(0, 7)}</span>
@@ -1567,7 +1610,7 @@ export default function CICDPage() {
                                                 <span className="text-[12px]">No workflow runs</span>
                                             </div>
                                         ) : actionRuns.map((run) => (
-                                            <div key={run.id} className="px-4 py-2.5 border-b border-obsidian-border/30 hover:bg-obsidian-panel/50">
+                                            <div key={run.id} className="px-4 py-2.5 border-b border-obsidian-border/30 hover:bg-obsidian-panel/50 transition-all active:scale-95">
                                                 <div className="flex items-center justify-between mb-1">
                                                     <div className="flex items-center gap-2">
                                                         <ActionBadge status={run.status || 'unknown'} conclusion={run.conclusion} />

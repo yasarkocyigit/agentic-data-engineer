@@ -190,21 +190,24 @@ export default function StoragePage() {
             <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
 
                 {/* ─── Top Bar ─── */}
-                <header className="h-9 bg-obsidian-panel border-b border-obsidian-border flex items-center justify-between px-4 shrink-0">
+                <header className="h-10 bg-black/60 border-b border-obsidian-border/30 flex items-center justify-between px-5 shrink-0 shadow-sm transition-all relative">
+                    <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-obsidian-info to-obsidian-purple opacity-40"></div>
                     <div className="flex items-center gap-2">
-                        <HardDrive className="w-3.5 h-3.5 text-obsidian-info" />
-                        <span className="text-[12px] font-bold text-foreground">Storage Layer</span>
-                        <span className="text-[10px] text-obsidian-muted">MinIO S3</span>
+                        <HardDrive className="w-4 h-4 text-obsidian-info drop-shadow-[0_0_8px_rgba(34,211,238,0.5)]" />
+                        <span className="text-[12px] font-bold text-foreground tracking-widest uppercase">Storage Layer</span>
+                        <span className="text-[10px] text-obsidian-muted uppercase tracking-wider ml-1 px-2 py-0.5 bg-white/5 rounded-md border border-white/10">MinIO S3</span>
                     </div>
-                    <div className="flex items-center gap-3 text-[10px] text-obsidian-muted">
-                        <span>{buckets.length} buckets</span>
-                        <span>•</span>
-                        <span>{totalObjects} objects</span>
-                        <span>•</span>
-                        <span>{formatBytes(totalSize)}</span>
+                    <div className="flex items-center gap-4 text-[11px] text-obsidian-muted font-medium">
+                        <div className="flex bg-black/40 px-3 py-1 rounded-md border border-obsidian-border/30 gap-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
+                            <span>{buckets.length} buckets</span>
+                            <span className="text-obsidian-border">•</span>
+                            <span>{totalObjects} objects</span>
+                            <span className="text-obsidian-border">•</span>
+                            <span className="text-obsidian-info glow-text font-bold tracking-wide">{formatBytes(totalSize)}</span>
+                        </div>
                         <button
                             onClick={() => { fetchBuckets(); if (selectedBucket) fetchObjects(selectedBucket, currentPrefix); }}
-                            className="p-1 hover:bg-obsidian-panel-hover rounded text-obsidian-muted hover:text-foreground ml-2"
+                            className="p-1.5 hover:bg-white/10 rounded-md text-obsidian-muted hover:text-white transition-all active:scale-90 border border-transparent hover:border-obsidian-border/50"
                         >
                             <RefreshCw className="w-3.5 h-3.5" />
                         </button>
@@ -222,29 +225,29 @@ export default function StoragePage() {
 
                         {/* Breadcrumb */}
                         {selectedBucket && (
-                            <div className="h-8 bg-obsidian-panel border-b border-obsidian-border flex items-center px-3 gap-1 text-[11px] shrink-0">
+                            <div className="h-10 bg-black/40 border-b border-obsidian-border/30 flex items-center px-4 gap-2 text-[12px] shrink-0 shadow-sm">
                                 <button
                                     onClick={goBackToBuckets}
-                                    className="text-obsidian-info hover:text-[#5a9cf5] hover:underline"
+                                    className="text-obsidian-info hover:text-[#5a9cf5] hover:underline font-medium transition-colors border border-obsidian-info/20 bg-obsidian-info/5 px-2 py-0.5 rounded"
                                 >
                                     Buckets
                                 </button>
-                                <ChevronRight className="w-3 h-3 text-obsidian-muted" />
+                                <ChevronRight className="w-3.5 h-3.5 text-obsidian-muted/60" />
                                 <button
                                     onClick={() => openFolder('')}
                                     className={clsx(
-                                        breadcrumbs.length === 0 ? "text-foreground" : "text-obsidian-info hover:text-[#5a9cf5] hover:underline"
+                                        breadcrumbs.length === 0 ? "text-foreground font-bold tracking-wide" : "text-obsidian-muted hover:text-[#5a9cf5] transition-colors"
                                     )}
                                 >
                                     {selectedBucket}
                                 </button>
                                 {breadcrumbs.map((bc, i) => (
                                     <React.Fragment key={bc.prefix}>
-                                        <ChevronRight className="w-3 h-3 text-obsidian-muted" />
+                                        <ChevronRight className="w-3.5 h-3.5 text-obsidian-muted/60" />
                                         <button
                                             onClick={() => openFolder(bc.prefix)}
                                             className={clsx(
-                                                i === breadcrumbs.length - 1 ? "text-foreground" : "text-obsidian-info hover:text-[#5a9cf5] hover:underline"
+                                                i === breadcrumbs.length - 1 ? "text-foreground font-bold tracking-wide" : "text-obsidian-muted hover:text-[#5a9cf5] transition-colors"
                                             )}
                                         >
                                             {bc.label}
@@ -272,10 +275,11 @@ export default function StoragePage() {
                                         </div>
                                     ) : (
                                         <>
-                                            <div className="text-[11px] text-obsidian-muted font-bold uppercase tracking-wider mb-3 px-1">
+                                            <div className="text-[10px] text-obsidian-muted font-bold uppercase tracking-widest mb-4 px-1 flex items-center gap-2">
                                                 Lakehouse Buckets
+                                                <div className="h-[1px] bg-obsidian-border/50 flex-1 ml-2"></div>
                                             </div>
-                                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3">
+                                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                                                 {buckets.map((bucket) => {
                                                     const style = BUCKET_STYLES[bucket.name] || { color: '#6c707e', bg: '#6c707e/10', icon: Archive };
                                                     const Icon = style.icon;
@@ -283,23 +287,25 @@ export default function StoragePage() {
                                                         <div
                                                             key={bucket.name}
                                                             onClick={() => openBucket(bucket.name)}
-                                                            className="group bg-obsidian-panel border border-obsidian-border rounded-lg p-4 cursor-pointer hover:border-obsidian-info/40 hover:bg-obsidian-panel/80 transition-all"
+                                                            className="group bg-obsidian-panel/60 backdrop-blur-md border border-obsidian-border/80 rounded-xl p-5 cursor-pointer hover:border-obsidian-info/50 hover:bg-white/5 transition-all shadow-lg hover:shadow-[0_8px_30px_rgba(0,0,0,0.6)] active:scale-95"
                                                         >
-                                                            <div className="flex items-start justify-between mb-3">
+                                                            <div className="flex items-start justify-between mb-4">
                                                                 <div
-                                                                    className="w-9 h-9 rounded-lg flex items-center justify-center"
-                                                                    style={{ backgroundColor: `${style.color}15` }}
+                                                                    className="w-10 h-10 rounded-xl flex items-center justify-center shadow-inner"
+                                                                    style={{ backgroundColor: `${style.color}20`, border: `1px solid ${style.color}40` }}
                                                                 >
-                                                                    <Icon className="w-4.5 h-4.5" style={{ color: style.color }} />
+                                                                    <Icon className="w-5 h-5 group-hover:scale-110 transition-transform" style={{ color: style.color, filter: `drop-shadow(0 0 8px ${style.color}80)` }} />
                                                                 </div>
-                                                                <ChevronRight className="w-3.5 h-3.5 text-obsidian-muted opacity-0 group-hover:opacity-100 transition-opacity mt-1" />
+                                                                <div className="p-1 rounded bg-black/20 opacity-0 group-hover:opacity-100 transition-all transform translate-x-1 group-hover:translate-x-0">
+                                                                    <ChevronRight className="w-4 h-4 text-obsidian-info" />
+                                                                </div>
                                                             </div>
-                                                            <div className="text-[13px] font-semibold text-foreground mb-1">
+                                                            <div className="text-[14px] font-bold text-foreground mb-1 tracking-wide group-hover:text-white transition-colors">
                                                                 {bucket.name}
                                                             </div>
-                                                            <div className="flex items-center gap-3 text-[10px] text-obsidian-muted">
+                                                            <div className="flex items-center gap-3 text-[11px] text-obsidian-muted/80 font-medium">
                                                                 <span>{bucket.objectCount} objects</span>
-                                                                <span>•</span>
+                                                                <span className="text-obsidian-border">•</span>
                                                                 <span>{bucket.totalSizeFormatted}</span>
                                                             </div>
                                                         </div>
@@ -326,12 +332,12 @@ export default function StoragePage() {
                                         </div>
                                     ) : (
                                         <table className="w-full text-left border-collapse">
-                                            <thead className="sticky top-0 bg-obsidian-panel-hover shadow-sm z-10">
+                                            <thead className="sticky top-0 bg-black/60 backdrop-blur-md shadow-sm z-10">
                                                 <tr>
-                                                    <th className="p-1 px-3 border-r border-obsidian-border border-b text-[11px] text-foreground font-normal w-[50%]">Name</th>
-                                                    <th className="p-1 px-3 border-r border-obsidian-border border-b text-[11px] text-foreground font-normal w-[15%]">Size</th>
-                                                    <th className="p-1 px-3 border-r border-obsidian-border border-b text-[11px] text-foreground font-normal w-[15%]">Modified</th>
-                                                    <th className="p-1 px-3 border-b text-[11px] text-foreground font-normal w-[20%]">Type</th>
+                                                    <th className="p-2 px-4 border-b border-obsidian-border/30 text-[10px] text-obsidian-muted font-bold uppercase tracking-widest w-[50%]">Name</th>
+                                                    <th className="p-2 px-4 border-b border-obsidian-border/30 text-[10px] text-obsidian-muted font-bold uppercase tracking-widest w-[15%]">Size</th>
+                                                    <th className="p-2 px-4 border-b border-obsidian-border/30 text-[10px] text-obsidian-muted font-bold uppercase tracking-widest w-[15%]">Modified</th>
+                                                    <th className="p-2 px-4 border-b border-obsidian-border/30 text-[10px] text-obsidian-muted font-bold uppercase tracking-widest w-[20%]">Type</th>
                                                 </tr>
                                             </thead>
                                             <tbody className="text-[12px] font-mono">
@@ -344,35 +350,35 @@ export default function StoragePage() {
                                                             key={item.key}
                                                             onClick={() => isFolder ? openFolder(item.key) : openFilePreview(item)}
                                                             className={clsx(
-                                                                "cursor-pointer border-b border-obsidian-border",
-                                                                isSelected ? "bg-[#214283]" : "hover:bg-obsidian-panel"
+                                                                "cursor-pointer group transition-all",
+                                                                isSelected ? "bg-obsidian-info/10 border-l-2 border-l-obsidian-info" : "hover:bg-white/5 border-l-2 border-l-transparent hover:border-l-obsidian-border"
                                                             )}
                                                         >
-                                                            <td className="p-1.5 px-3 border-r border-obsidian-border">
-                                                                <div className="flex items-center gap-2">
+                                                            <td className="p-2.5 px-4 border-b border-obsidian-border/20">
+                                                                <div className="flex items-center gap-3">
                                                                     <Icon className={clsx(
-                                                                        "w-4 h-4 shrink-0",
-                                                                        isFolder ? "text-obsidian-warning" : "text-obsidian-muted"
+                                                                        "w-4 h-4 shrink-0 transition-transform group-hover:scale-110",
+                                                                        isFolder ? "text-obsidian-warning drop-shadow-[0_0_8px_rgba(255,203,107,0.4)]" : "text-obsidian-info"
                                                                     )} />
                                                                     <span className={clsx(
-                                                                        "truncate",
-                                                                        isFolder ? "text-foreground" : "text-foreground"
+                                                                        "truncate font-medium transition-colors",
+                                                                        isFolder ? "text-foreground group-hover:text-white" : "text-foreground/90 group-hover:text-white"
                                                                     )}>
                                                                         {item.name}
                                                                     </span>
                                                                 </div>
                                                             </td>
-                                                            <td className="p-1.5 px-3 border-r border-obsidian-border text-obsidian-muted">
+                                                            <td className="p-2.5 px-4 border-b border-obsidian-border/20 text-obsidian-muted/80 group-hover:text-obsidian-muted transition-colors">
                                                                 {item.sizeFormatted}
                                                             </td>
-                                                            <td className="p-1.5 px-3 border-r border-obsidian-border text-obsidian-muted">
+                                                            <td className="p-2.5 px-4 border-b border-obsidian-border/20 text-obsidian-muted/80 group-hover:text-obsidian-muted transition-colors">
                                                                 {timeAgo(item.lastModified)}
                                                             </td>
-                                                            <td className="p-1.5 px-3 text-obsidian-muted">
+                                                            <td className="p-2.5 px-4 border-b border-obsidian-border/20 text-obsidian-muted">
                                                                 {isFolder ? (
-                                                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#e5c07b]/10 text-obsidian-warning font-semibold uppercase">DIR</span>
+                                                                    <span className="text-[9px] px-2 py-0.5 rounded-md bg-obsidian-warning/10 border border-obsidian-warning/30 text-obsidian-warning font-bold tracking-widest shadow-[inset_0_1px_0_rgba(255,255,255,0.1)]">DIR</span>
                                                                 ) : (
-                                                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#3574f0]/10 text-obsidian-info font-semibold uppercase">
+                                                                    <span className="text-[9px] px-2 py-0.5 rounded-md bg-obsidian-info/10 border border-obsidian-info/30 text-obsidian-info font-bold tracking-widest uppercase shadow-[inset_0_1px_0_rgba(255,255,255,0.1)]">
                                                                         {item.extension || 'file'}
                                                                     </span>
                                                                 )}
@@ -391,26 +397,28 @@ export default function StoragePage() {
                     {/* ─── File Preview Sidebar ─── */}
                     {selectedFile && (
                         <div className={clsx(
-                            "flex flex-col bg-obsidian-bg shrink-0 transition-all duration-200",
+                            "flex flex-col bg-obsidian-panel/30 shrink-0 transition-all duration-300 shadow-[-10px_0_30px_rgba(0,0,0,0.6)] backdrop-blur-xl border-l border-white/5",
                             fullscreenPreview
                                 ? "fixed inset-0 z-50 w-full"
-                                : "w-[380px]"
+                                : "w-[420px]"
                         )}>
                             {/* Preview Header */}
                             <div className={clsx(
-                                "bg-obsidian-panel border-b border-obsidian-border flex items-center justify-between shrink-0",
+                                "bg-black/60 border-b border-white/10 flex items-center justify-between shrink-0 shadow-sm relative",
                                 fullscreenPreview ? "h-12 px-6" : "h-10 px-4"
                             )}>
-                                <div className="flex items-center gap-2 min-w-0">
-                                    <FileText className={clsx("text-obsidian-info shrink-0", fullscreenPreview ? "w-4 h-4" : "w-3.5 h-3.5")} />
-                                    <span className={clsx("font-bold text-foreground truncate", fullscreenPreview ? "text-sm" : "text-[11px]")}>
+                                {/* Glowing Top Edge */}
+                                <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-obsidian-purple to-obsidian-info opacity-60"></div>
+                                <div className="flex items-center gap-3 min-w-0">
+                                    <FileText className={clsx("text-obsidian-info shrink-0 drop-shadow-[0_0_8px_rgba(34,211,238,0.5)]", fullscreenPreview ? "w-4 h-4" : "w-4 h-4")} />
+                                    <span className={clsx("font-bold text-white tracking-wide truncate drop-shadow-md", fullscreenPreview ? "text-[14px]" : "text-[12px]")}>
                                         {selectedFile.name}
                                     </span>
                                 </div>
-                                <div className="flex items-center gap-1">
+                                <div className="flex items-center gap-1.5">
                                     <button
                                         onClick={() => setFullscreenPreview(!fullscreenPreview)}
-                                        className="p-1 hover:bg-obsidian-panel-hover rounded text-obsidian-muted hover:text-foreground transition-colors"
+                                        className="p-1.5 hover:bg-white/10 rounded-md text-obsidian-muted hover:text-white transition-all active:scale-90"
                                         title={fullscreenPreview ? 'Minimize' : 'Maximize'}
                                     >
                                         {fullscreenPreview
@@ -420,9 +428,9 @@ export default function StoragePage() {
                                     </button>
                                     <button
                                         onClick={() => { setSelectedFile(null); setFilePreview(null); setFullscreenPreview(false); }}
-                                        className="p-1 hover:bg-obsidian-panel-hover rounded text-obsidian-muted hover:text-foreground text-[12px]"
+                                        className="p-1.5 hover:bg-white/10 rounded-md text-obsidian-muted hover:text-obsidian-danger hover:bg-obsidian-danger/10 transition-all active:scale-90"
                                     >
-                                        ✕
+                                        <X className="w-4 h-4" />
                                     </button>
                                 </div>
                             </div>
@@ -474,15 +482,15 @@ export default function StoragePage() {
 
                                         {/* Content Preview */}
                                         {filePreview.isPreviewable && filePreview.preview && (
-                                            <div className="flex-1 flex flex-col overflow-hidden">
+                                            <div className="flex-1 flex flex-col overflow-hidden m-4 rounded-xl border border-white/10 shadow-[0_8px_24px_rgba(0,0,0,0.6)]">
                                                 <div className={clsx(
-                                                    "bg-obsidian-panel border-b border-obsidian-border flex items-center justify-between shrink-0",
-                                                    fullscreenPreview ? "px-6 py-2" : "px-3 py-1"
+                                                    "bg-black/60 border-b border-white/10 flex items-center justify-between shrink-0",
+                                                    fullscreenPreview ? "px-6 py-2.5" : "px-4 py-1.5"
                                                 )}>
-                                                    <span className="text-[10px] text-obsidian-muted font-bold uppercase">Content Preview</span>
-                                                    <span className="text-[9px] text-obsidian-muted">{filePreview.preview.split('\n').length} lines</span>
+                                                    <span className="text-[10px] text-obsidian-muted font-bold uppercase tracking-widest">Raw Output</span>
+                                                    <span className="text-[9px] text-obsidian-muted/80 bg-black/40 px-2 py-0.5 rounded border border-white/5">{filePreview.preview.split('\n').length} lines</span>
                                                 </div>
-                                                <div className="flex-1 overflow-auto bg-[#1a1b1e]">
+                                                <div className="flex-1 overflow-auto bg-[#0a0a0c] custom-scrollbar">
                                                     <pre className="p-0 m-0">
                                                         <code className={clsx("font-mono leading-relaxed", fullscreenPreview ? "text-[13px]" : "text-[11px]")}>
                                                             {filePreview.preview.split('\n').map((line, i) => (
