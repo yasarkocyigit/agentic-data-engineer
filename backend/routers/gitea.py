@@ -395,6 +395,45 @@ async def get_contents(owner: str, repo: str, path: str, ref: Optional[str] = Qu
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/gitea/repos/{owner}/{repo}/languages")
+async def get_languages(owner: str, repo: str):
+    """Get language breakdown for a repository."""
+    try:
+        data = await gitea_fetch(f"/repos/{owner}/{repo}/languages")
+        return data  # dict like {"Python": 12345, "YAML": 678}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("[Gitea] GET /languages error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/gitea/repos/{owner}/{repo}/topics")
+async def get_topics(owner: str, repo: str):
+    """Get repository topics."""
+    try:
+        data = await gitea_fetch(f"/repos/{owner}/{repo}/topics")
+        return data  # {"topics": ["data-engineering", "airflow", ...]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("[Gitea] GET /topics error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/gitea/repos/{owner}/{repo}/contributors")
+async def get_contributors(owner: str, repo: str):
+    """Get repository contributors."""
+    try:
+        data = await gitea_fetch(f"/repos/{owner}/{repo}/contributors")
+        return data  # list of contributor objects
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("[Gitea] GET /contributors error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ─── Pull Requests ───
 
 

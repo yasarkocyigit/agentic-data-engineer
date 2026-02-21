@@ -5,7 +5,8 @@ import clsx from 'clsx';
 import {
     HardDrive, Folder, FileText, ChevronRight, RefreshCw, Download,
     Database, Archive, Layers, Box, Clock, Hash, X, Maximize2, Minimize2,
-    FileCode, File, Image as ImageIcon, Table, AlertCircle, Loader2
+    FileCode, File, Image as ImageIcon, Table, AlertCircle, Loader2,
+    LayoutGrid, List, LayoutPanelLeft
 } from 'lucide-react';
 
 // ─── Types ───
@@ -77,6 +78,7 @@ export default function StoragePage() {
     const [buckets, setBuckets] = useState<BucketInfo[]>([]);
     const [bucketsLoading, setBucketsLoading] = useState(true);
     const [bucketsError, setBucketsError] = useState<string | null>(null);
+    const [viewMode, setViewMode] = useState<'grid' | 'list'>('list');
 
     const [selectedBucket, setSelectedBucket] = useState<string | null>(null);
     const [currentPrefix, setCurrentPrefix] = useState('');
@@ -184,27 +186,67 @@ export default function StoragePage() {
     };
 
     return (
-        <div className="flex h-screen bg-obsidian-bg text-foreground font-sans overflow-hidden">
-            <Sidebar />
+        <div className="flex h-screen bg-[#09090b] text-foreground font-sans overflow-hidden relative">
+            {/* Ambient Lighting */}
+            <div className="absolute top-0 left-0 w-[800px] h-[800px] bg-obsidian-purple/[0.04] rounded-full blur-[120px] pointer-events-none -translate-x-1/4 -translate-y-1/4" />
+            <div className="absolute bottom-0 right-0 w-[600px] h-[600px] bg-obsidian-info/[0.03] rounded-full blur-[100px] pointer-events-none translate-x-1/4 translate-y-1/4" />
 
-            <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
+            {/* Sidebar */}
+            <div className="relative z-10 shrink-0">
+                <Sidebar />
+            </div>
+
+            <main className="flex-1 flex flex-col min-w-0 overflow-hidden relative z-10">
 
                 {/* ─── Top Bar ─── */}
-                <header className="h-10 bg-black/60 border-b border-obsidian-border/30 flex items-center justify-between px-5 shrink-0 shadow-sm transition-all relative">
-                    <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-obsidian-info to-obsidian-purple opacity-40"></div>
-                    <div className="flex items-center gap-2">
+                <header className="flex items-center px-4 justify-between shrink-0 h-10 bg-black/40 backdrop-blur-md border-b border-white/5 z-10 w-full relative">
+                    <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-obsidian-info/30 to-transparent opacity-50"></div>
+                    <div className="flex items-center gap-3">
+                        <button
+                            onClick={() => window.dispatchEvent(new CustomEvent('openclaw:toggle-sidebar'))}
+                            className="p-1.5 hover:bg-white/10 rounded-md text-obsidian-muted hover:text-white transition-all active:scale-95 border border-transparent hover:border-obsidian-border/50"
+                            title="Toggle Explorer"
+                        >
+                            <LayoutPanelLeft className="w-4 h-4 drop-shadow-[0_0_8px_rgba(255,255,255,0.2)]" />
+                        </button>
+                        <div className="w-[1px] h-4 bg-obsidian-border/50"></div>
                         <HardDrive className="w-4 h-4 text-obsidian-info drop-shadow-[0_0_8px_rgba(34,211,238,0.5)]" />
                         <span className="text-[12px] font-bold text-foreground tracking-widest uppercase">Storage Layer</span>
                         <span className="text-[10px] text-obsidian-muted uppercase tracking-wider ml-1 px-2 py-0.5 bg-white/5 rounded-md border border-white/10">MinIO S3</span>
                     </div>
                     <div className="flex items-center gap-4 text-[11px] text-obsidian-muted font-medium">
-                        <div className="flex bg-black/40 px-3 py-1 rounded-md border border-obsidian-border/30 gap-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
+                        <div className="flex bg-black/20 px-3 py-1 rounded-md border border-white/5 gap-3">
                             <span>{buckets.length} buckets</span>
                             <span className="text-obsidian-border">•</span>
                             <span>{totalObjects} objects</span>
                             <span className="text-obsidian-border">•</span>
                             <span className="text-obsidian-info glow-text font-bold tracking-wide">{formatBytes(totalSize)}</span>
                         </div>
+                        {/* ─── Grid / List Toggle ─── */}
+                        {!selectedBucket && (
+                            <div className="flex bg-black/20 p-0.5 rounded-md border border-white/5 mr-2">
+                                <button
+                                    onClick={() => setViewMode('grid')}
+                                    className={clsx(
+                                        "p-1.5 rounded-[4px] transition-all",
+                                        viewMode === 'grid' ? "bg-white/10 text-white shadow-sm" : "text-obsidian-muted hover:text-white hover:bg-white/5"
+                                    )}
+                                    title="Grid View"
+                                >
+                                    <LayoutGrid className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                    onClick={() => setViewMode('list')}
+                                    className={clsx(
+                                        "p-1.5 rounded-[4px] transition-all",
+                                        viewMode === 'list' ? "bg-white/10 text-white shadow-sm" : "text-obsidian-muted hover:text-white hover:bg-white/5"
+                                    )}
+                                    title="List View"
+                                >
+                                    <List className="w-3.5 h-3.5" />
+                                </button>
+                            </div>
+                        )}
                         <button
                             onClick={() => { fetchBuckets(); if (selectedBucket) fetchObjects(selectedBucket, currentPrefix); }}
                             className="p-1.5 hover:bg-white/10 rounded-md text-obsidian-muted hover:text-white transition-all active:scale-90 border border-transparent hover:border-obsidian-border/50"
@@ -220,12 +262,12 @@ export default function StoragePage() {
                     {/* ─── Bucket/Object Browser ─── */}
                     <div className={clsx(
                         "flex-1 flex flex-col overflow-hidden",
-                        selectedFile && !fullscreenPreview && "border-r border-obsidian-border"
+                        selectedFile && !fullscreenPreview && "border-r border-white/5"
                     )}>
 
                         {/* Breadcrumb */}
                         {selectedBucket && (
-                            <div className="h-10 bg-black/40 border-b border-obsidian-border/30 flex items-center px-4 gap-2 text-[12px] shrink-0 shadow-sm">
+                            <div className="h-10 bg-black/20 backdrop-blur-md border-b border-white/5 flex items-center px-4 gap-2 text-[12px] shrink-0 shadow-sm">
                                 <button
                                     onClick={goBackToBuckets}
                                     className="text-obsidian-info hover:text-[#5a9cf5] hover:underline font-medium transition-colors border border-obsidian-info/20 bg-obsidian-info/5 px-2 py-0.5 rounded"
@@ -258,7 +300,7 @@ export default function StoragePage() {
                         )}
 
                         {/* Content Area */}
-                        <div className="flex-1 overflow-auto bg-obsidian-bg">
+                        <div className="flex-1 overflow-auto bg-transparent">
 
                             {/* ─── Bucket Cards ─── */}
                             {!selectedBucket && (
@@ -279,39 +321,87 @@ export default function StoragePage() {
                                                 Lakehouse Buckets
                                                 <div className="h-[1px] bg-obsidian-border/50 flex-1 ml-2"></div>
                                             </div>
-                                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                                                {buckets.map((bucket) => {
-                                                    const style = BUCKET_STYLES[bucket.name] || { color: '#6c707e', bg: '#6c707e/10', icon: Archive };
-                                                    const Icon = style.icon;
-                                                    return (
-                                                        <div
-                                                            key={bucket.name}
-                                                            onClick={() => openBucket(bucket.name)}
-                                                            className="group bg-obsidian-panel/60 backdrop-blur-md border border-obsidian-border/80 rounded-xl p-5 cursor-pointer hover:border-obsidian-info/50 hover:bg-white/5 transition-all shadow-lg hover:shadow-[0_8px_30px_rgba(0,0,0,0.6)] active:scale-95"
-                                                        >
-                                                            <div className="flex items-start justify-between mb-4">
-                                                                <div
-                                                                    className="w-10 h-10 rounded-xl flex items-center justify-center shadow-inner"
-                                                                    style={{ backgroundColor: `${style.color}20`, border: `1px solid ${style.color}40` }}
-                                                                >
-                                                                    <Icon className="w-5 h-5 group-hover:scale-110 transition-transform" style={{ color: style.color, filter: `drop-shadow(0 0 8px ${style.color}80)` }} />
+                                            {viewMode === 'grid' ? (
+                                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                                                    {buckets.map((bucket) => {
+                                                        const style = BUCKET_STYLES[bucket.name] || { color: '#6c707e', bg: '#6c707e/10', icon: Archive };
+                                                        const Icon = style.icon;
+                                                        return (
+                                                            <div
+                                                                key={bucket.name}
+                                                                onClick={() => openBucket(bucket.name)}
+                                                                className="group bg-black/20 backdrop-blur-md border border-white/10 rounded-xl p-5 cursor-pointer hover:border-obsidian-info/50 hover:bg-white/[0.02] transition-all shadow-lg hover:shadow-[0_8px_30px_rgba(0,0,0,0.6)] active:scale-95"
+                                                            >
+                                                                <div className="flex items-start justify-between mb-4">
+                                                                    <div
+                                                                        className="w-10 h-10 rounded-xl flex items-center justify-center shadow-inner"
+                                                                        style={{ backgroundColor: `${style.color}20`, border: `1px solid ${style.color}40` }}
+                                                                    >
+                                                                        <Icon className="w-5 h-5 group-hover:scale-110 transition-transform" style={{ color: style.color, filter: `drop-shadow(0 0 8px ${style.color}80)` }} />
+                                                                    </div>
+                                                                    <div className="p-1 rounded bg-black/20 opacity-0 group-hover:opacity-100 transition-all transform translate-x-1 group-hover:translate-x-0">
+                                                                        <ChevronRight className="w-4 h-4 text-obsidian-info" />
+                                                                    </div>
                                                                 </div>
-                                                                <div className="p-1 rounded bg-black/20 opacity-0 group-hover:opacity-100 transition-all transform translate-x-1 group-hover:translate-x-0">
-                                                                    <ChevronRight className="w-4 h-4 text-obsidian-info" />
+                                                                <div className="text-[14px] font-bold text-foreground mb-1 tracking-wide group-hover:text-white transition-colors">
+                                                                    {bucket.name}
+                                                                </div>
+                                                                <div className="flex items-center gap-3 text-[11px] text-obsidian-muted/80 font-medium">
+                                                                    <span>{bucket.objectCount} objects</span>
+                                                                    <span className="text-obsidian-border">•</span>
+                                                                    <span>{bucket.totalSizeFormatted}</span>
                                                                 </div>
                                                             </div>
-                                                            <div className="text-[14px] font-bold text-foreground mb-1 tracking-wide group-hover:text-white transition-colors">
-                                                                {bucket.name}
-                                                            </div>
-                                                            <div className="flex items-center gap-3 text-[11px] text-obsidian-muted/80 font-medium">
-                                                                <span>{bucket.objectCount} objects</span>
-                                                                <span className="text-obsidian-border">•</span>
-                                                                <span>{bucket.totalSizeFormatted}</span>
-                                                            </div>
-                                                        </div>
-                                                    );
-                                                })}
-                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            ) : (
+                                                <div className="border border-white/5 rounded-lg overflow-hidden bg-black/20 backdrop-blur-md shadow-lg">
+                                                    <table className="w-full text-left border-collapse">
+                                                        <thead className="bg-black/40 border-b border-white/5">
+                                                            <tr>
+                                                                <th className="p-2.5 px-4 text-[10px] text-obsidian-muted font-bold uppercase tracking-widest w-[40%]">Bucket Name</th>
+                                                                <th className="p-2.5 px-4 text-[10px] text-obsidian-muted font-bold uppercase tracking-widest w-[20%]">Objects</th>
+                                                                <th className="p-2.5 px-4 text-[10px] text-obsidian-muted font-bold uppercase tracking-widest w-[20%]">Total Size</th>
+                                                                <th className="p-2.5 px-4 text-[10px] text-obsidian-muted font-bold uppercase tracking-widest w-[20%]">Created At</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody className="text-[12px] font-mono">
+                                                            {buckets.map((bucket) => {
+                                                                const style = BUCKET_STYLES[bucket.name] || { color: '#6c707e', bg: '#6c707e/10', icon: Archive };
+                                                                const Icon = style.icon;
+                                                                return (
+                                                                    <tr
+                                                                        key={bucket.name}
+                                                                        onClick={() => openBucket(bucket.name)}
+                                                                        className="cursor-pointer group hover:bg-white/[0.02] border-l-2 border-l-transparent hover:border-l-obsidian-info transition-colors border-b border-white/5 last:border-0"
+                                                                    >
+                                                                        <td className="p-3 px-4">
+                                                                            <div className="flex items-center gap-3">
+                                                                                <Icon className="w-4 h-4 shrink-0 transition-transform group-hover:scale-110 drop-shadow-md" style={{ color: style.color }} />
+                                                                                <span className="font-bold tracking-wide text-foreground group-hover:text-white transition-colors">
+                                                                                    {bucket.name}
+                                                                                </span>
+                                                                            </div>
+                                                                        </td>
+                                                                        <td className="p-3 px-4 text-obsidian-muted group-hover:text-white/80 transition-colors">
+                                                                            {bucket.objectCount.toLocaleString()}
+                                                                        </td>
+                                                                        <td className="p-3 px-4">
+                                                                            <span className="text-[10px] px-2 py-0.5 rounded-md bg-white/5 border border-white/10 text-obsidian-muted/90 group-hover:text-obsidian-info group-hover:bg-obsidian-info/10 group-hover:border-obsidian-info/30 transition-colors">
+                                                                                {bucket.totalSizeFormatted}
+                                                                            </span>
+                                                                        </td>
+                                                                        <td className="p-3 px-4 text-obsidian-muted/80 group-hover:text-white/60 transition-colors">
+                                                                            {new Date(bucket.creationDate).toLocaleString()}
+                                                                        </td>
+                                                                    </tr>
+                                                                );
+                                                            })}
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                            )}
                                         </>
                                     )}
                                 </div>
@@ -332,12 +422,12 @@ export default function StoragePage() {
                                         </div>
                                     ) : (
                                         <table className="w-full text-left border-collapse">
-                                            <thead className="sticky top-0 bg-black/60 backdrop-blur-md shadow-sm z-10">
+                                            <thead className="sticky top-0 bg-black/40 backdrop-blur-md shadow-sm z-10">
                                                 <tr>
-                                                    <th className="p-2 px-4 border-b border-obsidian-border/30 text-[10px] text-obsidian-muted font-bold uppercase tracking-widest w-[50%]">Name</th>
-                                                    <th className="p-2 px-4 border-b border-obsidian-border/30 text-[10px] text-obsidian-muted font-bold uppercase tracking-widest w-[15%]">Size</th>
-                                                    <th className="p-2 px-4 border-b border-obsidian-border/30 text-[10px] text-obsidian-muted font-bold uppercase tracking-widest w-[15%]">Modified</th>
-                                                    <th className="p-2 px-4 border-b border-obsidian-border/30 text-[10px] text-obsidian-muted font-bold uppercase tracking-widest w-[20%]">Type</th>
+                                                    <th className="p-2 px-4 border-b border-white/5 text-[10px] text-obsidian-muted font-bold uppercase tracking-widest w-[50%]">Name</th>
+                                                    <th className="p-2 px-4 border-b border-white/5 text-[10px] text-obsidian-muted font-bold uppercase tracking-widest w-[15%]">Size</th>
+                                                    <th className="p-2 px-4 border-b border-white/5 text-[10px] text-obsidian-muted font-bold uppercase tracking-widest w-[15%]">Modified</th>
+                                                    <th className="p-2 px-4 border-b border-white/5 text-[10px] text-obsidian-muted font-bold uppercase tracking-widest w-[20%]">Type</th>
                                                 </tr>
                                             </thead>
                                             <tbody className="text-[12px] font-mono">
@@ -351,10 +441,10 @@ export default function StoragePage() {
                                                             onClick={() => isFolder ? openFolder(item.key) : openFilePreview(item)}
                                                             className={clsx(
                                                                 "cursor-pointer group transition-all",
-                                                                isSelected ? "bg-obsidian-info/10 border-l-2 border-l-obsidian-info" : "hover:bg-white/5 border-l-2 border-l-transparent hover:border-l-obsidian-border"
+                                                                isSelected ? "bg-obsidian-info/10 border-l-2 border-l-obsidian-info" : "hover:bg-white/[0.02] border-l-2 border-l-transparent hover:border-l-obsidian-border"
                                                             )}
                                                         >
-                                                            <td className="p-2.5 px-4 border-b border-obsidian-border/20">
+                                                            <td className="p-2.5 px-4 border-b border-white/5">
                                                                 <div className="flex items-center gap-3">
                                                                     <Icon className={clsx(
                                                                         "w-4 h-4 shrink-0 transition-transform group-hover:scale-110",
@@ -368,13 +458,13 @@ export default function StoragePage() {
                                                                     </span>
                                                                 </div>
                                                             </td>
-                                                            <td className="p-2.5 px-4 border-b border-obsidian-border/20 text-obsidian-muted/80 group-hover:text-obsidian-muted transition-colors">
+                                                            <td className="p-2.5 px-4 border-b border-white/5 text-obsidian-muted/80 group-hover:text-obsidian-muted transition-colors">
                                                                 {item.sizeFormatted}
                                                             </td>
-                                                            <td className="p-2.5 px-4 border-b border-obsidian-border/20 text-obsidian-muted/80 group-hover:text-obsidian-muted transition-colors">
+                                                            <td className="p-2.5 px-4 border-b border-white/5 text-obsidian-muted/80 group-hover:text-obsidian-muted transition-colors">
                                                                 {timeAgo(item.lastModified)}
                                                             </td>
-                                                            <td className="p-2.5 px-4 border-b border-obsidian-border/20 text-obsidian-muted">
+                                                            <td className="p-2.5 px-4 border-b border-white/5 text-obsidian-muted">
                                                                 {isFolder ? (
                                                                     <span className="text-[9px] px-2 py-0.5 rounded-md bg-obsidian-warning/10 border border-obsidian-warning/30 text-obsidian-warning font-bold tracking-widest shadow-[inset_0_1px_0_rgba(255,255,255,0.1)]">DIR</span>
                                                                 ) : (
@@ -397,14 +487,14 @@ export default function StoragePage() {
                     {/* ─── File Preview Sidebar ─── */}
                     {selectedFile && (
                         <div className={clsx(
-                            "flex flex-col bg-obsidian-panel/30 shrink-0 transition-all duration-300 shadow-[-10px_0_30px_rgba(0,0,0,0.6)] backdrop-blur-xl border-l border-white/5",
+                            "flex flex-col bg-black/20 shrink-0 transition-all duration-300 shadow-[-10px_0_30px_rgba(0,0,0,0.6)] backdrop-blur-xl border-l border-white/5",
                             fullscreenPreview
                                 ? "fixed inset-0 z-50 w-full"
                                 : "w-[420px]"
                         )}>
                             {/* Preview Header */}
                             <div className={clsx(
-                                "bg-black/60 border-b border-white/10 flex items-center justify-between shrink-0 shadow-sm relative",
+                                "bg-black/40 border-b border-white/5 flex items-center justify-between shrink-0 shadow-sm relative",
                                 fullscreenPreview ? "h-12 px-6" : "h-10 px-4"
                             )}>
                                 {/* Glowing Top Edge */}
@@ -446,7 +536,7 @@ export default function StoragePage() {
                                     <div className="flex flex-col h-full">
                                         {/* Metadata */}
                                         <div className={clsx(
-                                            "border-b border-obsidian-border space-y-2",
+                                            "border-b border-white/5 space-y-2",
                                             fullscreenPreview ? "p-6" : "p-3"
                                         )}>
                                             <div className="text-[10px] text-obsidian-muted font-bold uppercase tracking-wider mb-2">Object Details</div>
@@ -482,19 +572,19 @@ export default function StoragePage() {
 
                                         {/* Content Preview */}
                                         {filePreview.isPreviewable && filePreview.preview && (
-                                            <div className="flex-1 flex flex-col overflow-hidden m-4 rounded-xl border border-white/10 shadow-[0_8px_24px_rgba(0,0,0,0.6)]">
+                                            <div className="flex-1 flex flex-col overflow-hidden m-4 rounded-xl border border-white/5 shadow-[0_8px_24px_rgba(0,0,0,0.6)]">
                                                 <div className={clsx(
-                                                    "bg-black/60 border-b border-white/10 flex items-center justify-between shrink-0",
+                                                    "bg-black/40 border-b border-white/5 flex items-center justify-between shrink-0",
                                                     fullscreenPreview ? "px-6 py-2.5" : "px-4 py-1.5"
                                                 )}>
                                                     <span className="text-[10px] text-obsidian-muted font-bold uppercase tracking-widest">Raw Output</span>
                                                     <span className="text-[9px] text-obsidian-muted/80 bg-black/40 px-2 py-0.5 rounded border border-white/5">{filePreview.preview.split('\n').length} lines</span>
                                                 </div>
-                                                <div className="flex-1 overflow-auto bg-[#0a0a0c] custom-scrollbar">
+                                                <div className="flex-1 overflow-auto bg-transparent custom-scrollbar">
                                                     <pre className="p-0 m-0">
                                                         <code className={clsx("font-mono leading-relaxed", fullscreenPreview ? "text-[13px]" : "text-[11px]")}>
                                                             {filePreview.preview.split('\n').map((line, i) => (
-                                                                <div key={i} className="flex hover:bg-obsidian-panel/50">
+                                                                <div key={i} className="flex hover:bg-white/[0.02] transition-colors">
                                                                     <span className={clsx(
                                                                         "text-right pr-3 text-obsidian-muted/50 select-none shrink-0",
                                                                         fullscreenPreview ? "w-14 text-[12px]" : "w-8 text-[10px]"

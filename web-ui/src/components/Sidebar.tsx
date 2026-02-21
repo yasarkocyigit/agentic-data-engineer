@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, Suspense } from 'react';
-import { Database, Folder, FolderOpen, Table as TableIcon, ChevronRight, Settings, Search, Maximize2, MoreHorizontal, Home, Archive, Terminal, Server, Columns, HardDrive, FileText, FileCode, File as FileIcon, Image as ImageIcon, GitBranch, GitPullRequest, BarChart3, Copy, Play, List, Type } from 'lucide-react';
+import { Database, Folder, FolderOpen, Table as TableIcon, ChevronRight, Settings, Search, Maximize2, MoreHorizontal, Home, Archive, Terminal, Server, Columns, HardDrive, FileText, FileCode, File as FileIcon, Image as ImageIcon, GitBranch, GitPullRequest, BarChart3, Copy, Play, List, Type, BookOpen } from 'lucide-react';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import clsx from 'clsx';
 
@@ -26,6 +26,7 @@ const navItems = [
     { name: 'Visualize', icon: BarChart3, path: '/visualize' },
     { name: 'Storage', icon: HardDrive, path: '/storage' },
     { name: 'Workflows', icon: Archive, path: '/workflows' },
+    { name: 'Notebooks', icon: BookOpen, path: '/notebooks' },
     { name: 'CI/CD', icon: GitPullRequest, path: '/cicd' },
     { name: 'Agent', icon: Terminal, path: '/agent' },
     { name: 'Compute', icon: Server, path: '/compute' },
@@ -36,6 +37,15 @@ const Sidebar = () => {
     const navigate = useNavigate();
     const [searchParams] = useSearchParams();
     const activeFile = searchParams.get('file') || null;
+
+    // ─── Sidebar Toggle Logic ───
+    const [isOpen, setIsOpen] = useState(true);
+
+    useEffect(() => {
+        const handleToggle = () => setIsOpen(prev => !prev);
+        window.addEventListener('openclaw:toggle-sidebar', handleToggle);
+        return () => window.removeEventListener('openclaw:toggle-sidebar', handleToggle);
+    }, []);
 
     // ─── Data Explorer Logic ───
     const [dbEngine, setDbEngine] = useState<'trino' | 'postgres'>('trino');
@@ -687,7 +697,7 @@ const Sidebar = () => {
             </div>
 
             {/* Sidebar Content */}
-            {pathname !== '/data' && (
+            {pathname !== '/data' && pathname !== '/notebooks' && isOpen && (
                 <div className="w-[220px] flex flex-col h-full text-[12px] font-sans select-none" style={{ background: 'transparent' }}>
                     {/* Header */}
                     <div className="h-9 flex items-center px-3 justify-between shrink-0" style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>

@@ -392,6 +392,39 @@ services:
     networks:
       - agentic-network
 
+  # ---------------------------------------------------------
+  # JUPYTER KERNEL GATEWAY (Interactive Notebook Execution)
+  # ---------------------------------------------------------
+  jupyter-kernel:
+    image: jupyter/pyspark-notebook:latest
+    container_name: jupyter_kernel_gw
+    environment:
+      - JUPYTER_GATEWAY_PORT=8888
+      - SPARK_MASTER=spark://spark-master:7077
+      - PYSPARK_PYTHON=python3
+      - PYSPARK_DRIVER_PYTHON=python3
+      - SPARK_OPTS=--packages org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.7.1
+      - AWS_ACCESS_KEY_ID=${MINIO_ROOT_USER:-admin}
+      - AWS_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD:-admin123}
+    command: >
+      bash -c "pip install jupyter_kernel_gateway trino plotly pyarrow --quiet &&
+               jupyter kernelgateway
+               --KernelGatewayApp.ip=0.0.0.0
+               --KernelGatewayApp.port=8888
+               --KernelGatewayApp.allow_origin='*'
+               --KernelGatewayApp.api='kernel_gateway.jupyter_websocket'
+               --JupyterApp.answer_yes=true"
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./notebooks:/home/jovyan/work/notebooks
+      - ./jars:/home/jovyan/work/jars
+    depends_on:
+      - spark-master
+    restart: unless-stopped
+    networks:
+      - agentic-network
+
 # ---------------------------------------------------------
 # VOLUMES
 # ---------------------------------------------------------

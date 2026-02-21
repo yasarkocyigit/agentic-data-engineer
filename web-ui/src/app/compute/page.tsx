@@ -8,7 +8,7 @@ import {
     Clock, Zap, ChevronDown, ChevronRight,
     Workflow, BarChart3, GitBranch, PieChart,
     Loader2, CheckCircle2, XCircle, AlertTriangle,
-    Globe, ArrowUpRight, Container, GitFork, Play, Square
+    Globe, ArrowUpRight, Container, GitFork, Play, Square, LayoutPanelLeft
 } from 'lucide-react';
 
 // ─── Types ───
@@ -42,44 +42,44 @@ const CATEGORIES: Record<string, CategoryInfo> = {
     'orchestration': {
         label: 'Orchestration',
         icon: <Workflow className="w-4 h-4" />,
-        color: 'text-obsidian-warning',
-        bgColor: 'bg-obsidian-warning/10',
-        borderColor: 'border-obsidian-warning/20',
+        color: 'text-foreground/80',
+        bgColor: 'bg-white/[0.02]',
+        borderColor: 'border-white/5',
     },
     'compute': {
         label: 'Compute Engine',
         icon: <Cpu className="w-4 h-4" />,
-        color: 'text-obsidian-danger',
-        bgColor: 'bg-obsidian-danger/10',
-        borderColor: 'border-obsidian-danger/20',
+        color: 'text-foreground/80',
+        bgColor: 'bg-white/[0.02]',
+        borderColor: 'border-white/5',
     },
     'storage': {
         label: 'Storage & Lakehouse',
         icon: <HardDrive className="w-4 h-4" />,
-        color: 'text-obsidian-success',
-        bgColor: 'bg-obsidian-success/10',
-        borderColor: 'border-obsidian-success/20',
+        color: 'text-foreground/80',
+        bgColor: 'bg-white/[0.02]',
+        borderColor: 'border-white/5',
     },
     'data-catalog': {
         label: 'Data Catalog & Query',
         icon: <Database className="w-4 h-4" />,
-        color: 'text-obsidian-info',
-        bgColor: 'bg-obsidian-info/10',
-        borderColor: 'border-obsidian-info/20',
+        color: 'text-foreground/80',
+        bgColor: 'bg-white/[0.02]',
+        borderColor: 'border-white/5',
     },
     'reporting': {
         label: 'Reporting & BI',
         icon: <PieChart className="w-4 h-4" />,
-        color: 'text-obsidian-purple',
-        bgColor: 'bg-obsidian-purple/10',
-        borderColor: 'border-obsidian-purple/20',
+        color: 'text-foreground/80',
+        bgColor: 'bg-white/[0.02]',
+        borderColor: 'border-white/5',
     },
     'devops': {
         label: 'DevOps & Version Control',
         icon: <GitFork className="w-4 h-4" />,
-        color: 'text-cyan-400',
-        bgColor: 'bg-cyan-900/20',
-        borderColor: 'border-cyan-800/30',
+        color: 'text-foreground/80',
+        bgColor: 'bg-white/[0.02]',
+        borderColor: 'border-white/5',
     },
 };
 
@@ -284,6 +284,12 @@ export default function ComputePage() {
     const [selectedService, setSelectedService] = useState<string | null>(null);
     const [loadingAction, setLoadingAction] = useState<string | null>(null);
 
+    // Stats State
+    const [dockerStats, setDockerStats] = useState<{
+        cpu: { used_percent: number, total_percent: number, cores: number },
+        memory: { used_gb: number, total_gb: number }
+    } | null>(null);
+
     // ─── Docker Actions ───
     const handleDockerAction = async (action: 'start' | 'stop' | 'restart', containerName: string) => {
         setLoadingAction(containerName);
@@ -305,6 +311,21 @@ export default function ComputePage() {
     // ─── Health Check ───
     const checkHealth = useCallback(async () => {
         setIsRefreshing(true);
+
+        try {
+            const statsRes = await fetch('/api/docker/stats');
+            if (statsRes.ok) {
+                const statsData = await statsRes.json();
+                if (statsData.status === 'success') {
+                    setDockerStats({
+                        cpu: statsData.cpu,
+                        memory: statsData.memory
+                    });
+                }
+            }
+        } catch (e) {
+            console.error("Failed to fetch docker stats", e);
+        }
 
         const updatedServices = await Promise.all(
             services.map(async (service) => {
@@ -369,30 +390,42 @@ export default function ComputePage() {
 
     const statusIcon = (status: ServiceStatus) => {
         switch (status) {
-            case 'healthy': return <CheckCircle2 className="w-3.5 h-3.5 text-obsidian-success" />;
-            case 'unhealthy': return <XCircle className="w-3.5 h-3.5 text-obsidian-danger" />;
-            case 'checking': return <Loader2 className="w-3.5 h-3.5 text-obsidian-warning animate-spin" />;
-            default: return <AlertTriangle className="w-3.5 h-3.5 text-obsidian-muted" />;
+            case 'healthy': return <CheckCircle2 className="w-3.5 h-3.5 text-white/40" />;
+            case 'unhealthy': return <XCircle className="w-3.5 h-3.5 text-obsidian-danger/80" />;
+            case 'checking': return <Loader2 className="w-3.5 h-3.5 text-white/40 animate-spin" />;
+            default: return <AlertTriangle className="w-3.5 h-3.5 text-obsidian-muted/50" />;
         }
     };
 
     const statusLabel = (status: ServiceStatus, hasPort: boolean) => {
         switch (status) {
-            case 'healthy': return <span className="text-obsidian-success">{hasPort ? 'Healthy' : 'Running'}</span>;
-            case 'unhealthy': return <span className="text-obsidian-danger">Down</span>;
-            case 'checking': return <span className="text-obsidian-warning">Checking...</span>;
-            default: return <span className="text-obsidian-muted">Unknown</span>;
+            case 'healthy': return <span className="text-white/60">{hasPort ? 'Healthy' : 'Running'}</span>;
+            case 'unhealthy': return <span className="text-obsidian-danger/80">Down</span>;
+            case 'checking': return <span className="text-white/40">Checking...</span>;
+            default: return <span className="text-white/30">Unknown</span>;
         }
     };
 
     return (
-        <div className="flex h-screen bg-obsidian-bg text-foreground font-sans overflow-hidden">
+        <div className="flex h-screen bg-[#09090b] text-foreground font-sans overflow-hidden relative">
             <Sidebar />
-            <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
+            <main className="flex-1 flex flex-col min-w-0 overflow-hidden relative z-10">
 
-                {/* ─── Top Header ─── */}
-                <header className="h-9 bg-obsidian-panel border-b border-obsidian-border flex items-center justify-between px-4 shrink-0">
-                    <div className="flex items-center gap-2">
+                {/* Background ambient light */}
+                <div className="absolute top-0 left-0 w-[800px] h-[800px] bg-obsidian-purple/[0.04] rounded-full blur-[120px] pointer-events-none -translate-x-1/4 -translate-y-1/4 z-0" />
+                <div className="absolute bottom-0 right-0 w-[600px] h-[600px] bg-obsidian-info/[0.03] rounded-full blur-[100px] pointer-events-none translate-x-1/4 translate-y-1/4 z-0" />
+
+                <header className="flex items-center px-4 justify-between shrink-0 h-10 bg-black/40 backdrop-blur-md border-b border-white/5 z-10 w-full relative">
+                    <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-obsidian-info/30 to-transparent opacity-50"></div>
+                    <div className="flex items-center gap-3">
+                        <button
+                            onClick={() => window.dispatchEvent(new CustomEvent('openclaw:toggle-sidebar'))}
+                            className="p-1.5 hover:bg-white/10 rounded-md text-obsidian-muted hover:text-white transition-all active:scale-95 border border-transparent hover:border-obsidian-border/50"
+                            title="Toggle Explorer"
+                        >
+                            <LayoutPanelLeft className="w-4 h-4 drop-shadow-[0_0_8px_rgba(255,255,255,0.2)]" />
+                        </button>
+                        <div className="w-[1px] h-4 bg-obsidian-border/50"></div>
                         <Server className="w-3.5 h-3.5 text-obsidian-info" />
                         <span className="text-[12px] font-bold text-foreground">Compute & Infrastructure</span>
                         <span className="text-[10px] text-obsidian-muted ml-2">Docker Compose Stack</span>
@@ -409,8 +442,8 @@ export default function ComputePage() {
                             className={clsx(
                                 "flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium transition-all",
                                 isRefreshing
-                                    ? "bg-obsidian-muted/20 text-obsidian-muted cursor-not-allowed"
-                                    : "bg-obsidian-success/20 text-obsidian-success hover:bg-obsidian-panel-hover"
+                                    ? "bg-white/[0.02] text-obsidian-muted cursor-not-allowed"
+                                    : "bg-white/[0.02] border border-white/5 text-obsidian-muted hover:text-white hover:bg-white/[0.05]"
                             )}
                         >
                             <RefreshCw className={clsx("w-3 h-3", isRefreshing && "animate-spin")} />
@@ -420,8 +453,8 @@ export default function ComputePage() {
                 </header>
 
                 {/* ─── Overview Cards ─── */}
-                <div className="bg-obsidian-panel border-b border-obsidian-border shrink-0">
-                    <div className="grid grid-cols-4 divide-x divide-obsidian-border">
+                <div className="bg-transparent border-b border-white/5 shrink-0 z-10 relative">
+                    <div className="grid grid-cols-6 divide-x divide-white/5">
                         {/* Total Services */}
                         <div className="p-4">
                             <div className="flex items-center gap-2 text-[10px] text-obsidian-muted uppercase tracking-wider font-bold mb-2">
@@ -433,30 +466,18 @@ export default function ComputePage() {
 
                         {/* Healthy */}
                         <div className="p-4">
-                            <div className="flex items-center gap-2 text-[10px] text-obsidian-success uppercase tracking-wider font-bold mb-2">
-                                <CheckCircle2 className="w-3.5 h-3.5" /> Healthy
+                            <div className="flex items-center gap-2 text-[10px] text-obsidian-muted uppercase tracking-wider font-bold mb-2">
+                                <CheckCircle2 className="w-3.5 h-3.5 text-white/40" /> Healthy
                             </div>
-                            <div className="text-3xl font-mono font-bold text-obsidian-success">{healthyCount}</div>
-                            <div className="w-full bg-obsidian-panel-hover h-1.5 mt-2 rounded-full overflow-hidden">
-                                <div
-                                    className="bg-obsidian-success h-full rounded-full transition-all duration-500"
-                                    style={{ width: `${totalCount > 0 ? (healthyCount / totalCount) * 100 : 0}%` }}
-                                />
-                            </div>
+                            <div className="text-3xl font-mono font-bold text-foreground">{healthyCount}</div>
                         </div>
 
                         {/* Unhealthy */}
                         <div className="p-4">
-                            <div className="flex items-center gap-2 text-[10px] text-obsidian-danger uppercase tracking-wider font-bold mb-2">
-                                <XCircle className="w-3.5 h-3.5" /> Unhealthy
+                            <div className="flex items-center gap-2 text-[10px] text-obsidian-muted uppercase tracking-wider font-bold mb-2">
+                                <XCircle className="w-3.5 h-3.5 text-obsidian-danger/60" /> Unhealthy
                             </div>
-                            <div className="text-3xl font-mono font-bold text-obsidian-danger">{unhealthyCount}</div>
-                            <div className="w-full bg-obsidian-panel-hover h-1.5 mt-2 rounded-full overflow-hidden">
-                                <div
-                                    className="bg-obsidian-danger h-full rounded-full transition-all duration-500"
-                                    style={{ width: `${totalCount > 0 ? (unhealthyCount / totalCount) * 100 : 0}%` }}
-                                />
-                            </div>
+                            <div className="text-3xl font-mono font-bold text-foreground">{unhealthyCount}</div>
                         </div>
 
                         {/* Network */}
@@ -465,49 +486,119 @@ export default function ComputePage() {
                                 <Network className="w-3.5 h-3.5" /> Docker Network
                             </div>
                             <div className="text-xl font-mono font-bold text-foreground flex items-center gap-2">
-                                <Circle className="w-2.5 h-2.5 fill-obsidian-success text-obsidian-success" />
+                                <Circle className="w-2.5 h-2.5 fill-white/20 text-white/20" />
                                 Active
                             </div>
                             <div className="text-[10px] text-obsidian-muted mt-2 font-mono">bridge: agentic-network</div>
+                        </div>
+
+                        {/* Container CPU Usage */}
+                        <div className="p-4 flex flex-col justify-between">
+                            <div>
+                                <div className="flex items-center gap-2 text-[10px] text-obsidian-muted uppercase tracking-wider font-bold mb-3 whitespace-nowrap">
+                                    <Cpu className="w-3.5 h-3.5 shrink-0" /> CPU usage
+                                </div>
+                                <div className="text-3xl font-mono font-medium">
+                                    {dockerStats ? (
+                                        <div className="flex items-baseline gap-1.5">
+                                            <span className="text-foreground">
+                                                {dockerStats.cpu.used_percent}%
+                                            </span>
+                                            <span className="text-sm text-obsidian-muted font-normal">
+                                                / {dockerStats.cpu.total_percent}%
+                                            </span>
+                                        </div>
+                                    ) : (
+                                        <span className="text-obsidian-muted text-sm font-normal">Loading...</span>
+                                    )}
+                                </div>
+                                <div className="text-[10px] text-obsidian-muted mt-2 font-mono">
+                                    {dockerStats ? `(${dockerStats.cpu.cores} CPUs available)` : '---'}
+                                </div>
+                            </div>
+
+                            {/* CPU Tracking Bar (Minimal) */}
+                            {dockerStats && (
+                                <div className="w-full bg-black/40 border border-white/5 h-[3px] mt-4 overflow-hidden rounded-full">
+                                    <div
+                                        className="bg-white/40 h-full transition-all duration-1000 rounded-full"
+                                        style={{ width: `${Math.min(100, (dockerStats.cpu.used_percent / dockerStats.cpu.total_percent) * 100)}%` }}
+                                    />
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Container Memory Usage */}
+                        <div className="p-4 flex flex-col justify-between">
+                            <div>
+                                <div className="flex items-center gap-2 text-[10px] text-obsidian-muted uppercase tracking-wider font-bold mb-3 whitespace-nowrap">
+                                    <Activity className="w-3.5 h-3.5 shrink-0" /> Memory usage
+                                </div>
+                                <div className="text-3xl font-mono font-medium">
+                                    {dockerStats ? (
+                                        <div className="flex items-baseline gap-1.5">
+                                            <span className="text-foreground">
+                                                {dockerStats.memory.used_gb}
+                                                <span className="text-[16px] ml-0.5 text-obsidian-muted">GB</span>
+                                            </span>
+                                            <span className="text-sm text-obsidian-muted font-normal">
+                                                / {dockerStats.memory.total_gb}GB
+                                            </span>
+                                        </div>
+                                    ) : (
+                                        <span className="text-obsidian-muted text-sm font-normal">Loading...</span>
+                                    )}
+                                </div>
+                                <div className="text-[10px] text-obsidian-muted mt-2 font-mono hover:text-foreground transition-colors cursor-default" title="Refresh stats to update">
+                                    {dockerStats && dockerStats.memory.total_gb > 0 ? `${((dockerStats.memory.used_gb / dockerStats.memory.total_gb) * 100).toFixed(1)}% utilized` : '---'}
+                                </div>
+                            </div>
+
+                            {/* Memory Tracking Bar (Minimal) */}
+                            {dockerStats && dockerStats.memory.total_gb > 0 && (
+                                <div className="w-full bg-black/40 border border-white/5 h-[3px] mt-4 overflow-hidden rounded-full">
+                                    <div
+                                        className="bg-white/40 h-full transition-all duration-1000 rounded-full"
+                                        style={{ width: `${Math.min(100, (dockerStats.memory.used_gb / dockerStats.memory.total_gb) * 100)}%` }}
+                                    />
+                                </div>
+                            )}
                         </div>
                     </div>
                 </div>
 
                 {/* ─── Service Groups ─── */}
-                <div className="flex-1 overflow-auto">
+                <div className="flex-1 overflow-auto z-10 relative">
                     {categoryGroups.map(({ key, info, services: catServices }) => (
-                        <div key={key} className="border-b border-obsidian-border">
+                        <div key={key} className="border-b border-white/5">
                             {/* Category Header */}
                             <div
                                 onClick={() => toggleCategory(key)}
-                                className="h-8 bg-obsidian-panel border-b border-obsidian-border flex items-center px-3 gap-2 cursor-pointer hover:bg-obsidian-panel-header transition-colors select-none group"
+                                className="h-10 bg-transparent hover:bg-white/[0.02] transition-colors flex items-center px-4 gap-3 cursor-pointer select-none group"
                             >
                                 {expandedCategories[key] ? (
-                                    <ChevronDown className="w-3.5 h-3.5 text-obsidian-muted" />
+                                    <ChevronDown className="w-4 h-4 text-obsidian-muted group-hover:text-white transition-colors" />
                                 ) : (
-                                    <ChevronRight className="w-3.5 h-3.5 text-obsidian-muted" />
+                                    <ChevronRight className="w-4 h-4 text-obsidian-muted group-hover:text-white transition-colors" />
                                 )}
-                                <div className={clsx("flex items-center gap-1.5", info.color)}>
+                                <div className={clsx("flex items-center gap-2", info.color)}>
                                     {info.icon}
-                                    <span className="text-[11px] font-bold uppercase tracking-wider">{info.label}</span>
+                                    <span className="text-xs font-medium uppercase tracking-widest">{info.label}</span>
                                 </div>
-                                <div className="flex items-center gap-1.5 ml-2">
-                                    <span className={clsx(
-                                        "text-[9px] font-mono px-1.5 py-0.5 rounded",
-                                        info.bgColor, info.borderColor, "border", info.color
-                                    )}>
+                                <div className="flex items-center gap-1.5 ml-3">
+                                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-white/[0.02] border border-white/5 text-obsidian-muted">
                                         {catServices.filter(s => s.status === 'healthy').length}/{catServices.length}
                                     </span>
                                 </div>
-                                <div className="ml-auto flex items-center gap-2">
+                                <div className="ml-auto flex items-center gap-1.5 opacity-60 mix-blend-screen">
                                     {catServices.map(s => (
                                         <div key={s.containerName} title={s.name}>
                                             <Circle className={clsx(
-                                                "w-2 h-2",
-                                                s.status === 'healthy' ? "fill-obsidian-success text-obsidian-success" :
-                                                    s.status === 'unhealthy' ? "fill-obsidian-danger text-obsidian-danger" :
-                                                        s.status === 'checking' ? "fill-obsidian-warning text-obsidian-warning animate-pulse" :
-                                                            "fill-obsidian-muted text-obsidian-muted"
+                                                "w-1.5 h-1.5",
+                                                s.status === 'healthy' ? "fill-white/30 text-white/30" :
+                                                    s.status === 'unhealthy' ? "fill-obsidian-danger/60 text-obsidian-danger/60" :
+                                                        s.status === 'checking' ? "fill-white/20 text-white/20 animate-pulse" :
+                                                            "fill-white/10 text-white/10"
                                             )} />
                                         </div>
                                     ))}
@@ -517,21 +608,21 @@ export default function ComputePage() {
                             {/* Services Table */}
                             {expandedCategories[key] && (
                                 <table className="w-full text-left border-collapse">
-                                    <thead className="bg-obsidian-panel-header">
+                                    <thead className="bg-black/20 backdrop-blur-md">
                                         <tr>
-                                            <th className="p-1.5 px-3 border-r border-b border-obsidian-border w-8 text-center text-[10px] text-obsidian-muted">
+                                            <th className="p-2 px-4 border-b border-white/5 w-10 text-center text-[10px] text-obsidian-muted/50">
                                                 <Activity className="w-3.5 h-3.5 inline" />
                                             </th>
-                                            <th className="p-1.5 px-3 border-r border-b border-obsidian-border text-[10px] text-obsidian-muted font-medium uppercase tracking-wider">Service</th>
-                                            <th className="p-1.5 px-3 border-r border-b border-obsidian-border text-[10px] text-obsidian-muted font-medium uppercase tracking-wider">Container</th>
-                                            <th className="p-1.5 px-3 border-r border-b border-obsidian-border text-[10px] text-obsidian-muted font-medium uppercase tracking-wider">Image</th>
-                                            <th className="p-1.5 px-3 border-r border-b border-obsidian-border text-[10px] text-obsidian-muted font-medium uppercase tracking-wider w-20">Port</th>
-                                            <th className="p-1.5 px-3 border-r border-b border-obsidian-border text-[10px] text-obsidian-muted font-medium uppercase tracking-wider w-24">Status</th>
-                                            <th className="p-1.5 px-3 border-r border-b border-obsidian-border text-[10px] text-obsidian-muted font-medium uppercase tracking-wider w-16">Latency</th>
-                                            <th className="p-1.5 px-3 border-b border-obsidian-border text-[10px] text-obsidian-muted font-medium uppercase tracking-wider w-16 text-center">Actions</th>
+                                            <th className="p-2 px-4 border-b border-white/5 text-[10px] text-obsidian-muted/70 font-medium uppercase tracking-wider">Service</th>
+                                            <th className="p-2 px-4 border-b border-white/5 text-[10px] text-obsidian-muted/70 font-medium uppercase tracking-wider">Container</th>
+                                            <th className="p-2 px-4 border-b border-white/5 text-[10px] text-obsidian-muted/70 font-medium uppercase tracking-wider">Image</th>
+                                            <th className="p-2 px-4 border-b border-white/5 text-[10px] text-obsidian-muted/70 font-medium uppercase tracking-wider w-24">Port</th>
+                                            <th className="p-2 px-4 border-b border-white/5 text-[10px] text-obsidian-muted/70 font-medium uppercase tracking-wider w-24">Status</th>
+                                            <th className="p-2 px-4 border-b border-white/5 text-[10px] text-obsidian-muted/70 font-medium uppercase tracking-wider w-20">Latency</th>
+                                            <th className="p-2 px-4 border-b border-white/5 text-[10px] text-obsidian-muted/70 font-medium uppercase tracking-wider w-20 text-center">Actions</th>
                                         </tr>
                                     </thead>
-                                    <tbody className="font-mono text-[12px]">
+                                    <tbody className="font-mono text-xs">
                                         {catServices.map((service) => (
                                             <tr
                                                 key={service.containerName}
@@ -539,60 +630,60 @@ export default function ComputePage() {
                                                     selectedService === service.containerName ? null : service.containerName
                                                 )}
                                                 className={clsx(
-                                                    "hover:bg-obsidian-panel transition-colors cursor-pointer group",
-                                                    selectedService === service.containerName && "bg-obsidian-panel"
+                                                    "hover:bg-white/[0.02] transition-colors cursor-pointer group border-b border-white/5 last:border-none",
+                                                    selectedService === service.containerName ? "bg-white/[0.04]" : "bg-transparent"
                                                 )}
                                             >
-                                                <td className="p-1.5 border-r border-b border-obsidian-border text-center">
+                                                <td className="p-2 border-r border-white/5 text-center">
                                                     {statusIcon(service.status)}
                                                 </td>
-                                                <td className="p-1.5 px-3 border-r border-b border-obsidian-border">
-                                                    <div className="flex items-center gap-2">
-                                                        <span className={clsx(info.color)}>{service.icon}</span>
+                                                <td className="p-2 px-4 border-r border-white/5">
+                                                    <div className="flex items-center gap-3">
+                                                        <span className={clsx(info.color, "opacity-80 group-hover:opacity-100 transition-opacity")}>{service.icon}</span>
                                                         <div>
-                                                            <div className="text-foreground font-medium text-[12px]">{service.name}</div>
-                                                            <div className="text-[10px] text-obsidian-muted">{service.description}</div>
+                                                            <div className="text-foreground/90 font-medium text-xs tracking-wide">{service.name}</div>
+                                                            <div className="text-[10px] text-obsidian-muted font-sans mt-0.5">{service.description}</div>
                                                         </div>
                                                     </div>
                                                 </td>
-                                                <td className="p-1.5 px-3 border-r border-b border-obsidian-border text-foreground text-[11px]">
+                                                <td className="p-2 px-4 border-r border-white/5 text-foreground/70">
                                                     {service.containerName}
                                                 </td>
-                                                <td className="p-1.5 px-3 border-r border-b border-obsidian-border text-obsidian-muted text-[11px]">
+                                                <td className="p-2 px-4 border-r border-white/5 text-obsidian-muted/80">
                                                     {service.image}
                                                 </td>
-                                                <td className="p-1.5 px-3 border-r border-b border-obsidian-border">
+                                                <td className="p-2 px-4 border-r border-white/5">
                                                     {service.externalPort ? (
-                                                        <span className="text-foreground text-[11px]">:{service.externalPort}</span>
+                                                        <span className="text-foreground/80">:{service.externalPort}</span>
                                                     ) : (
-                                                        <span className="text-obsidian-muted text-[10px] italic">internal</span>
+                                                        <span className="text-obsidian-muted/50 text-[10px] italic">internal</span>
                                                     )}
                                                 </td>
-                                                <td className="p-1.5 px-3 border-r border-b border-obsidian-border text-[11px]">
+                                                <td className="p-2 px-4 border-r border-white/5">
                                                     {statusLabel(service.status, !!service.externalPort)}
                                                 </td>
-                                                <td className="p-1.5 px-3 border-r border-b border-obsidian-border text-[11px]">
+                                                <td className="p-2 px-4 border-r border-white/5">
                                                     {service.responseTime ? (
                                                         <span className={clsx(
-                                                            service.responseTime < 100 ? "text-obsidian-success" :
-                                                                service.responseTime < 500 ? "text-obsidian-warning" :
-                                                                    "text-obsidian-danger"
+                                                            service.responseTime < 100 ? "text-obsidian-success/80" :
+                                                                service.responseTime < 500 ? "text-obsidian-warning/80" :
+                                                                    "text-obsidian-danger/80"
                                                         )}>
                                                             {service.responseTime}ms
                                                         </span>
                                                     ) : (
-                                                        <span className="text-obsidian-muted">—</span>
+                                                        <span className="text-obsidian-muted/40">—</span>
                                                     )}
                                                 </td>
-                                                <td className="p-1.5 px-3 border-b border-obsidian-border">
-                                                    <div className="flex items-center justify-end gap-1">
+                                                <td className="p-2 px-4">
+                                                    <div className="flex items-center justify-end gap-1.5 opacity-60 group-hover:opacity-100 transition-opacity">
                                                         {service.uiUrl && (
                                                             <a
                                                                 href={service.uiUrl}
                                                                 target="_blank"
                                                                 rel="noopener noreferrer"
                                                                 onClick={(e) => e.stopPropagation()}
-                                                                className="btn-icon w-6 h-6 hover:bg-obsidian-muted/20 text-obsidian-muted hover:text-foreground active:scale-95"
+                                                                className="btn-icon w-7 h-7 hover:bg-white/10 text-obsidian-muted hover:text-white rounded-md flex items-center justify-center transition-all active:scale-95 border border-transparent hover:border-white/10"
                                                                 title={`Open ${service.name} UI`}
                                                             >
                                                                 <ArrowUpRight className="w-3.5 h-3.5" />
@@ -601,25 +692,25 @@ export default function ComputePage() {
                                                         <button
                                                             onClick={(e) => { e.stopPropagation(); handleDockerAction(service.status === 'healthy' ? 'restart' : 'start', service.containerName); }}
                                                             disabled={loadingAction === service.containerName}
-                                                            className="btn-icon w-6 h-6 hover:bg-obsidian-muted/20 text-obsidian-muted hover:text-foreground active:scale-95"
+                                                            className="btn-icon w-7 h-7 hover:bg-white/10 text-obsidian-muted hover:text-white rounded-md flex items-center justify-center transition-all active:scale-95 border border-transparent hover:border-white/10"
                                                             title={service.status === 'healthy' ? 'Restart Container' : 'Start Container'}
                                                         >
                                                             {loadingAction === service.containerName ? (
-                                                                <Loader2 className="w-3.5 h-3.5 animate-spin text-obsidian-info" />
+                                                                <Loader2 className="w-3.5 h-3.5 animate-spin text-white/50" />
                                                             ) : service.status === 'healthy' ? (
                                                                 <RefreshCw className="w-3.5 h-3.5" />
                                                             ) : (
-                                                                <Play className="w-3.5 h-3.5 text-obsidian-success fill-obsidian-success/20" />
+                                                                <Play className="w-3.5 h-3.5 text-white/50 fill-white/20" />
                                                             )}
                                                         </button>
                                                         {service.status === 'healthy' && (
                                                             <button
                                                                 onClick={(e) => { e.stopPropagation(); handleDockerAction('stop', service.containerName); }}
                                                                 disabled={loadingAction === service.containerName}
-                                                                className="btn-icon w-6 h-6 hover:bg-obsidian-danger/20 text-obsidian-muted hover:text-obsidian-danger active:scale-95"
+                                                                className="btn-icon w-7 h-7 hover:bg-obsidian-danger/20 text-obsidian-muted hover:text-obsidian-danger rounded-md flex items-center justify-center transition-all active:scale-95 border border-transparent hover:border-obsidian-danger/30"
                                                                 title="Stop Container"
                                                             >
-                                                                <Square className="w-3.5 h-3.5" />
+                                                                <Square className="w-3 h-3 fill-current" />
                                                             </button>
                                                         )}
                                                     </div>
@@ -634,14 +725,14 @@ export default function ComputePage() {
                 </div>
 
                 {/* ─── Status Bar ─── */}
-                <div className="h-6 bg-obsidian-panel border-t border-obsidian-border flex items-center px-3 text-[10px] text-obsidian-muted gap-4 shrink-0">
-                    <div className="flex items-center gap-1">
-                        <Boxes className="w-3.5 h-3.5" />
-                        <span className="text-foreground">{totalCount}</span> services
+                <div className="h-8 bg-black/40 backdrop-blur-xl border-t border-white/5 flex items-center px-4 text-[10px] text-obsidian-muted gap-5 shrink-0 z-10 relative">
+                    <div className="flex items-center gap-1.5">
+                        <Boxes className="w-3.5 h-3.5 text-foreground/50" />
+                        <span className="text-foreground/80 font-medium">{totalCount}</span> services
                     </div>
-                    <div className="flex items-center gap-1">
-                        <CheckCircle2 className="w-3.5 h-3.5 text-obsidian-success" />
-                        <span className="text-obsidian-success">{healthyCount}</span> healthy
+                    <div className="flex items-center gap-1.5">
+                        <CheckCircle2 className="w-3 h-3 text-white/40" />
+                        <span className="text-foreground/80 font-medium">{healthyCount}</span> healthy
                     </div>
                     {unhealthyCount > 0 && (
                         <div className="flex items-center gap-1">

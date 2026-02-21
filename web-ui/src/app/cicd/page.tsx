@@ -1,11 +1,12 @@
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
     GitPullRequest, ExternalLink, RefreshCw, Loader2, AlertCircle,
     CheckCircle2, Maximize2, Minimize2, Search, Star, Clock,
     GitBranch, GitCommit, Play, XCircle, ChevronRight, X, PackageOpen,
     Folder, FileCode, FileText, File as FileIcon, FolderOpen,
-    Plus, ArrowUpRight, GitMerge, MessageSquare, ChevronDown, Eye, Code2, Trash2
+    Plus, ArrowUpRight, GitMerge, MessageSquare, ChevronDown, Eye, Code2, Trash2, Copy,
+    BookOpen, Scale, Users, Tag, Link as LinkIcon, Clipboard, Check, LayoutPanelLeft
 } from 'lucide-react';
 import clsx from 'clsx';
 import { Sidebar } from '@/components/Sidebar';
@@ -44,6 +45,7 @@ interface GiteaBranch {
 interface GiteaCommit {
     sha: string;
     commit: { message: string; author: { name: string; date: string } };
+    author?: { avatar_url?: string; login?: string };
     html_url: string;
 }
 
@@ -179,6 +181,16 @@ function formatBytes(bytes: number): string {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+const LANG_COLORS: Record<string, string> = {
+    Python: '#3572A5', TypeScript: '#3178c6', JavaScript: '#f1e05a', HTML: '#e34c26',
+    CSS: '#563d7c', Shell: '#89e051', Go: '#00ADD8', Rust: '#dea584',
+    Java: '#b07219', Ruby: '#701516', PHP: '#4F5D95', Swift: '#F05138',
+    Kotlin: '#A97BFF', 'C#': '#178600', C: '#555555', 'C++': '#f34b7d',
+    Dockerfile: '#384d54', YAML: '#cb171e', JSON: '#292929', Makefile: '#427819',
+    SQL: '#e38c00', Lua: '#000080', R: '#198CE7', Scala: '#c22d40',
+    HCL: '#844FBA', Perl: '#0298c3', Markdown: '#083fa1',
+};
+
 async function fetchJsonWithTimeout(url: string, timeoutMs = 10000) {
     const controller = new AbortController();
     const timer = window.setTimeout(() => controller.abort(), timeoutMs);
@@ -305,7 +317,9 @@ export default function CICDPage() {
 
     // File tree state
     const [treeEntries, setTreeEntries] = useState<Record<string, TreeEntry[]>>({});
-    const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
+
+    const [currentPath, setCurrentPath] = useState<string>('');
+    const [readmeContent, setReadmeContent] = useState<string | null>(null);
     const [selectedFile, setSelectedFile] = useState<string | null>(null);
     const [fileContent, setFileContent] = useState<string>('');
     const [fileLoading, setFileLoading] = useState(false);
@@ -372,6 +386,12 @@ export default function CICDPage() {
     const [showCreateBranch, setShowCreateBranch] = useState(false);
     const [newBranchName, setNewBranchName] = useState('');
     const [baseBranch, setBaseBranch] = useState('');
+
+    // About sidebar
+    const [repoLanguages, setRepoLanguages] = useState<Record<string, number>>({});
+    const [repoTopics, setRepoTopics] = useState<string[]>([]);
+    const [showCloneDropdown, setShowCloneDropdown] = useState(false);
+    const [cloneCopied, setCloneCopied] = useState<string | null>(null);
 
     // ─── Health Check ───
     const checkHealth = useCallback(async () => {
@@ -468,10 +488,22 @@ export default function CICDPage() {
         try {
             const refParam = ref ? `&ref=${encodeURIComponent(ref)}` : '';
             const res = await fetch(`/api/gitea/repos/${owner}/${repo}/file?path=${encodeURIComponent(path)}${refParam}`);
+            if (!res.ok) {
+                const errData = await res.json().catch(() => ({}));
+                console.error('[CICD] fetchFileContent error:', res.status, errData);
+                setFileContent(`// Error ${res.status}: Could not load file "${path}"\n// ${errData?.detail || 'Unknown error'}`);
+                setEditSha('');
+                return;
+            }
             const data = await res.json();
-            setFileContent(data.content || '');
+            const content = data.content ?? '';
+            console.log('[CICD] File loaded:', path, 'length:', content.length);
+            setFileContent(content);
             setEditSha(data.sha || '');
-        } catch { setFileContent('[Error loading file]'); }
+        } catch (err) {
+            console.error('[CICD] fetchFileContent exception:', err);
+            setFileContent(`// Error loading file "${path}"`);
+        }
         finally { setFileLoading(false); }
     }, []);
 
@@ -486,17 +518,35 @@ export default function CICDPage() {
         finally { setCommitLoading(false); }
     }, []);
 
+    // ─── Fetch Languages & Topics ───
+    const fetchLanguages = useCallback(async (owner: string, repo: string) => {
+        try {
+            const res = await fetch(`/api/gitea/repos/${owner}/${repo}/languages`);
+            if (res.ok) { const d = await res.json(); setRepoLanguages(d || {}); }
+        } catch { setRepoLanguages({}); }
+    }, []);
+
+    const fetchTopics = useCallback(async (owner: string, repo: string) => {
+        try {
+            const res = await fetch(`/api/gitea/repos/${owner}/${repo}/topics`);
+            if (res.ok) { const d = await res.json(); setRepoTopics(d?.topics || []); }
+        } catch { setRepoTopics([]); }
+    }, []);
+
     // ─── Select Repo ───
     const selectRepo = useCallback(async (repo: GiteaRepo) => {
         const defaultBranch = repo.default_branch || 'main';
         setSelectedRepo(repo);
         setDetailTab('files');
         setDetailLoading(true);
+        setCurrentPath('');
         setSelectedFile(null);
         setFileContent('');
         setSelectedCommit(null);
         setTreeEntries({});
-        setExpandedDirs(new Set());
+        setRepoLanguages({});
+        setRepoTopics([]);
+
         setActiveBranch(defaultBranch);
         setShowBranchDropdown(false);
         setSelectedPR(null);
@@ -509,9 +559,11 @@ export default function CICDPage() {
             fetchPulls(owner, name, 'all'),
             fetchActions(owner, name),
             fetchTags(owner, name),
+            fetchLanguages(owner, name),
+            fetchTopics(owner, name),
         ]);
         setDetailLoading(false);
-    }, [fetchTree, fetchBranches, fetchCommits, fetchPulls, fetchActions, fetchTags]);
+    }, [fetchTree, fetchBranches, fetchCommits, fetchPulls, fetchActions, fetchTags, fetchLanguages, fetchTopics]);
 
     // ─── Switch Branch ───
     const switchBranch = useCallback(async (branchName: string) => {
@@ -519,10 +571,11 @@ export default function CICDPage() {
         const [owner, name] = selectedRepo.full_name.split('/');
         setActiveBranch(branchName);
         setShowBranchDropdown(false);
+        setCurrentPath('');
         setSelectedFile(null);
         setFileContent('');
         setTreeEntries({});
-        setExpandedDirs(new Set());
+
         await Promise.all([
             fetchTree(owner, name, '', branchName),
             fetchCommits(owner, name, branchName),
@@ -641,19 +694,14 @@ export default function CICDPage() {
     }, [selectedRepo, fetchActions]);
 
     // ─── Handlers ───
-    const toggleDir = async (path: string) => {
+    const handleDirClick = async (path: string) => {
         if (!selectedRepo) return;
-        const newExpanded = new Set(expandedDirs);
-        if (newExpanded.has(path)) {
-            newExpanded.delete(path);
-        } else {
-            newExpanded.add(path);
-            if (!treeEntries[path]) {
-                const [owner, name] = selectedRepo.full_name.split('/');
-                await fetchTree(owner, name, path, activeBranch);
-            }
+        setCurrentPath(path);
+        setSelectedFile(null);
+        if (!treeEntries[path]) {
+            const [owner, name] = selectedRepo.full_name.split('/');
+            await fetchTree(owner, name, path, activeBranch);
         }
-        setExpandedDirs(newExpanded);
     };
 
     const handleFileClick = (path: string) => {
@@ -799,43 +847,30 @@ export default function CICDPage() {
         (r.description || '').toLowerCase().includes(search.toLowerCase())
     );
 
-    // ─── Render File Tree ───
-    const renderTree = (parentPath: string, level: number = 0) => {
-        const entries = treeEntries[parentPath || '/'] || [];
-        return entries.map(entry => {
-            const isDir = entry.type === 'dir';
-            const isExpanded = expandedDirs.has(entry.path);
-            const Icon = isDir ? (isExpanded ? FolderOpen : Folder) : fileIcon(entry.name);
-            const color = isDir ? '#6895a8' : fileColor(entry.name);
-            const isSelected = selectedFile === entry.path;
+    // ─── Fetch README ───
+    useEffect(() => {
+        const loadReadme = async () => {
+            if (!selectedRepo) return;
+            const entries = treeEntries[currentPath || '/'] || [];
+            const readmeEntry = entries.find(e => e.name.toLowerCase() === 'readme.md' && e.type === 'file');
+            if (readmeEntry) {
+                const [owner, name] = selectedRepo.full_name.split('/');
+                const refParam = activeBranch ? `&ref=${encodeURIComponent(activeBranch)}` : '';
+                try {
+                    const res = await fetch(`/api/gitea/repos/${owner}/${name}/file?path=${encodeURIComponent(readmeEntry.path)}${refParam}`);
+                    const data = await res.json();
+                    setReadmeContent(data.content || '');
+                } catch {
+                    setReadmeContent(null);
+                }
+            } else {
+                setReadmeContent(null);
+            }
+        };
+        loadReadme();
+    }, [treeEntries, currentPath, selectedRepo, activeBranch]);
 
-            return (
-                <div key={entry.path}>
-                    <div
-                        className={clsx(
-                            "flex items-center gap-1.5 py-[3px] px-2 cursor-pointer transition-colors text-[12px]",
-                            isSelected
-                                ? "bg-obsidian-info/20 text-white"
-                                : "text-foreground hover:bg-obsidian-border-active"
-                        )}
-                        style={{ paddingLeft: `${level * 16 + 8}px` }}
-                        onClick={() => isDir ? toggleDir(entry.path) : handleFileClick(entry.path)}
-                    >
-                        {isDir && (
-                            <ChevronRight className={clsx("w-3 h-3 text-obsidian-muted transition-transform shrink-0", isExpanded && "rotate-90")} />
-                        )}
-                        {!isDir && <div className="w-3" />}
-                        <Icon className="w-4 h-4 shrink-0" style={{ color }} />
-                        <span className="truncate">{entry.name}</span>
-                        {!isDir && entry.size > 0 && (
-                            <span className="ml-auto text-[9px] text-obsidian-muted">{formatBytes(entry.size)}</span>
-                        )}
-                    </div>
-                    {isDir && isExpanded && renderTree(entry.path, level + 1)}
-                </div>
-            );
-        });
-    };
+
 
     // ─── Tabs Config ───
     const tabs: { key: DetailTab; label: string; icon: typeof GitBranch; count?: number }[] = [
@@ -886,13 +921,31 @@ export default function CICDPage() {
 
 
     return (
-        <div className="flex h-screen bg-obsidian-bg text-foreground font-sans overflow-hidden">
-            {!isFullscreen && <Sidebar />}
+        <div className="flex h-screen bg-[#09090b] text-foreground font-sans overflow-hidden relative">
+            {/* Ambient Lighting */}
+            <div className="absolute top-0 left-0 w-[800px] h-[800px] bg-obsidian-purple/[0.04] rounded-full blur-[120px] pointer-events-none -translate-x-1/4 -translate-y-1/4" />
+            <div className="absolute bottom-0 right-0 w-[600px] h-[600px] bg-obsidian-info/[0.03] rounded-full blur-[100px] pointer-events-none translate-x-1/4 translate-y-1/4" />
 
-            <div className="flex-1 flex flex-col min-w-0">
+            {/* Sidebar */}
+            <div className="relative z-10 shrink-0">
+                {!isFullscreen && <Sidebar />}
+            </div>
+
+            <main className="flex-1 flex flex-col min-w-0 overflow-hidden relative z-10">
                 {/* ─── Top Bar ─── */}
-                <div className="h-9 bg-obsidian-panel border-b border-obsidian-border flex items-center px-4 justify-between shrink-0">
+                <div className="flex items-center px-4 justify-between shrink-0 h-10 bg-black/40 backdrop-blur-md border-b border-white/5 z-10 w-full relative">
+                    {/* Top Edge Gradient Branding */}
+                    <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-obsidian-info/30 to-transparent opacity-50"></div>
+
                     <div className="flex items-center gap-3 text-[12px]">
+                        <button
+                            onClick={() => window.dispatchEvent(new CustomEvent('openclaw:toggle-sidebar'))}
+                            className="p-1.5 hover:bg-white/10 rounded-md text-obsidian-muted hover:text-white transition-all active:scale-95 border border-transparent hover:border-obsidian-border/50"
+                            title="Toggle Explorer"
+                        >
+                            <LayoutPanelLeft className="w-4 h-4 drop-shadow-[0_0_8px_rgba(255,255,255,0.2)]" />
+                        </button>
+                        <div className="w-[1px] h-4 bg-obsidian-border/50"></div>
                         <GitPullRequest className="w-3.5 h-3.5" style={{ color: '#a78bfa' }} />
                         <span className="text-foreground font-medium">Source Control</span>
                         <span className="text-obsidian-muted">·</span>
@@ -942,73 +995,59 @@ export default function CICDPage() {
                         </div>
                     ) : (
                         /* ─── Detail Area ─── */
-                        <div className="flex-1 flex flex-col min-w-0">
-                            {/* Repo Header + Tabs */}
-                            <div className="bg-obsidian-panel border-b border-obsidian-border shrink-0">
-                                <div className="flex items-center justify-between px-4 h-10">
-                                    <div className="flex items-center gap-2 min-w-0">
-                                        <GitPullRequest className="w-3.5 h-3.5 shrink-0" style={{ color: '#a78bfa' }} />
-                                        <span className="text-[12px] font-bold text-foreground truncate">{selectedRepo.full_name}</span>
-                                        {/* Branch switcher */}
-                                        <div className="relative">
+                        <div className="flex-1 flex flex-col min-w-0 bg-transparent">
+                            {/* GitHub-style Repo Header */}
+                            <div className="bg-black/20 backdrop-blur-md border-b border-white/5 shrink-0 flex flex-col pt-4">
+                                {/* Top Row - Title & Actions */}
+                                <div className="flex items-start justify-between px-6 mb-4">
+                                    <div className="flex items-center gap-3 min-w-0">
+                                        <GitPullRequest className="w-5 h-5 shrink-0" style={{ color: '#a78bfa' }} />
+                                        <div className="flex items-center gap-1.5 text-[18px] text-foreground truncate">
+                                            <span className="text-obsidian-info hover:underline cursor-pointer">{selectedRepo.owner.login}</span>
+                                            <span className="text-obsidian-muted">/</span>
+                                            <span className="font-bold text-obsidian-info hover:underline cursor-pointer">{selectedRepo.name}</span>
+                                        </div>
+                                        <span className="border border-obsidian-border text-obsidian-muted text-[10px] px-2 py-0.5 rounded-full font-medium ml-2">
+                                            Public
+                                        </span>
+                                    </div>
+
+                                    {/* Action Buttons */}
+                                    <div className="flex items-center gap-2">
+                                        {/* Utility Buttons */}
+                                        <div className="flex items-center gap-1">
                                             <button
-                                                onClick={() => setShowBranchDropdown(!showBranchDropdown)}
-                                                className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-obsidian-info/15 text-obsidian-info font-mono hover:bg-obsidian-info/25 transition-colors active:scale-95"
+                                                onClick={() => { navigator.clipboard.writeText(selectedRepo.html_url + '.git'); }}
+                                                className="p-1.5 hover:bg-obsidian-border-active rounded-md text-obsidian-muted hover:text-foreground transition-colors"
+                                                title="Copy clone URL"
                                             >
-                                                <GitBranch className="w-3.5 h-3.5" />
-                                                {activeBranch || selectedRepo.default_branch}
-                                                <ChevronDown className="w-2.5 h-2.5" />
+                                                <Code2 className="w-3.5 h-3.5" />
                                             </button>
-                                            {showBranchDropdown && (
-                                                <>
-                                                    <div className="fixed inset-0 z-10" onClick={() => setShowBranchDropdown(false)} />
-                                                    <div className="absolute top-full left-0 mt-1 min-w-[180px] bg-obsidian-panel/80 backdrop-blur-md border border-obsidian-border rounded-md shadow-2xl z-20 py-1 max-h-60 overflow-auto">
-                                                        {branches.map(b => (
-                                                            <button key={b.name} onClick={() => switchBranch(b.name)}
-                                                                className={clsx("w-full text-left px-3 py-1.5 text-[11px] font-mono flex items-center gap-2 transition-colors",
-                                                                    activeBranch === b.name ? "text-obsidian-info bg-obsidian-info/10" : "text-foreground hover:bg-obsidian-border-active"
-                                                                )}>
-                                                                <GitBranch className="w-3.5 h-3.5 shrink-0 opacity-60" />
-                                                                <span className="truncate">{b.name}</span>
-                                                                {b.protected && <span className="ml-auto text-[9px] text-obsidian-muted shrink-0">protected</span>}
-                                                            </button>
-                                                        ))}
-                                                    </div>
-                                                </>
-                                            )}
+                                            <a href={selectedRepo.html_url} target="_blank" rel="noopener noreferrer"
+                                                className="p-1.5 hover:bg-obsidian-border-active rounded-md text-obsidian-muted hover:text-foreground transition-colors">
+                                                <ExternalLink className="w-3.5 h-3.5" />
+                                            </a>
+                                            <button onClick={() => { setSelectedRepo(null); setSelectedFile(null); setFileContent(''); setSelectedCommit(null); }}
+                                                className="p-1.5 hover:bg-obsidian-danger/20 rounded-md text-obsidian-muted hover:text-obsidian-danger transition-colors ml-1">
+                                                <X className="w-4 h-4" />
+                                            </button>
                                         </div>
                                     </div>
-                                    <div className="flex items-center gap-1">
-                                        <button
-                                            onClick={() => { navigator.clipboard.writeText(selectedRepo.html_url + '.git'); }}
-                                            className="p-1 hover:bg-[#3c3f41] rounded text-obsidian-muted hover:text-foreground transition-colors"
-                                            title="Copy clone URL"
-                                        >
-                                            <Code2 className="w-3.5 h-3.5" />
-                                        </button>
-                                        <a href={selectedRepo.html_url} target="_blank" rel="noopener noreferrer"
-                                            className="p-1 hover:bg-[#3c3f41] rounded text-obsidian-muted hover:text-foreground transition-colors">
-                                            <ExternalLink className="w-3.5 h-3.5" />
-                                        </a>
-                                        <button onClick={() => { setSelectedRepo(null); setSelectedFile(null); setFileContent(''); setSelectedCommit(null); }}
-                                            className="p-1 hover:bg-[#3c3f41] rounded text-obsidian-muted hover:text-foreground transition-colors">
-                                            <X className="w-3.5 h-3.5" />
-                                        </button>
-                                    </div>
                                 </div>
-                                {/* Tabs */}
-                                <div className="flex">
+
+                                {/* Tabs Row */}
+                                <div className="flex px-4 overflow-x-auto no-scrollbar">
                                     {tabs.map(tab => (
                                         <button key={tab.key} onClick={() => setDetailTab(tab.key)}
-                                            className={clsx("flex items-center gap-1.5 px-4 py-2 text-[11px] font-medium transition-colors border-b-2",
+                                            className={clsx("flex items-center gap-1.5 px-4 py-2.5 text-[12px] font-medium transition-colors border-b-2 whitespace-nowrap",
                                                 detailTab === tab.key
-                                                    ? "text-foreground border-obsidian-info bg-obsidian-panel"
-                                                    : "text-obsidian-muted border-transparent hover:text-foreground hover:bg-obsidian-border-active/30"
+                                                    ? "text-foreground border-obsidian-info bg-white/[0.04]"
+                                                    : "text-obsidian-muted border-transparent hover:text-foreground hover:bg-white/[0.02] hover:border-white/5"
                                             )}>
-                                            <tab.icon className="w-3.5 h-3.5" />
+                                            <tab.icon className="w-4 h-4" />
                                             {tab.label}
                                             {tab.count !== undefined && tab.count > 0 && (
-                                                <span className="text-[9px] bg-obsidian-border-active rounded-full px-1.5 py-0.5 text-obsidian-muted transition-all active:scale-95">{tab.count}</span>
+                                                <span className="text-[10px] bg-white/5 rounded-full px-2 py-0.5 text-obsidian-muted font-semibold transition-all active:scale-95">{tab.count}</span>
                                             )}
                                         </button>
                                     ))}
@@ -1021,231 +1060,490 @@ export default function CICDPage() {
                                     <div className="flex-1 flex items-center justify-center"><Loader2 className="w-6 h-6 text-obsidian-info animate-spin" /></div>
                                 ) : detailTab === 'files' ? (
                                     /* ─── Files Tab ─── */
-                                    <div className="flex-1 flex overflow-hidden">
-                                        {/* File Tree */}
-                                        <div className="w-[260px] border-r border-obsidian-border overflow-auto shrink-0 py-1 flex flex-col">
-                                            {/* File Tree Actions */}
-                                            <div className="px-2 py-1 flex items-center justify-between text-[10px] text-obsidian-muted border-b border-obsidian-border/30 mb-1">
-                                                <span>Explorer</span>
-                                                <button
-                                                    onClick={() => setShowCreateFile(!showCreateFile)}
-                                                    className="p-1 hover:bg-obsidian-border-active rounded hover:text-foreground transition-colors"
-                                                    title="New File"
-                                                >
-                                                    <Plus className="w-3.5 h-3.5" />
-                                                </button>
-                                            </div>
+                                    <div className="flex-1 flex flex-col overflow-auto items-center py-6 backdrop-blur-sm">
+                                        <div className="w-full max-w-[1240px] px-6">
+                                            {!selectedFile ? (
+                                                /* File Explorer */
+                                                <div className="flex gap-8">
+                                                    {/* ─── Left Column: File Table ─── */}
+                                                    <div className="flex-1 min-w-0 flex flex-col gap-4">
+                                                        {/* Top Action Bar */}
+                                                        <div className="flex items-center justify-between">
+                                                            <div className="flex items-center gap-3">
+                                                                {/* Breadcrumbs based on currentPath */}
+                                                                <div className="flex items-center text-[14px] font-bold text-obsidian-info">
+                                                                    <span className="hover:underline cursor-pointer" onClick={() => handleDirClick('')}>
+                                                                        {selectedRepo.name}
+                                                                    </span>
+                                                                    {currentPath.split('/').filter(Boolean).map((part, i, arr) => {
+                                                                        const path = arr.slice(0, i + 1).join('/');
+                                                                        return (
+                                                                            <React.Fragment key={path}>
+                                                                                <span className="text-obsidian-muted px-1.5 font-normal">/</span>
+                                                                                <span className="hover:underline cursor-pointer" onClick={() => handleDirClick(path)}>
+                                                                                    {part}
+                                                                                </span>
+                                                                            </React.Fragment>
+                                                                        );
+                                                                    })}
+                                                                </div>
+                                                            </div>
+                                                            <div className="flex items-center gap-3">
+                                                                {/* Branch Selector */}
+                                                                <div className="relative flex items-center bg-white/[0.02] border border-white/10 rounded-md px-3 py-1.5 transition-colors shadow-sm hover:border-obsidian-info/50 group">
+                                                                    <GitBranch className="w-3.5 h-3.5 text-obsidian-muted mr-2 group-hover:text-obsidian-info transition-colors" />
+                                                                    <select
+                                                                        className="bg-transparent text-[11px] font-medium text-foreground outline-none cursor-pointer appearance-none pr-5 min-w-[70px]"
+                                                                        value={activeBranch || ''}
+                                                                        onChange={e => switchBranch(e.target.value)}
+                                                                    >
+                                                                        {branches.map(b => <option key={b.name} value={b.name} className="bg-obsidian-panel">{b.name}</option>)}
+                                                                    </select>
+                                                                    <ChevronDown className="w-3 h-3 text-obsidian-muted absolute right-2.5 pointer-events-none group-hover:text-obsidian-info transition-colors" />
+                                                                </div>
 
-                                            {/* Create File Input */}
-                                            {showCreateFile && (
-                                                <div className="px-2 py-1 mb-2 bg-obsidian-panel/50 backdrop-blur-md rounded-md">
-                                                    <div className="flex items-center gap-1 bg-obsidian-bg border border-obsidian-info/50 rounded px-1.5 py-1 transition-all active:scale-95">
-                                                        <FileIcon className="w-3.5 h-3.5 text-obsidian-muted shrink-0" />
-                                                        <input
-                                                            autoFocus
-                                                            type="text"
-                                                            placeholder="path/to/file.txt"
-                                                            className="w-full bg-transparent text-[11px] outline-none text-foreground placeholder-obsidian-muted/50"
-                                                            value={newFilePath}
-                                                            onChange={e => setNewFilePath(e.target.value)}
-                                                            onKeyDown={e => {
-                                                                if (e.key === 'Enter') handleCreateFile();
-                                                                if (e.key === 'Escape') setShowCreateFile(false);
-                                                            }}
-                                                        />
-                                                    </div>
-                                                    <div className="flex justify-end gap-1 mt-1">
-                                                        <button onClick={() => setShowCreateFile(false)} className="text-[9px] px-1.5 py-0.5 text-obsidian-muted hover:text-foreground rounded hover:bg-obsidian-border-active transition-all active:scale-95">Cancel</button>
-                                                        <button onClick={handleCreateFile} disabled={!newFilePath} className="text-[9px] px-1.5 py-0.5 bg-obsidian-info/20 text-obsidian-info rounded hover:bg-obsidian-info/30 disabled:opacity-50 transition-all active:scale-95">Create</button>
-                                                    </div>
-                                                </div>
-                                            )}
-
-                                            {renderTree('', 0)}
-                                            {(treeEntries['/']?.length === 0) && (
-                                                <div className="text-center py-8 text-obsidian-muted text-[11px]">Empty repository</div>
-                                            )}
-                                        </div>
-                                        {/* File Content */}
-                                        <div className="flex-1 overflow-auto bg-obsidian-bg">
-                                            {fileLoading ? (
-                                                <div className="flex items-center justify-center h-full"><Loader2 className="w-5 h-5 text-obsidian-info animate-spin" /></div>
-                                            ) : selectedFile ? (
-                                                <div className="flex flex-col h-full">
-                                                    {/* File header */}
-                                                    <div className="sticky top-0 h-8 bg-obsidian-panel border-b border-obsidian-border flex items-center px-4 gap-2 z-10 shrink-0">
-                                                        <FileCode className="w-3.5 h-3.5" style={{ color: fileColor(selectedFile) }} />
-                                                        <span className="text-[11px] text-foreground font-mono flex-1 truncate">{selectedFile}</span>
-                                                        <span className="text-[9px] text-obsidian-muted font-mono uppercase">{extToLang(selectedFile)}</span>
-                                                        {isMarkdown(selectedFile) && !editMode && (
-                                                            <button
-                                                                onClick={() => setMdPreview(!mdPreview)}
-                                                                className={clsx("p-1 rounded transition-colors",
-                                                                    mdPreview ? "bg-obsidian-info/20 text-obsidian-info" : "text-obsidian-muted hover:text-foreground"
-                                                                )}
-                                                                title={mdPreview ? "Show source" : "Preview markdown"}
-                                                            >
-                                                                {mdPreview ? <Code2 className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                                                            </button>
-                                                        )}
-                                                        {!editMode ? (
-                                                            <div className="flex items-center gap-2">
-                                                                <button
-                                                                    onClick={() => { setEditContent(fileContent); setEditMode(true); }}
-                                                                    className="flex items-center gap-1 px-2 py-0.5 text-[9px] font-medium bg-obsidian-border-active text-foreground rounded hover:bg-obsidian-info/20 hover:text-obsidian-info transition-colors active:scale-95"
-                                                                    title="Edit file"
-                                                                >
-                                                                    ✏️ Edit
-                                                                </button>
-                                                                <button
-                                                                    onClick={handleDeleteFile}
-                                                                    className="flex items-center gap-1 px-2 py-0.5 text-[9px] font-medium bg-obsidian-danger/10 text-obsidian-danger rounded hover:bg-obsidian-danger/20 transition-colors active:scale-95"
-                                                                    title="Delete file"
-                                                                >
-                                                                    <Trash2 className="w-3 h-3" />
-                                                                </button>
-                                                            </div>
-                                                        ) : (
-                                                            <div className="flex items-center gap-1">
-                                                                <span className="text-[9px] text-obsidian-warning">editing</span>
-                                                                <button onClick={() => setEditMode(false)} className="text-[9px] text-obsidian-muted hover:text-foreground px-1">cancel</button>
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                    {/* File body */}
-                                                    {editMode ? (
-                                                        <div className="flex flex-col h-full">
-                                                            <div className="flex-1 relative">
-                                                                <Editor
-                                                                    height="100%"
-                                                                    width="100%"
-                                                                    language={extToLang(selectedFile)}
-                                                                    value={editContent}
-                                                                    theme="obsidian"
-                                                                    onChange={(value) => setEditContent(value || '')}
-                                                                    onMount={handleEditorMount}
-                                                                    options={{
-                                                                        minimap: { enabled: false },
-                                                                        fontSize: 13,
-                                                                        fontFamily: 'JetBrains Mono, Fira Code, DM Mono, Menlo, monospace',
-                                                                        fontLigatures: true,
-                                                                        lineHeight: 22,
-                                                                        scrollBeyondLastLine: false,
-                                                                        automaticLayout: true,
-                                                                        padding: { top: 12, bottom: 12 },
-                                                                        renderLineHighlight: 'all',
-                                                                    }}
-                                                                />
-                                                            </div>
-                                                            <div className="border-t border-obsidian-border bg-obsidian-panel p-3 flex items-center gap-2 shrink-0">
-                                                                <input
-                                                                    type="text"
-                                                                    placeholder="Commit message..."
-                                                                    value={editMessage}
-                                                                    onChange={e => setEditMessage(e.target.value)}
-                                                                    className="flex-1 bg-obsidian-bg border border-obsidian-border rounded px-2 py-1.5 text-[11px] text-foreground placeholder-obsidian-muted outline-none transition-all active:scale-95"
-                                                                />
-                                                                <button
-                                                                    onClick={handleSaveFile}
-                                                                    disabled={!editMessage || editSaving}
-                                                                    className="px-3 py-1.5 bg-obsidian-success text-white rounded text-[10px] font-medium hover:bg-obsidian-success disabled:opacity-40 flex items-center gap-1 transition-all active:scale-95"
-                                                                >
-                                                                    {editSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
-                                                                    Commit
-                                                                </button>
-                                                                <button onClick={() => { setEditMode(false); setEditMessage(''); }} className="px-2 py-1.5 text-[10px] text-obsidian-muted hover:text-foreground transition-all active:scale-95">Cancel</button>
+                                                                <div className="relative">
+                                                                    <button
+                                                                        onClick={() => setShowCreateFile(!showCreateFile)}
+                                                                        className="px-3 py-1.5 text-[11px] font-medium text-foreground bg-white/[0.02] border border-white/10 rounded-md hover:bg-white/[0.05] transition-all active:scale-95 flex items-center gap-1.5 shadow-sm"
+                                                                    >
+                                                                        Add file <ChevronDown className="w-3 h-3 opacity-60 ml-0.5" />
+                                                                    </button>
+                                                                    {showCreateFile && (
+                                                                        <div className="absolute right-0 top-full mt-1 w-[240px] bg-[#1a1b1e]/90 backdrop-blur-xl border border-white/10 shadow-2xl rounded-md z-20 p-2">
+                                                                            <div className="flex items-center gap-1 bg-black/20 border border-obsidian-info/50 rounded px-1.5 py-1 mb-2">
+                                                                                <FileIcon className="w-3.5 h-3.5 text-obsidian-muted shrink-0" />
+                                                                                <input
+                                                                                    autoFocus
+                                                                                    type="text"
+                                                                                    placeholder="name.txt"
+                                                                                    className="w-full bg-transparent text-[11px] outline-none text-foreground"
+                                                                                    value={newFilePath}
+                                                                                    onChange={e => setNewFilePath(e.target.value)}
+                                                                                    onKeyDown={e => {
+                                                                                        if (e.key === 'Enter') handleCreateFile();
+                                                                                        if (e.key === 'Escape') setShowCreateFile(false);
+                                                                                    }}
+                                                                                />
+                                                                            </div>
+                                                                            <div className="flex justify-end gap-1">
+                                                                                <button onClick={() => setShowCreateFile(false)} className="text-[10px] px-2 py-1 text-obsidian-muted hover:text-foreground rounded hover:bg-obsidian-border-active transition-colors">Cancel</button>
+                                                                                <button onClick={handleCreateFile} disabled={!newFilePath} className="text-[10px] px-2 py-1 bg-obsidian-info/20 text-obsidian-info rounded hover:bg-obsidian-info/30 disabled:opacity-50 transition-colors">Create</button>
+                                                                            </div>
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                                <div className="relative">
+                                                                    <button
+                                                                        onClick={() => setShowCloneDropdown(!showCloneDropdown)}
+                                                                        className="px-3 py-1.5 bg-obsidian-success text-white rounded-md text-[11px] font-medium hover:bg-obsidian-success/90 transition-all active:scale-95 flex items-center gap-1.5"
+                                                                    >
+                                                                        <Code2 className="w-3.5 h-3.5" />
+                                                                        Code
+                                                                        <ChevronDown className="w-3 h-3 opacity-60 ml-0.5" />
+                                                                    </button>
+                                                                    {showCloneDropdown && (
+                                                                        <div className="absolute right-0 top-full mt-2 w-[340px] bg-[#1a1b1e]/90 backdrop-blur-xl border border-white/10 rounded-lg shadow-2xl z-50 overflow-hidden">
+                                                                            <div className="px-3 py-2.5 border-b border-white/5">
+                                                                                <span className="text-[12px] font-semibold text-foreground">Clone</span>
+                                                                            </div>
+                                                                            {(['HTTPS', 'SSH'] as const).map(protocol => {
+                                                                                const url = protocol === 'HTTPS'
+                                                                                    ? `${GITEA_URL}/${selectedRepo.full_name}.git`
+                                                                                    : `git@${new URL(GITEA_URL).hostname}:${selectedRepo.full_name}.git`;
+                                                                                return (
+                                                                                    <div key={protocol} className="px-3 py-2 border-b border-white/5 last:border-b-0">
+                                                                                        <div className="text-[11px] font-medium text-obsidian-muted mb-1.5">{protocol}</div>
+                                                                                        <div className="flex items-center gap-1.5">
+                                                                                            <input readOnly value={url} className="flex-1 bg-black/20 border border-white/10 rounded px-2 py-1.5 text-[11px] font-mono text-obsidian-muted outline-none select-all" />
+                                                                                            <button
+                                                                                                onClick={() => { navigator.clipboard.writeText(url); setCloneCopied(protocol); setTimeout(() => setCloneCopied(null), 2000); }}
+                                                                                                className="p-1.5 border border-white/10 rounded hover:bg-white/[0.05] transition-colors"
+                                                                                            >
+                                                                                                {cloneCopied === protocol ? <Check className="w-3.5 h-3.5 text-obsidian-success" /> : <Clipboard className="w-3.5 h-3.5 text-obsidian-muted" />}
+                                                                                            </button>
+                                                                                        </div>
+                                                                                    </div>
+                                                                                );
+                                                                            })}
+                                                                        </div>
+                                                                    )}
+                                                                </div>
                                                             </div>
                                                         </div>
-                                                    ) : (
-                                                        <div className="flex-1 overflow-auto">
-                                                            {isMarkdown(selectedFile) && mdPreview ? (
-                                                                /* Markdown Preview */
-                                                                <div className="px-8 py-6 max-w-[900px] mx-auto prose-gitea">
+
+                                                        {/* Commit Header + Directory Table — single container */}
+                                                        <div className="border border-white/5 rounded-lg bg-black/20 backdrop-blur-md overflow-hidden mt-4 shadow-sm">
+                                                            {/* Latest Commit Header */}
+                                                            <div className="bg-black/20 px-4 py-2.5 flex items-center justify-between border-b border-white/5">
+                                                                <div className="flex items-center gap-2.5 min-w-0">
+                                                                    <img
+                                                                        src={commits[0]?.author?.avatar_url || `https://ui-avatars.com/api/?name=${commits[0]?.commit?.author?.name || 'U'}&background=1a1a2e&color=58a6ff&size=24&font-size=0.45&bold=true`}
+                                                                        alt=""
+                                                                        className="w-5 h-5 rounded-full border border-white/10 shrink-0"
+                                                                    />
+                                                                    <span className="text-[12px] font-semibold text-foreground shrink-0">{commits[0]?.commit?.author?.name || 'admin'}</span>
+                                                                    <span className="text-[12px] text-obsidian-muted truncate hover:text-obsidian-info hover:underline transition-colors cursor-pointer">{commits[0]?.commit?.message?.split('\n')[0] || 'Initial commit'}</span>
+                                                                </div>
+                                                                <div className="flex items-center gap-3 text-[12px] text-obsidian-muted shrink-0 ml-4">
+                                                                    <code className="text-[11px] font-mono font-medium text-obsidian-info hover:underline cursor-pointer bg-obsidian-info/10 px-1.5 py-0.5 rounded">{commits[0]?.sha?.slice(0, 7) || '0000000'}</code>
+                                                                    <span className="flex items-center gap-1.5"><Clock className="w-3 h-3 opacity-60" />{timeAgo(commits[0]?.commit?.author?.date)}</span>
+                                                                    <span className="flex items-center gap-1.5 text-obsidian-muted border border-white/5 rounded-md px-2 py-0.5 text-[11px] font-medium hover:text-foreground hover:border-white/20 cursor-pointer transition-colors">
+                                                                        <GitCommit className="w-3 h-3" />
+                                                                        {commits.length} commits
+                                                                    </span>
+                                                                </div>
+                                                            </div>
+
+                                                            {/* Directory Table */}
+                                                            <table className="w-full text-left border-collapse">
+                                                                <tbody>
+                                                                    {currentPath !== '' && (
+                                                                        <tr className="border-t border-white/5 hover:bg-white/[0.02] transition-colors group">
+                                                                            <td colSpan={3} className="px-4 py-2.5">
+                                                                                <div
+                                                                                    className="text-[12px] text-obsidian-info font-bold cursor-pointer hover:text-white transition-colors flex items-center gap-2 w-fit px-2 py-0.5 rounded-md hover:bg-obsidian-info/20"
+                                                                                    onClick={() => {
+                                                                                        const parts = currentPath.split('/');
+                                                                                        parts.pop();
+                                                                                        handleDirClick(parts.join('/'));
+                                                                                    }}
+                                                                                >
+                                                                                    <ChevronRight className="w-4 h-4 rotate-180" />
+                                                                                    <span className="tracking-widest">..</span>
+                                                                                </div>
+                                                                            </td>
+                                                                        </tr>
+                                                                    )}
+                                                                    {(treeEntries[currentPath || '/'] || [])
+                                                                        .sort((a, b) => {
+                                                                            if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
+                                                                            return a.name.localeCompare(b.name);
+                                                                        })
+                                                                        .map(entry => {
+                                                                            const isDir = entry.type === 'dir';
+                                                                            const Icon = isDir ? Folder : fileIcon(entry.name);
+                                                                            const color = isDir ? '#6895a8' : fileColor(entry.name);
+                                                                            return (
+                                                                                <tr key={entry.path} className="border-t border-white/5 hover:bg-white/[0.02] transition-colors group cursor-pointer" onClick={() => isDir ? handleDirClick(entry.path) : handleFileClick(entry.path)}>
+                                                                                    <td className="px-4 py-3 w-8">
+                                                                                        <div className="w-6 h-6 rounded flex items-center justify-center group-hover:bg-white/5 transition-colors border border-transparent group-hover:border-white/10">
+                                                                                            <Icon className="w-4 h-4" style={{ color }} />
+                                                                                        </div>
+                                                                                    </td>
+                                                                                    <td className="px-1 py-3">
+                                                                                        <span
+                                                                                            className={clsx("text-[13px] transition-colors", isDir ? "font-medium text-foreground group-hover:text-obsidian-info" : "text-obsidian-muted group-hover:text-foreground")}
+                                                                                        >
+                                                                                            {entry.name}
+                                                                                        </span>
+                                                                                    </td>
+                                                                                    <td className="px-5 py-3 text-right w-24">
+                                                                                        {!isDir && entry.size > 0 && <span className="text-[11px] text-obsidian-muted font-mono">{formatBytes(entry.size)}</span>}
+                                                                                    </td>
+                                                                                </tr>
+                                                                            );
+                                                                        })}
+                                                                    {(!treeEntries[currentPath || '/'] || treeEntries[currentPath || '/'].length === 0) && (
+                                                                        <tr className="border-t border-white/5">
+                                                                            <td colSpan={3} className="px-4 py-12 text-center flex flex-col items-center justify-center gap-3">
+                                                                                <FolderOpen className="w-10 h-10 text-obsidian-muted opacity-30" />
+                                                                                <span className="text-[13px] text-obsidian-muted font-medium">This directory is empty</span>
+                                                                            </td>
+                                                                        </tr>
+                                                                    )}
+                                                                </tbody>
+                                                            </table>
+                                                        </div>
+
+                                                        {/* README.md Rendering */}
+                                                        {readmeContent && (
+                                                            <div className="border border-white/5 rounded-lg bg-black/20 backdrop-blur-md mt-6 overflow-hidden shadow-sm">
+                                                                <div className="bg-black/20 border-b border-white/5 px-4 py-3 flex items-center gap-2">
+                                                                    <FileText className="w-4 h-4 text-obsidian-muted" />
+                                                                    <span className="text-[13px] font-semibold text-foreground">README.md</span>
+                                                                </div>
+                                                                <div className="p-8 prose prose-invert prose-obsidian max-w-none prose-a:text-obsidian-info hover:prose-a:underline prose-headings:border-b prose-headings:border-white/10 prose-headings:pb-2 prose-img:inline prose-img:m-0.5 prose-p:leading-relaxed [&_p:has(img)]:text-center [&_p:has(img)]:leading-loose">
                                                                     <ReactMarkdown
                                                                         remarkPlugins={[remarkGfm]}
                                                                         rehypePlugins={[rehypeRaw]}
                                                                         components={{
-                                                                            h1: ({ children }) => <h1 className="text-[24px] font-bold text-foreground border-b border-obsidian-border pb-2 mb-4 mt-6">{children}</h1>,
-                                                                            h2: ({ children }) => <h2 className="text-[20px] font-semibold text-foreground border-b border-obsidian-border pb-1.5 mb-3 mt-5">{children}</h2>,
-                                                                            h3: ({ children }) => <h3 className="text-[16px] font-semibold text-foreground mb-2 mt-4">{children}</h3>,
-                                                                            h4: ({ children }) => <h4 className="text-[14px] font-semibold text-foreground mb-2 mt-3">{children}</h4>,
-                                                                            p: ({ children }) => <p className="text-[14px] text-foreground leading-relaxed mb-3">{children}</p>,
-                                                                            a: ({ href, children }) => <a href={href} className="text-obsidian-info hover:underline" target="_blank" rel="noopener noreferrer">{children}</a>,
-                                                                            ul: ({ children }) => <ul className="list-disc pl-6 mb-3 text-[14px] text-foreground space-y-1">{children}</ul>,
-                                                                            ol: ({ children }) => <ol className="list-decimal pl-6 mb-3 text-[14px] text-foreground space-y-1">{children}</ol>,
-                                                                            li: ({ children }) => <li className="leading-relaxed">{children}</li>,
-                                                                            blockquote: ({ children }) => <blockquote className="border-l-4 border-obsidian-info pl-4 py-1 my-3 text-obsidian-muted italic bg-obsidian-panel rounded-r">{children}</blockquote>,
-                                                                            table: ({ children }) => <div className="overflow-x-auto mb-4"><table className="w-full border-collapse text-[13px]">{children}</table></div>,
-                                                                            thead: ({ children }) => <thead className="bg-obsidian-panel">{children}</thead>,
-                                                                            th: ({ children }) => <th className="border border-obsidian-border px-3 py-2 text-left text-foreground font-semibold">{children}</th>,
-                                                                            td: ({ children }) => <td className="border border-obsidian-border px-3 py-2 text-foreground">{children}</td>,
-                                                                            hr: () => <hr className="border-obsidian-border my-5" />,
-                                                                            img: ({ src, alt }) => <img src={src} alt={alt || ''} className="max-w-full rounded-lg my-3 border border-obsidian-border" />,
-                                                                            strong: ({ children }) => <strong className="text-foreground font-semibold">{children}</strong>,
-                                                                            em: ({ children }) => <em className="text-foreground italic">{children}</em>,
-                                                                            del: ({ children }) => <del className="text-obsidian-muted">{children}</del>,
-                                                                            code: ({ className, children, ...props }) => {
+                                                                            code({ node, inline, className, children, ...props }: any) {
                                                                                 const match = /language-(\w+)/.exec(className || '');
-                                                                                const inline = !match;
-                                                                                if (inline) {
-                                                                                    return <code className="bg-obsidian-panel text-obsidian-danger px-1.5 py-0.5 rounded text-[13px] font-mono transition-all active:scale-95" {...props}>{children}</code>;
-                                                                                }
-                                                                                return (
-                                                                                    <SyntaxHighlighter
-                                                                                        style={vscDarkPlus}
-                                                                                        language={match[1]}
-                                                                                        PreTag="div"
-                                                                                        customStyle={{ margin: '12px 0', borderRadius: '8px', fontSize: '13px', border: '1px solid #393b40' }}
-                                                                                    >
-                                                                                        {String(children).replace(/\n$/, '')}
-                                                                                    </SyntaxHighlighter>
+                                                                                return !inline && match ? (
+                                                                                    <div className="not-prose rounded-md overflow-hidden my-6 border border-white/10 shadow-[0_4px_24px_rgba(0,0,0,0.2)]">
+                                                                                        <div className="bg-black/40 px-4 py-2 text-[11px] font-mono text-obsidian-muted border-b border-white/5 flex items-center justify-between">
+                                                                                            <span>{match[1]}</span>
+                                                                                            <button className="hover:text-foreground transition-colors" onClick={() => navigator.clipboard.writeText(String(children).replace(/\n$/, ''))}><Copy className="w-3.5 h-3.5" /></button>
+                                                                                        </div>
+                                                                                        <SyntaxHighlighter
+                                                                                            {...props}
+                                                                                            style={vscDarkPlus as any}
+                                                                                            language={match[1]}
+                                                                                            PreTag="div"
+                                                                                            className="!m-0 !bg-obsidian-bg !text-[13px] !p-4 !overflow-x-auto"
+                                                                                        >
+                                                                                            {String(children).replace(/\n$/, '')}
+                                                                                        </SyntaxHighlighter>
+                                                                                    </div>
+                                                                                ) : (
+                                                                                    <code {...props} className={clsx(className, "bg-obsidian-panel px-1.5 py-0.5 rounded text-[13px] font-mono border border-obsidian-border text-obsidian-info before:content-hidden after:content-hidden")}>
+                                                                                        {children}
+                                                                                    </code>
                                                                                 );
-                                                                            },
+                                                                            }
                                                                         }}
                                                                     >
-                                                                        {fileContent}
+                                                                        {readmeContent}
                                                                     </ReactMarkdown>
                                                                 </div>
-                                                            ) : isImage(selectedFile) ? (
-                                                                /* Image Preview */
-                                                                <div className="flex items-center justify-center h-full p-8">
-                                                                    <div className="text-center">
-                                                                        <div className="text-[11px] text-obsidian-muted mb-3">Image preview not available via API</div>
+                                                            </div>
+                                                        )}
+                                                    </div>
+
+                                                    {/* ─── Right Column: About Sidebar ─── */}
+                                                    <div className="w-[280px] shrink-0 hidden xl:block">
+                                                        <div className="sticky top-6 flex flex-col gap-5 bg-black/20 backdrop-blur-md border border-white/5 rounded-lg p-5">
+                                                            {/* About */}
+                                                            <div>
+                                                                <h3 className="text-[12px] font-semibold text-foreground mb-3">About</h3>
+                                                                {selectedRepo.description ? (
+                                                                    <p className="text-[13px] text-obsidian-muted leading-relaxed mb-3">{selectedRepo.description}</p>
+                                                                ) : (
+                                                                    <p className="text-[12px] text-obsidian-muted/50 italic mb-3">No description provided.</p>
+                                                                )}
+                                                                {repoTopics.length > 0 && (
+                                                                    <div className="flex flex-wrap gap-1.5 mb-3">
+                                                                        {repoTopics.map(topic => (
+                                                                            <span key={topic} className="text-[11px] font-medium text-obsidian-info bg-obsidian-info/15 px-2.5 py-0.5 rounded-full hover:bg-obsidian-info/25 cursor-pointer transition-colors">{topic}</span>
+                                                                        ))}
+                                                                    </div>
+                                                                )}
+                                                                <div className="flex flex-col gap-2 text-[12px] text-obsidian-muted">
+                                                                    <div className="flex items-center gap-2"><Star className="w-3.5 h-3.5" /> {selectedRepo.stars_count} stars</div>
+                                                                    <div className="flex items-center gap-2"><Eye className="w-3.5 h-3.5" /> {selectedRepo.forks_count} forks</div>
+                                                                    <div className="flex items-center gap-2"><GitBranch className="w-3.5 h-3.5" /> {branches.length} branches</div>
+                                                                    <div className="flex items-center gap-2"><Tag className="w-3.5 h-3.5" /> {tags.length} tags</div>
+                                                                </div>
+                                                            </div>
+
+                                                            <div className="border-t border-white/5" />
+
+                                                            {/* Languages */}
+                                                            {Object.keys(repoLanguages).length > 0 && (() => {
+                                                                const total = Object.values(repoLanguages).reduce((a, b) => a + b, 0);
+                                                                const langs = Object.entries(repoLanguages)
+                                                                    .sort((a, b) => b[1] - a[1])
+                                                                    .map(([name, bytes]) => ({ name, bytes, pct: (bytes / total) * 100, color: LANG_COLORS[name] || '#6c707e' }));
+                                                                return (
+                                                                    <div>
+                                                                        <h3 className="text-[12px] font-semibold text-foreground mb-3">Languages</h3>
+                                                                        <div className="flex h-2 rounded-full overflow-hidden mb-3">
+                                                                            {langs.map(l => (
+                                                                                <div key={l.name} style={{ width: `${l.pct}%`, backgroundColor: l.color }} title={`${l.name} ${l.pct.toFixed(1)}%`} />
+                                                                            ))}
+                                                                        </div>
+                                                                        <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+                                                                            {langs.map(l => (
+                                                                                <div key={l.name} className="flex items-center gap-1.5 text-[11px]">
+                                                                                    <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: l.color }} />
+                                                                                    <span className="font-medium text-foreground">{l.name}</span>
+                                                                                    <span className="text-obsidian-muted">{l.pct.toFixed(1)}%</span>
+                                                                                </div>
+                                                                            ))}
+                                                                        </div>
+                                                                    </div>
+                                                                );
+                                                            })()}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            ) : (
+                                                /* File Content View */
+                                                <div className="flex flex-col border border-white/5 shadow-sm rounded-lg bg-black/20 backdrop-blur-md overflow-hidden" style={{ minHeight: 'calc(100vh - 120px)' }}>
+                                                    {fileLoading ? (
+                                                        <div className="flex-1 flex items-center justify-center"><Loader2 className="w-6 h-6 text-obsidian-info animate-spin" /></div>
+                                                    ) : (
+                                                        <>
+                                                            {/* File header (GitHub style meta header) */}
+                                                            <div className="bg-black/20 border-b border-white/5 flex items-center px-4 py-2.5 justify-between shrink-0">
+                                                                <div className="flex items-center gap-3">
+                                                                    <button className="flex items-center gap-1.5 border border-white/10 shadow-sm rounded-md bg-white/[0.02] hover:bg-white/[0.05] px-2.5 py-1 text-[11px] font-medium text-obsidian-muted hover:text-foreground transition-colors" onClick={() => setSelectedFile(null)}>
+                                                                        <ChevronRight className="w-3.5 h-3.5 rotate-180" /> Back
+                                                                    </button>
+                                                                    <div className="w-px h-4 bg-white/10 mx-1" />
+                                                                    <FileCode className="w-4 h-4 ml-1" style={{ color: fileColor(selectedFile) }} />
+                                                                    <div className="text-[13px] font-mono font-medium text-foreground">{selectedFile.split('/').pop()}</div>
+                                                                    <span className="text-[9px] text-obsidian-muted font-bold font-mono uppercase bg-white/5 px-1.5 py-0.5 rounded ml-2 border border-white/5">{extToLang(selectedFile)}</span>
+                                                                </div>
+                                                                <div className="flex items-center gap-2">
+                                                                    {isMarkdown(selectedFile) && !editMode && (
+                                                                        <div className="flex rounded-md overflow-hidden bg-black/20 border border-white/10 text-[11px] font-medium transition-colors mr-2">
+                                                                            <button
+                                                                                onClick={() => setMdPreview(true)}
+                                                                                className={clsx("px-3 py-1.5 transition-colors", mdPreview ? "bg-white/10 text-foreground" : "text-obsidian-muted hover:text-foreground")}
+                                                                            >
+                                                                                Preview
+                                                                            </button>
+                                                                            <div className="w-px bg-white/10" />
+                                                                            <button
+                                                                                onClick={() => setMdPreview(false)}
+                                                                                className={clsx("px-3 py-1.5 transition-colors flex items-center gap-1", !mdPreview ? "bg-white/10 text-foreground" : "text-obsidian-muted hover:text-foreground")}
+                                                                            >
+                                                                                <Code2 className="w-3.5 h-3.5" /> Source
+                                                                            </button>
+                                                                        </div>
+                                                                    )}
+
+                                                                    {activeBranch === (selectedRepo?.default_branch || 'main') ? (
+                                                                        <span className="text-[10px] text-obsidian-muted bg-white/[0.02] border border-white/10 px-2.5 py-1.5 rounded-md font-medium">🔒 Protected Branch</span>
+                                                                    ) : !editMode ? (
+                                                                        <div className="flex items-center gap-2">
+                                                                            <button
+                                                                                onClick={() => { setEditContent(fileContent); setEditMode(true); }}
+                                                                                className="flex items-center gap-2 px-3 py-1.5 text-[11px] font-medium border border-white/10 bg-white/[0.02] text-foreground rounded-md shadow-sm hover:bg-white/[0.05] transition-colors active:scale-95"
+                                                                            >
+                                                                                ✏️ Edit
+                                                                            </button>
+                                                                            <button
+                                                                                onClick={handleDeleteFile}
+                                                                                className="flex items-center gap-1 p-1.5 border border-white/10 text-[11px] font-medium bg-white/[0.02] text-obsidian-danger rounded-md shadow-sm hover:bg-obsidian-danger/20 transition-colors active:scale-95"
+                                                                                title="Delete file"
+                                                                            >
+                                                                                <Trash2 className="w-3.5 h-3.5" />
+                                                                            </button>
+                                                                        </div>
+                                                                    ) : (
+                                                                        <div className="flex items-center gap-2">
+                                                                            <span className="text-[11px] mr-2 text-obsidian-warning font-medium flex items-center gap-1">
+                                                                                <span className="w-2 h-2 rounded-full bg-obsidian-warning animate-pulse" />
+                                                                                Editing
+                                                                            </span>
+                                                                            <button onClick={() => setEditMode(false)} className="text-[11px] font-medium border border-obsidian-border bg-obsidian-bg text-obsidian-muted hover:text-foreground px-3 py-1.5 rounded-md shadow-sm hover:bg-obsidian-border-active transition-colors active:scale-95">Cancel</button>
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            </div>
+                                                            {/* File body */}
+                                                            {editMode ? (
+                                                                <div className="flex flex-col flex-1">
+                                                                    <div style={{ height: 'calc(100vh - 260px)', minHeight: '400px' }}>
+                                                                        <Editor
+                                                                            height="100%"
+                                                                            width="100%"
+                                                                            language={extToLang(selectedFile)}
+                                                                            value={editContent}
+                                                                            theme="obsidian"
+                                                                            onChange={(value) => setEditContent(value || '')}
+                                                                            onMount={handleEditorMount}
+                                                                            options={{
+                                                                                readOnly: false,
+                                                                                domReadOnly: false,
+                                                                                minimap: { enabled: false },
+                                                                                fontSize: 14,
+                                                                                fontFamily: 'JetBrains Mono, Fira Code, DM Mono, Menlo, monospace',
+                                                                                fontLigatures: true,
+                                                                                lineHeight: 24,
+                                                                                scrollBeyondLastLine: false,
+                                                                                automaticLayout: true,
+                                                                                padding: { top: 16, bottom: 16 },
+                                                                                renderLineHighlight: 'all',
+                                                                            }}
+                                                                        />
+                                                                    </div>
+                                                                    <div className="border-t border-white/5 bg-black/40 p-3.5 flex items-center gap-3 shrink-0">
+                                                                        <input
+                                                                            type="text"
+                                                                            placeholder="Commit message..."
+                                                                            value={editMessage}
+                                                                            onChange={e => setEditMessage(e.target.value)}
+                                                                            className="flex-1 bg-black/20 border border-white/10 focus:border-obsidian-info shadow-sm rounded-md px-3 py-2 text-[12px] text-foreground placeholder-obsidian-muted outline-none transition-all"
+                                                                        />
+                                                                        <button
+                                                                            onClick={handleSaveFile}
+                                                                            disabled={!editMessage || editSaving}
+                                                                            className="px-4 py-2 bg-[#238636] border border-[rgba(240,246,252,0.1)] text-white rounded-md text-[12px] font-bold hover:bg-[#2ea043] shadow-sm disabled:opacity-40 flex items-center gap-1.5 transition-all active:scale-95"
+                                                                        >
+                                                                            {editSaving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                                                                            Commit changes
+                                                                        </button>
                                                                     </div>
                                                                 </div>
                                                             ) : (
-                                                                /* Syntax Highlighted Code */
-                                                                <div className="flex-1 relative h-full">
-                                                                    <Editor
-                                                                        height="100%"
-                                                                        width="100%"
-                                                                        language={extToLang(selectedFile)}
-                                                                        value={fileContent}
-                                                                        theme="obsidian"
-                                                                        onMount={handleEditorMount}
-                                                                        options={{
-                                                                            readOnly: true,
-                                                                            minimap: { enabled: false },
-                                                                            fontSize: 13,
-                                                                            fontFamily: 'JetBrains Mono, Fira Code, DM Mono, Menlo, monospace',
-                                                                            fontLigatures: true,
-                                                                            lineHeight: 22,
-                                                                            scrollBeyondLastLine: false,
-                                                                            automaticLayout: true,
-                                                                            padding: { top: 12, bottom: 12 },
-                                                                            domReadOnly: true,
-                                                                            renderLineHighlight: 'none',
-                                                                        }}
-                                                                    />
+                                                                <div className="flex-1 flex flex-col overflow-auto bg-transparent">
+                                                                    {isMarkdown(selectedFile) && mdPreview ? (
+                                                                        /* Markdown Preview */
+                                                                        <div className="px-10 py-10 max-w-[900px] mx-auto prose prose-invert max-w-none prose-a:text-obsidian-info hover:prose-a:underline prose-headings:border-b prose-headings:border-obsidian-border prose-headings:pb-2">
+                                                                            <ReactMarkdown
+                                                                                remarkPlugins={[remarkGfm]}
+                                                                                rehypePlugins={[rehypeRaw]}
+                                                                                components={{
+                                                                                    code({ node, inline, className, children, ...props }: any) {
+                                                                                        const match = /language-(\w+)/.exec(className || '');
+                                                                                        return !inline && match ? (
+                                                                                            <div className="not-prose rounded-md overflow-hidden my-6 border border-white/10 shadow-[0_4px_24px_rgba(0,0,0,0.2)]">
+                                                                                                <div className="bg-black/40 px-4 py-2 text-[11px] font-mono text-obsidian-muted border-b border-white/5 flex items-center justify-between">
+                                                                                                    <span>{match[1]}</span>
+                                                                                                    <button className="hover:text-foreground transition-colors" onClick={() => navigator.clipboard.writeText(String(children).replace(/\n$/, ''))}><Copy className="w-3.5 h-3.5" /></button>
+                                                                                                </div>
+                                                                                                <SyntaxHighlighter
+                                                                                                    {...props}
+                                                                                                    style={vscDarkPlus as any}
+                                                                                                    language={match[1]}
+                                                                                                    PreTag="div"
+                                                                                                    className="!m-0 !bg-[#0b0c0f] !text-[13px] !p-4 !overflow-x-auto"
+                                                                                                >
+                                                                                                    {String(children).replace(/\n$/, '')}
+                                                                                                </SyntaxHighlighter>
+                                                                                            </div>
+                                                                                        ) : (
+                                                                                            <code {...props} className={clsx(className, "bg-white/[0.04] px-1.5 py-0.5 rounded text-[13px] font-mono border border-white/5 text-obsidian-info before:content-hidden after:content-hidden")}>
+                                                                                                {children}
+                                                                                            </code>
+                                                                                        );
+                                                                                    }
+                                                                                }}
+                                                                            >
+                                                                                {fileContent}
+                                                                            </ReactMarkdown>
+                                                                        </div>
+                                                                    ) : isImage(selectedFile) ? (
+                                                                        /* Image Preview */
+                                                                        <div className="flex items-center justify-center h-full p-8 bg-[#0d1117]">
+                                                                            <div className="text-center">
+                                                                                <div className="text-[12px] text-obsidian-muted mb-3">Image preview not available via API</div>
+                                                                            </div>
+                                                                        </div>
+                                                                    ) : (
+                                                                        /* Syntax Highlighted Code */
+                                                                        <div style={{ height: 'calc(100vh - 200px)', minHeight: '500px' }}>
+                                                                            <Editor
+                                                                                height="100%"
+                                                                                width="100%"
+                                                                                language={extToLang(selectedFile)}
+                                                                                value={fileContent}
+                                                                                theme="obsidian"
+                                                                                onMount={handleEditorMount}
+                                                                                options={{
+                                                                                    readOnly: true,
+                                                                                    domReadOnly: true,
+                                                                                    minimap: { enabled: false },
+                                                                                    fontSize: 14,
+                                                                                    fontFamily: 'JetBrains Mono, Fira Code, DM Mono, Menlo, monospace',
+                                                                                    fontLigatures: true,
+                                                                                    lineHeight: 24,
+                                                                                    scrollBeyondLastLine: false,
+                                                                                    automaticLayout: true,
+                                                                                    padding: { top: 16, bottom: 16 },
+                                                                                    renderLineHighlight: 'none',
+                                                                                }}
+                                                                            />
+                                                                        </div>
+                                                                    )}
                                                                 </div>
                                                             )}
-                                                        </div>
+                                                        </>
                                                     )}
-                                                </div>
-                                            ) : (
-                                                <div className="flex flex-col items-center justify-center h-full text-obsidian-muted gap-2">
-                                                    <Folder className="w-10 h-10 opacity-30" />
-                                                    <span className="text-[12px]">Select a file to view its contents</span>
                                                 </div>
                                             )}
                                         </div>
@@ -1255,13 +1553,13 @@ export default function CICDPage() {
                                     /* ─── Commits Tab ─── */
                                     <div className="flex-1 flex overflow-hidden">
                                         {/* Commit List */}
-                                        <div className={clsx("overflow-auto shrink-0 py-1", selectedCommit ? "w-[300px] border-r border-obsidian-border" : "flex-1")}>
+                                        <div className={clsx("overflow-auto shrink-0 py-1", selectedCommit ? "w-[300px] border-r border-white/5" : "flex-1")}>
                                             {commits.length === 0 ? (
                                                 <div className="text-center py-8 text-obsidian-muted text-[11px]">No commits</div>
                                             ) : commits.map(commit => (
                                                 <div key={commit.sha} onClick={() => handleCommitClick(commit.sha)}
-                                                    className={clsx("px-4 py-2.5 cursor-pointer transition-colors border-b border-obsidian-border/30",
-                                                        selectedCommit?.sha === commit.sha ? "bg-obsidian-info/10" : "hover:bg-obsidian-panel/50"
+                                                    className={clsx("px-4 py-2.5 cursor-pointer transition-colors border-b border-white/5",
+                                                        selectedCommit?.sha === commit.sha ? "bg-white/[0.04]" : "hover:bg-white/[0.02]"
                                                     )}>
                                                     <div className="flex items-start gap-2">
                                                         <GitCommit className="w-3.5 h-3.5 text-obsidian-info shrink-0 mt-0.5" />
@@ -1279,13 +1577,13 @@ export default function CICDPage() {
                                         </div>
                                         {/* Commit Detail */}
                                         {selectedCommit && (
-                                            <div className="flex-1 overflow-auto bg-obsidian-bg">
+                                            <div className="flex-1 overflow-auto bg-transparent">
                                                 {commitLoading ? (
                                                     <div className="flex items-center justify-center h-full"><Loader2 className="w-5 h-5 text-obsidian-info animate-spin" /></div>
                                                 ) : (
                                                     <div>
                                                         {/* Commit header */}
-                                                        <div className="px-4 py-3 border-b border-obsidian-border bg-obsidian-panel transition-all active:scale-95">
+                                                        <div className="px-4 py-3 border-b border-white/5 bg-black/20 backdrop-blur-md transition-all active:scale-95">
                                                             <p className="text-[13px] text-foreground font-medium mb-2">{selectedCommit.commit?.message?.split('\n')[0]}</p>
                                                             {selectedCommit.commit?.message?.split('\n').slice(1).join('\n').trim() && (
                                                                 <p className="text-[11px] text-obsidian-muted mb-2 whitespace-pre-wrap">{selectedCommit.commit.message.split('\n').slice(1).join('\n').trim()}</p>
@@ -1305,8 +1603,8 @@ export default function CICDPage() {
                                                         </div>
                                                         {/* Files with diffs */}
                                                         {selectedCommit.files?.map(file => (
-                                                            <div key={file.filename} className="border-b border-obsidian-border/50">
-                                                                <div className="flex items-center gap-2 px-4 py-2 bg-obsidian-panel/50 cursor-pointer hover:bg-obsidian-panel transition-all active:scale-95"
+                                                            <div key={file.filename} className="border-b border-white/5">
+                                                                <div className="flex items-center gap-2 px-4 py-2 bg-white/[0.01] cursor-pointer hover:bg-white/[0.03] transition-all active:scale-95"
                                                                     onClick={() => {
                                                                         const next = new Set(expandedDiffs);
                                                                         next.has(file.filename) ? next.delete(file.filename) : next.add(file.filename);
@@ -1339,7 +1637,7 @@ export default function CICDPage() {
                                     /* ─── Pull Requests Tab ─── */
                                     <div className="flex-1 overflow-auto">
                                         {/* PR Controls */}
-                                        <div className="flex items-center gap-2 px-4 py-2 border-b border-obsidian-border bg-obsidian-panel transition-all active:scale-95">
+                                        <div className="flex items-center gap-2 px-4 py-2 border-b border-white/5 bg-black/20 backdrop-blur-md transition-all active:scale-95">
                                             {(['all', 'open', 'closed'] as const).map(s => (
                                                 <button key={s} onClick={() => { setPrState(s); if (selectedRepo) { const [o, n] = selectedRepo.full_name.split('/'); fetchPulls(o, n, s); } }}
                                                     className={clsx("px-2 py-1 rounded text-[10px] font-medium transition-all",
@@ -1354,24 +1652,24 @@ export default function CICDPage() {
 
                                         {/* Create PR Form */}
                                         {showCreatePR && (
-                                            <div className="px-4 py-3 border-b border-obsidian-border bg-obsidian-panel/50 backdrop-blur-md space-y-2 transition-all active:scale-95">
+                                            <div className="px-4 py-3 border-b border-white/5 bg-black/40 backdrop-blur-md space-y-2 transition-all active:scale-95">
                                                 <div className="flex gap-2">
                                                     <select value={prHead} onChange={e => setPrHead(e.target.value)}
-                                                        className="flex-1 bg-obsidian-bg border border-obsidian-border rounded px-2 py-1 text-[11px] text-foreground outline-none transition-all active:scale-95">
+                                                        className="flex-1 bg-black/20 border border-white/10 rounded px-2 py-1 text-[11px] text-foreground outline-none transition-all active:scale-95">
                                                         <option value="">Head branch...</option>
                                                         {branches.map(b => <option key={b.name} value={b.name}>{b.name}</option>)}
                                                     </select>
                                                     <ArrowUpRight className="w-4 h-4 text-obsidian-muted shrink-0 self-center" />
                                                     <select value={prBase} onChange={e => setPrBase(e.target.value)}
-                                                        className="flex-1 bg-obsidian-bg border border-obsidian-border rounded px-2 py-1 text-[11px] text-foreground outline-none transition-all active:scale-95">
+                                                        className="flex-1 bg-black/20 border border-white/10 rounded px-2 py-1 text-[11px] text-foreground outline-none transition-all active:scale-95">
                                                         <option value="">Base branch...</option>
                                                         {branches.map(b => <option key={b.name} value={b.name}>{b.name}</option>)}
                                                     </select>
                                                 </div>
                                                 <input type="text" placeholder="PR title..." value={prTitle} onChange={e => setPrTitle(e.target.value)}
-                                                    className="w-full bg-obsidian-bg border border-obsidian-border rounded px-2 py-1.5 text-[11px] text-foreground placeholder-obsidian-muted outline-none transition-all active:scale-95" />
+                                                    className="w-full bg-black/20 border border-white/10 rounded px-2 py-1.5 text-[11px] text-foreground placeholder-obsidian-muted outline-none transition-all active:scale-95" />
                                                 <textarea placeholder="Description (optional)..." value={prBody} onChange={e => setPrBody(e.target.value)} rows={3}
-                                                    className="w-full bg-obsidian-bg border border-obsidian-border rounded px-2 py-1.5 text-[11px] text-foreground placeholder-obsidian-muted outline-none resize-none transition-all active:scale-95" />
+                                                    className="w-full bg-black/20 border border-white/10 rounded px-2 py-1.5 text-[11px] text-foreground placeholder-obsidian-muted outline-none resize-none transition-all active:scale-95" />
                                                 <div className="flex gap-2">
                                                     <button onClick={handleCreatePR} disabled={!prTitle || !prHead || !prBase}
                                                         className="px-3 py-1 bg-obsidian-success text-white rounded text-[10px] font-medium hover:bg-obsidian-success disabled:opacity-40 transition-all active:scale-95">Create</button>
@@ -1388,12 +1686,12 @@ export default function CICDPage() {
                                                 <span className="text-[10px]">Create a PR to merge changes between branches</span>
                                             </div>
                                         ) : pulls.map(pr => (
-                                            <div key={pr.id} className="border-b border-obsidian-border/30">
+                                            <div key={pr.id} className="border-b border-white/5">
                                                 {/* PR Row */}
                                                 <div
                                                     onClick={() => handlePRClick(pr.number)}
                                                     className={clsx("px-4 py-3 cursor-pointer transition-colors",
-                                                        selectedPR === pr.number ? "bg-obsidian-info/10" : "hover:bg-obsidian-panel/50"
+                                                        selectedPR === pr.number ? "bg-white/[0.04]" : "hover:bg-white/[0.02]"
                                                     )}
                                                 >
                                                     <div className="flex items-start gap-2">
@@ -1418,7 +1716,7 @@ export default function CICDPage() {
                                                 </div>
                                                 {/* PR Actions Panel (expands on click) */}
                                                 {selectedPR === pr.number && (
-                                                    <div className="px-4 pb-3 pt-2 bg-obsidian-panel/30 flex items-center gap-2 flex-wrap border-b border-obsidian-border/30">
+                                                    <div className="px-4 pb-3 pt-2 bg-white/[0.01] flex items-center gap-2 flex-wrap border-b border-white/5">
                                                         {pr.state === 'open' ? (
                                                             <>
                                                                 <button
@@ -1517,7 +1815,7 @@ export default function CICDPage() {
                                     /* ─── Branches Tab ─── */
                                     <div className="flex-1 overflow-auto">
                                         {/* Create Branch */}
-                                        <div className="flex items-center gap-2 px-4 py-2 border-b border-obsidian-border bg-obsidian-panel transition-all active:scale-95">
+                                        <div className="flex items-center gap-2 px-4 py-2 border-b border-white/5 bg-black/20 backdrop-blur-md transition-all active:scale-95">
                                             <span className="text-[11px] text-obsidian-muted">{branches.length} branches</span>
                                             <button onClick={() => setShowCreateBranch(!showCreateBranch)}
                                                 className="ml-auto flex items-center gap-1 px-2 py-1 bg-obsidian-info/15 text-obsidian-info rounded text-[10px] font-medium hover:bg-obsidian-info/25 transition-all active:scale-95">
@@ -1526,13 +1824,13 @@ export default function CICDPage() {
                                         </div>
 
                                         {showCreateBranch && (
-                                            <div className="px-4 py-3 border-b border-obsidian-border bg-obsidian-panel/50 backdrop-blur-md space-y-2 transition-all active:scale-95">
+                                            <div className="px-4 py-3 border-b border-white/5 bg-black/40 backdrop-blur-md space-y-2 transition-all active:scale-95">
                                                 <input type="text" placeholder="Branch name..." value={newBranchName} onChange={e => setNewBranchName(e.target.value)}
-                                                    className="w-full bg-obsidian-bg border border-obsidian-border rounded px-2 py-1.5 text-[11px] text-foreground placeholder-obsidian-muted outline-none transition-all active:scale-95" />
+                                                    className="w-full bg-black/20 border border-white/10 rounded px-2 py-1.5 text-[11px] text-foreground placeholder-obsidian-muted outline-none transition-all active:scale-95" />
                                                 <div className="flex items-center gap-2">
                                                     <span className="text-[10px] text-obsidian-muted">from</span>
                                                     <select value={baseBranch} onChange={e => setBaseBranch(e.target.value)}
-                                                        className="flex-1 bg-obsidian-bg border border-obsidian-border rounded px-2 py-1 text-[11px] text-foreground outline-none transition-all active:scale-95">
+                                                        className="flex-1 bg-black/20 border border-white/10 rounded px-2 py-1 text-[11px] text-foreground outline-none transition-all active:scale-95">
                                                         <option value="">{selectedRepo?.default_branch || 'main'}</option>
                                                         {branches.map(b => <option key={b.name} value={b.name}>{b.name}</option>)}
                                                     </select>
@@ -1545,7 +1843,7 @@ export default function CICDPage() {
                                         {branches.length === 0 ? (
                                             <div className="text-center py-8 text-obsidian-muted text-[11px]">No branches</div>
                                         ) : branches.map(branch => (
-                                            <div key={branch.name} className="px-4 py-3 border-b border-obsidian-border/30 hover:bg-obsidian-panel/50 transition-all active:scale-95">
+                                            <div key={branch.name} className="px-4 py-3 border-b border-white/5 hover:bg-white/[0.02] transition-all active:scale-95">
                                                 <div className="flex items-center gap-2">
                                                     <GitBranch className="w-3.5 h-3.5 text-obsidian-success shrink-0" />
                                                     <span className="text-[12px] text-foreground font-mono">{branch.name}</span>
@@ -1584,13 +1882,13 @@ export default function CICDPage() {
                                 ) : detailTab === 'tags' ? (
                                     /* ─── Tags Tab ─── */
                                     <div className="flex-1 overflow-auto">
-                                        <div className="px-4 py-2 border-b border-obsidian-border bg-obsidian-panel text-[11px] text-obsidian-muted transition-all active:scale-95">
+                                        <div className="px-4 py-2 border-b border-white/5 bg-black/20 backdrop-blur-md text-[11px] text-obsidian-muted transition-all active:scale-95">
                                             {tags.length} tag{tags.length !== 1 ? 's' : ''}
                                         </div>
                                         {tags.length === 0 ? (
                                             <div className="text-center py-8 text-obsidian-muted text-[11px]">No tags</div>
                                         ) : tags.map(tag => (
-                                            <div key={tag.name} className="px-4 py-3 border-b border-obsidian-border/30 hover:bg-obsidian-panel/50 flex items-center gap-2 transition-all active:scale-95">
+                                            <div key={tag.name} className="px-4 py-3 border-b border-white/5 hover:bg-white/[0.02] flex items-center gap-2 transition-all active:scale-95">
                                                 <Star className="w-3.5 h-3.5 text-obsidian-warning shrink-0" />
                                                 <span className="text-[12px] font-mono text-foreground">{tag.name}</span>
                                                 <span className="ml-2 text-[10px] text-obsidian-muted font-mono">{tag.commit?.sha?.slice(0, 7)}</span>
@@ -1610,7 +1908,7 @@ export default function CICDPage() {
                                                 <span className="text-[12px]">No workflow runs</span>
                                             </div>
                                         ) : actionRuns.map((run) => (
-                                            <div key={run.id} className="px-4 py-2.5 border-b border-obsidian-border/30 hover:bg-obsidian-panel/50 transition-all active:scale-95">
+                                            <div key={run.id} className="px-4 py-2.5 border-b border-white/5 hover:bg-white/[0.02] transition-all active:scale-95">
                                                 <div className="flex items-center justify-between mb-1">
                                                     <div className="flex items-center gap-2">
                                                         <ActionBadge status={run.status || 'unknown'} conclusion={run.conclusion} />
@@ -1632,7 +1930,7 @@ export default function CICDPage() {
                         </div>
                     )}
                 </div>
-            </div>
-        </div >
+            </main>
+        </div>
     );
 }

@@ -13,6 +13,7 @@ import WorkflowsPage from './app/workflows/page';
 import CicdPage from './app/cicd/page';
 import AgentPage from './app/agent/page';
 import VisualizePage from './app/visualize/page';
+import NotebooksPage from './app/notebooks/page';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
     <React.StrictMode>
@@ -27,6 +28,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
                 <Route path="/cicd" element={<CicdPage />} />
                 <Route path="/agent" element={<AgentPage />} />
                 <Route path="/visualize" element={<VisualizePage />} />
+                <Route path="/notebooks" element={<NotebooksPage />} />
             </Routes>
         </BrowserRouter>
     </React.StrictMode>

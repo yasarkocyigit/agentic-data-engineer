@@ -243,65 +243,65 @@ async def trigger_run(dag_id: str, conf=None):
     return transform_run(result)
 
 
-    async def cancel_run(dag_id: str, run_id: str):
-        result = await airflow_fetch(
-            f"/dags/{dag_id}/dagRuns/{run_id}",
-            method="PATCH",
-            body={"state": "failed"},
-        )
-        return transform_run(result)
+async def cancel_run(dag_id: str, run_id: str):
+    result = await airflow_fetch(
+        f"/dags/{dag_id}/dagRuns/{run_id}",
+        method="PATCH",
+        body={"state": "failed"},
+    )
+    return transform_run(result)
 
 
-    async def toggle_dag_pause(dag_id: str, is_paused: bool):
-        result = await airflow_fetch(
-            f"/dags/{dag_id}", method="PATCH", body={"is_paused": is_paused}
-        )
-        return {"dag_id": result.get("dag_id"), "is_paused": result.get("is_paused")}
+async def toggle_dag_pause(dag_id: str, is_paused: bool):
+    result = await airflow_fetch(
+        f"/dags/{dag_id}", method="PATCH", body={"is_paused": is_paused}
+    )
+    return {"dag_id": result.get("dag_id"), "is_paused": result.get("is_paused")}
 
 
-    async def get_dag_source(dag_id: str):
-        result = await airflow_fetch(f"/dagSources/{dag_id}")
-        return {"content": result.get("content"), "version": result.get("version_number")}
+async def get_dag_source(dag_id: str):
+    result = await airflow_fetch(f"/dagSources/{dag_id}")
+    return {"content": result.get("content"), "version": result.get("version_number")}
 
 
-    async def get_dag_structure(dag_id: str):
-        data = await airflow_fetch(f"/dags/{dag_id}/tasks")
-        nodes = [
-            {
-                "id": t.get("task_id"),
-                "label": t.get("task_display_name"),
-                "operator": t.get("operator_name"),
-                "color": t.get("ui_color"),
-                "fgColor": t.get("ui_fgcolor"),
-                "triggerRule": t.get("trigger_rule"),
-                "isMapped": t.get("is_mapped"),
-            }
-            for t in data.get("tasks", [])
-        ]
-        edges = []
-        for task in data.get("tasks", []):
-            for downstream in task.get("downstream_task_ids", []):
-                edges.append({"source": task["task_id"], "target": downstream})
-        return {"nodes": nodes, "edges": edges}
+async def get_dag_structure(dag_id: str):
+    data = await airflow_fetch(f"/dags/{dag_id}/tasks")
+    nodes = [
+        {
+            "id": t.get("task_id"),
+            "label": t.get("task_display_name"),
+            "operator": t.get("operator_name"),
+            "color": t.get("ui_color"),
+            "fgColor": t.get("ui_fgcolor"),
+            "triggerRule": t.get("trigger_rule"),
+            "isMapped": t.get("is_mapped"),
+        }
+        for t in data.get("tasks", [])
+    ]
+    edges = []
+    for task in data.get("tasks", []):
+        for downstream in task.get("downstream_task_ids", []):
+            edges.append({"source": task["task_id"], "target": downstream})
+    return {"nodes": nodes, "edges": edges}
 
 
-    async def get_task_instances(dag_id: str, run_id: str):
-        data = await airflow_fetch(f"/dags/{dag_id}/dagRuns/{run_id}/taskInstances")
-        return data.get("task_instances", [])
+async def get_task_instances(dag_id: str, run_id: str):
+    data = await airflow_fetch(f"/dags/{dag_id}/dagRuns/{run_id}/taskInstances")
+    return data.get("task_instances", [])
 
 
-    async def get_health():
-        data = await airflow_fetch("/monitor/health")
-        return {
-            "scheduler": {
-                "status": data.get("scheduler", {}).get("status", "unknown"),
-                "heartbeat": data.get("scheduler", {}).get("latest_scheduler_heartbeat"),
-            },
-            "database": {"status": data.get("metadatabase", {}).get("status", "unknown")},
-            "dag_processor": {
-                "status": data.get("dag_processor", {}).get("status", "unknown"),
-                "heartbeat": data.get("dag_processor", {}).get("latest_dag_processor_heartbeat"),
-            },
+async def get_health():
+    data = await airflow_fetch("/monitor/health")
+    return {
+        "scheduler": {
+            "status": data.get("scheduler", {}).get("status", "unknown"),
+            "heartbeat": data.get("scheduler", {}).get("latest_scheduler_heartbeat"),
+        },
+        "database": {"status": data.get("metadatabase", {}).get("status", "unknown")},
+        "dag_processor": {
+            "status": data.get("dag_processor", {}).get("status", "unknown"),
+            "heartbeat": data.get("dag_processor", {}).get("latest_dag_processor_heartbeat"),
+        },
     }
 
 async def clear_task_instances(dag_id: str, run_id: str, task_id: str):

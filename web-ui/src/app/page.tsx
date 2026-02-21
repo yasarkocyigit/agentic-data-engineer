@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, Suspense } from 'react';
 import { Sidebar } from '@/components/Sidebar';
-import { Activity, CheckCircle, Cpu, Database, GitPullRequest, Bot, Terminal, ExternalLink, Search, Table, Bell, Play, Settings, X, FileCode, Maximize2, Minimize2, Eye, Code2 } from 'lucide-react';
+import { Activity, CheckCircle, Cpu, Database, GitPullRequest, Bot, Terminal, ExternalLink, Search, Table, Bell, Play, Settings, X, FileCode, Maximize2, Minimize2, Eye, Code2, LayoutPanelLeft } from 'lucide-react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import ReactMarkdown from 'react-markdown';
@@ -155,23 +155,39 @@ function HomeContent() {
   }, []);
 
   return (
-    <div className="flex h-screen bg-obsidian-bg text-foreground font-sans overflow-hidden">
-      <Sidebar />
+    <div className="flex h-screen bg-[#09090b] text-foreground font-sans overflow-hidden relative">
+      {/* Ambient Lighting */}
+      <div className="absolute top-0 left-0 w-[800px] h-[800px] bg-obsidian-purple/[0.04] rounded-full blur-[120px] pointer-events-none -translate-x-1/4 -translate-y-1/4 z-0" />
+      <div className="absolute bottom-0 right-0 w-[600px] h-[600px] bg-obsidian-info/[0.03] rounded-full blur-[100px] pointer-events-none translate-x-1/4 translate-y-1/4 z-0" />
+
+      {/* Sidebar */}
+      <div className="relative z-10 shrink-0">
+        <Sidebar />
+      </div>
 
       {/* Main Content */}
-      <main className="flex-1 flex flex-col min-w-0 overflow-hidden relative">
+      <main className="flex-1 flex flex-col min-w-0 overflow-hidden relative z-10">
 
         {/* Top Toolbar */}
-        <header className="h-9 bg-obsidian-panel border-b border-obsidian-border flex items-center justify-between px-4 shrink-0">
-          <div className="flex items-center gap-2 text-[12px]">
+        <header className="flex items-center px-4 justify-between shrink-0 h-10 bg-black/40 backdrop-blur-md border-b border-white/5 z-10 w-full relative">
+          <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-obsidian-info/30 to-transparent opacity-50"></div>
+          <div className="flex items-center gap-3 text-[12px]">
+            <button
+              onClick={() => window.dispatchEvent(new CustomEvent('openclaw:toggle-sidebar'))}
+              className="p-1.5 hover:bg-white/10 rounded-md text-obsidian-muted hover:text-white transition-all active:scale-95 border border-transparent hover:border-obsidian-border/50"
+              title="Toggle Explorer"
+            >
+              <LayoutPanelLeft className="w-4 h-4 drop-shadow-[0_0_8px_rgba(255,255,255,0.2)]" />
+            </button>
+            <div className="w-[1px] h-4 bg-obsidian-border/50"></div>
             <span className="font-bold text-foreground">{repoName}</span>
             <span className="text-obsidian-muted">/</span>
             <span className="text-foreground">{openFile ? openFile.name : 'Dashboard'}</span>
           </div>
 
           <div className="flex items-center space-x-3">
-            <div className="flex items-center px-3 py-1 bg-obsidian-panel-hover border border-obsidian-border rounded-md text-[11px] font-medium text-foreground gap-2 transition-all shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
-              <span className="w-2 h-2 rounded-full bg-obsidian-success animate-pulse shadow-[0_0_8px_rgba(76,175,80,0.8)]"></span>
+            <div className="flex items-center px-3 py-1 bg-black/20 border border-white/5 rounded-md text-[11px] font-medium text-foreground gap-2 transition-all">
+              <span className="w-2 h-2 rounded-full bg-white/40 animate-pulse"></span>
               ClawdBot: Online
             </div>
             <button className="p-1.5 text-obsidian-muted hover:text-foreground hover:bg-white/5 rounded-md transition-all active:scale-95">
@@ -185,12 +201,12 @@ function HomeContent() {
 
         {/* File Viewer or Dashboard */}
         {openFile || fileLoading || fileError ? (
-          <div className={`flex-1 flex flex-col min-h-0 ${fullscreen ? 'fixed inset-0 z-50 bg-obsidian-bg' : ''}`}>
+          <div className={`flex-1 flex flex-col min-h-0 ${fullscreen ? 'fixed inset-0 z-50 bg-[#09090b]' : ''}`}>
             {/* Tab Bar */}
-            <div className="h-10 bg-black/60 border-b border-obsidian-border/30 flex items-end shrink-0 px-2 gap-1 pt-2 shadow-sm">
-              <div className="flex items-center h-full bg-obsidian-bg rounded-t-lg mx-1 px-4 gap-2 relative group min-w-[140px] max-w-[220px] shadow-[0_-2px_10px_rgba(0,0,0,0.5)] border-t border-x border-obsidian-border/30">
-                {/* Top Glowing Highlight Feature */}
-                <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-obsidian-info to-obsidian-purple rounded-t-lg opacity-80 shadow-[0_0_8px_rgba(34,211,238,0.5)]"></div>
+            <div className="flex items-end overflow-x-auto shrink-0 bg-transparent h-[38px] w-full border-b border-white/5 px-2 gap-1 pt-1.5 z-0">
+              <div className="flex items-center h-full bg-black/40 backdrop-blur-md rounded-t-lg mx-1 px-4 gap-2 relative group min-w-[140px] max-w-[220px] border-t border-x border-white/5 text-white">
+                {/* Top Highlight Feature */}
+                <div className="absolute top-0 left-0 right-0 h-[2px] bg-white/10 rounded-t-lg"></div>
 
                 <FileCode className="w-3.5 h-3.5 drop-shadow-md" style={{ color: getLanguageColor(openFile?.language || 'plaintext') }} />
                 <span className="text-[12px] font-medium text-foreground truncate flex-1 tracking-wide">{openFile?.name || 'Loading...'}</span>
@@ -206,7 +222,7 @@ function HomeContent() {
                 {openFile && (openFile.language === 'markdown' || openFile.language === 'html') && (
                   <button
                     onClick={() => setShowRawMarkdown(!showRawMarkdown)}
-                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] uppercase tracking-wider font-bold text-obsidian-muted hover:text-foreground hover:bg-white/10 transition-all active:scale-95 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] border border-obsidian-border/30"
+                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] uppercase tracking-wider font-bold text-obsidian-muted hover:text-foreground hover:bg-white/10 transition-all active:scale-95 border border-white/5 bg-black/20"
                     title={showRawMarkdown ? 'Preview' : 'Source'}
                   >
                     {showRawMarkdown ? <Eye className="w-3.5 h-3.5" /> : <Code2 className="w-3.5 h-3.5" />}
@@ -214,7 +230,7 @@ function HomeContent() {
                   </button>
                 )}
                 {openFile && (
-                  <span className="text-[10px] text-obsidian-muted font-mono bg-black/40 px-2 py-0.5 rounded-md border border-obsidian-border/20">
+                  <span className="text-[10px] text-obsidian-muted font-mono bg-black/20 px-2 py-0.5 rounded-md border border-white/5">
                     {openFile.lineCount}L · {formatBytes(openFile.size)}
                   </span>
                 )}
@@ -229,7 +245,7 @@ function HomeContent() {
             </div>
 
             {/* File Content */}
-            <div className="flex-1 overflow-auto bg-obsidian-bg">
+            <div className="flex-1 overflow-auto bg-transparent">
               {fileLoading && (
                 <div className="flex items-center justify-center h-full">
                   <div className="text-obsidian-muted text-sm animate-pulse">Loading file...</div>
@@ -292,7 +308,7 @@ function HomeContent() {
 
             {/* Bottom Status Bar */}
             {openFile && (
-              <div className="h-6 bg-obsidian-panel border-t border-obsidian-border flex items-center px-3 text-[10px] text-obsidian-muted gap-4 shrink-0">
+              <div className="h-6 bg-black/40 backdrop-blur-md border-t border-white/5 flex items-center px-3 text-[10px] text-obsidian-muted gap-4 shrink-0">
                 <span className="flex items-center gap-1">
                   <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: getLanguageColor(openFile.language) }} />
                   {openFile.language}
@@ -308,54 +324,54 @@ function HomeContent() {
           <div className="flex-1 flex flex-col p-0 overflow-hidden">
 
             {/* Top Section: stats */}
-            <div className="h-[140px] border-b border-obsidian-border/50 bg-obsidian-bg/80 flex shrink-0">
+            <div className="h-[140px] border-b border-white/5 bg-transparent flex shrink-0">
               {/* Card 1: DAGs */}
-              <div className="flex-1 border-r border-obsidian-border/50 p-5 flex flex-col justify-between hover:bg-white/5 transition-colors">
+              <div className="flex-1 border-r border-white/5 p-5 flex flex-col justify-between hover:bg-white/[0.02] transition-colors">
                 <div className="flex justify-between items-start">
                   <span className="text-[10px] text-obsidian-muted font-bold uppercase tracking-widest">Airflow DAGs</span>
-                  <Activity className="w-4 h-4 text-obsidian-success drop-shadow-[0_0_8px_rgba(76,175,80,0.4)]" />
+                  <Activity className="w-4 h-4 text-white/40" />
                 </div>
                 <div>
                   <div className="text-3xl font-mono text-white tracking-tight">12 / 12</div>
-                  <div className="flex items-center mt-1 text-[11px] text-obsidian-success/90 font-medium">
-                    <CheckCircle className="w-3.5 h-3.5 mr-1" /> All Operational
+                  <div className="flex items-center mt-1 text-[11px] text-white/50 font-medium">
+                    <CheckCircle className="w-3.5 h-3.5 mr-1 text-white/40" /> All Operational
                   </div>
                 </div>
               </div>
 
               {/* Card 2: Agent */}
-              <div className="flex-1 border-r border-obsidian-border/50 p-5 flex flex-col justify-between hover:bg-white/5 transition-colors">
+              <div className="flex-1 border-r border-white/5 p-5 flex flex-col justify-between hover:bg-white/[0.02] transition-colors">
                 <div className="flex justify-between items-start">
                   <span className="text-[10px] text-obsidian-muted font-bold uppercase tracking-widest">Agent Status</span>
-                  <Bot className="w-4 h-4 text-obsidian-info drop-shadow-[0_0_8px_rgba(34,211,238,0.4)]" />
+                  <Bot className="w-4 h-4 text-white/40" />
                 </div>
                 <div>
                   <div className="text-[22px] font-mono text-white tracking-tight truncate">Thinking...</div>
-                  <div className="flex items-center mt-1 text-[11px] text-obsidian-info/90 font-medium">
-                    <GitPullRequest className="w-3.5 h-3.5 mr-1" /> Reviewing PR #42
+                  <div className="flex items-center mt-1 text-[11px] text-white/50 font-medium">
+                    <GitPullRequest className="w-3.5 h-3.5 mr-1 text-white/40" /> Reviewing PR #42
                   </div>
                 </div>
               </div>
 
               {/* Card 3: System Load */}
-              <div className="flex-1 border-r border-obsidian-border/50 p-5 flex flex-col justify-between hover:bg-white/5 transition-colors">
+              <div className="flex-1 border-r border-white/5 p-5 flex flex-col justify-between hover:bg-white/[0.02] transition-colors">
                 <div className="flex justify-between items-start">
                   <span className="text-[10px] text-obsidian-muted font-bold uppercase tracking-widest">System Load</span>
-                  <Cpu className="w-4 h-4 text-foreground drop-shadow-[0_0_8px_rgba(255,255,255,0.4)]" />
+                  <Cpu className="w-4 h-4 text-white/40" />
                 </div>
                 <div>
                   <div className="text-3xl font-mono text-white tracking-tight">34%</div>
-                  <div className="w-full bg-black/40 h-1.5 mt-2 rounded-full overflow-hidden shadow-inner">
-                    <div className="bg-gradient-to-r from-obsidian-info to-obsidian-purple h-full w-[34%] rounded-full shadow-[0_0_10px_rgba(34,211,238,0.5)]"></div>
+                  <div className="w-full bg-black/40 border border-white/5 h-[3px] mt-2 rounded-full overflow-hidden">
+                    <div className="bg-white/40 h-full w-[34%] rounded-full"></div>
                   </div>
                 </div>
               </div>
 
               {/* Card 4: Data Volume */}
-              <div className="flex-1 p-5 flex flex-col justify-between hover:bg-white/5 transition-colors">
+              <div className="flex-1 p-5 flex flex-col justify-between hover:bg-white/[0.02] transition-colors">
                 <div className="flex justify-between items-start">
                   <span className="text-[10px] text-obsidian-muted font-bold uppercase tracking-widest">Data Volume</span>
-                  <Database className="w-4 h-4 text-obsidian-muted drop-shadow-[0_0_8px_rgba(139,148,158,0.3)]" />
+                  <Database className="w-4 h-4 text-white/40" />
                 </div>
                 <div>
                   <div className="text-3xl font-mono text-white tracking-tight">1.2 TB</div>
@@ -367,28 +383,28 @@ function HomeContent() {
             {/* Bottom Section: Split Pane */}
             <div className="flex-1 flex min-h-0">
               {/* Left: Console / Output */}
-              <div className="flex-[2] border-r border-obsidian-border/50 flex flex-col bg-black/40">
-                <div className="h-8 bg-black/60 border-b border-obsidian-border/30 flex items-center px-4 justify-between shrink-0 shadow-sm">
+              <div className="flex-[2] border-r border-white/5 flex flex-col bg-black/20 backdrop-blur-md">
+                <div className="h-8 bg-black/40 border-b border-white/5 flex items-center px-4 justify-between shrink-0 shadow-sm">
                   <div className="flex items-center gap-2">
-                    <Terminal className="w-3.5 h-3.5 text-obsidian-purple" />
+                    <Terminal className="w-3.5 h-3.5 text-white/40" />
                     <span className="text-[10px] font-bold text-obsidian-muted uppercase tracking-widest">Agent Console Output</span>
                   </div>
                 </div>
                 <div className="flex-1 overflow-auto p-4 font-mono text-[11px] leading-6 custom-scrollbar">
-                  <div className="text-obsidian-muted group hover:bg-white/5 px-2 -mx-2 rounded transition-colors"><span className="text-[#546e7a]">[10:42:15]</span> <span className="text-obsidian-info glow-text font-bold">INFO...</span> Started metadata analysis of `medallion_pipeline.py`</div>
-                  <div className="text-obsidian-muted group hover:bg-white/5 px-2 -mx-2 rounded transition-colors"><span className="text-[#546e7a]">[10:42:25]</span> <span className="text-obsidian-muted font-bold">ACTION.</span> Executing `pip install pandas==2.1.0` in Docker container...</div>
-                  <div className="text-obsidian-muted group hover:bg-white/5 px-2 -mx-2 rounded transition-colors"><span className="text-[#546e7a]">[10:43:02]</span> <span className="text-obsidian-success glow-text font-bold">SUCCESS</span> Dependencies resolved.</div>
-                  <div className="text-obsidian-muted group hover:bg-white/5 px-2 -mx-2 rounded transition-colors"><span className="text-[#546e7a]">[10:43:10]</span> <span className="text-obsidian-warning glow-text font-bold">PR OPEN</span> Created PR #43: "Fix dependency issue"</div>
+                  <div className="text-obsidian-muted group hover:bg-white/5 px-2 -mx-2 rounded transition-colors"><span className="text-white/30">[10:42:15]</span> <span className="text-white/60 font-bold">INFO...</span> Started metadata analysis of `medallion_pipeline.py`</div>
+                  <div className="text-obsidian-muted group hover:bg-white/5 px-2 -mx-2 rounded transition-colors"><span className="text-white/30">[10:42:25]</span> <span className="text-white/40 font-bold">ACTION.</span> Executing `pip install pandas==2.1.0` in Docker container...</div>
+                  <div className="text-obsidian-muted group hover:bg-white/5 px-2 -mx-2 rounded transition-colors"><span className="text-white/30">[10:43:02]</span> <span className="text-white/60 font-bold">SUCCESS</span> Dependencies resolved.</div>
+                  <div className="text-obsidian-muted group hover:bg-white/5 px-2 -mx-2 rounded transition-colors"><span className="text-white/30">[10:43:10]</span> <span className="text-white/60 font-bold">PR OPEN</span> Created PR #43: "Fix dependency issue"</div>
                   <div className="flex items-center text-foreground mt-2 px-2 -mx-2">
-                    <span className="mr-2 text-obsidian-info">❯</span>
-                    <span className="w-2 h-3.5 bg-obsidian-info/80 animate-pulse shadow-[0_0_8px_rgba(34,211,238,0.5)]"></span>
+                    <span className="mr-2 text-white/40">❯</span>
+                    <span className="w-2 h-3.5 bg-white/40 animate-pulse"></span>
                   </div>
                 </div>
               </div>
 
               {/* Right: Iceberg Catalog */}
-              <div className="flex-1 flex flex-col bg-obsidian-panel/30">
-                <div className="h-8 bg-black/40 border-b border-obsidian-border/30 flex items-center px-4 justify-between shrink-0 shadow-sm">
+              <div className="flex-1 flex flex-col bg-black/20 backdrop-blur-md">
+                <div className="h-8 bg-black/40 border-b border-white/5 flex items-center px-4 justify-between shrink-0 shadow-sm">
                   <span className="text-[10px] font-bold text-obsidian-muted uppercase tracking-widest">Iceberg Catalog</span>
                   <Search className="w-3.5 h-3.5 text-obsidian-muted" />
                 </div>
@@ -402,16 +418,16 @@ function HomeContent() {
                     </thead>
                     <tbody className="text-[12px]">
                       {[
-                        { name: 'orders_bronze', time: '2m', color: 'text-[#cd7332]' },
-                        { name: 'customer_silver', time: '15m', color: 'text-[#c0c0c0]' },
-                        { name: 'revenue_gold', time: '1h', color: 'text-[#ffd700]' }
+                        { name: 'orders_bronze', time: '2m', color: 'text-white/40' },
+                        { name: 'customer_silver', time: '15m', color: 'text-white/40' },
+                        { name: 'revenue_gold', time: '1h', color: 'text-white/40' }
                       ].map((item, i) => (
                         <tr key={i} className="group cursor-pointer">
-                          <td className="p-2 px-3 border-b border-obsidian-border/20 text-foreground flex items-center gap-2.5 transition-colors group-hover:bg-white/5 rounded-l-md border-l-2 border-transparent group-hover:border-obsidian-info">
+                          <td className="p-2 px-3 border-b border-white/5 text-foreground flex items-center gap-2.5 transition-colors group-hover:bg-white/[0.02] rounded-l-md border-l-2 border-transparent group-hover:border-white/20">
                             <Table className={clsx("w-4 h-4", item.color)} />
                             <span className="group-hover:text-white transition-colors">{item.name}</span>
                           </td>
-                          <td className="p-2 px-3 border-b border-obsidian-border/20 text-obsidian-muted text-right transition-colors group-hover:bg-white/5 rounded-r-md group-hover:text-foreground">
+                          <td className="p-2 px-3 border-b border-white/5 text-obsidian-muted text-right transition-colors group-hover:bg-white/[0.02] rounded-r-md group-hover:text-foreground">
                             {item.time}
                           </td>
                         </tr>

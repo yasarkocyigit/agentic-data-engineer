@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
     Database, GitBranch, Box, ChevronDown, RefreshCw, Loader2, Info,
-    ZoomIn, ZoomOut, Maximize2, ArrowRight, Circle, Layers, Clock, Tag
+    ZoomIn, ZoomOut, Maximize2, ArrowRight, Circle, Layers, Clock, Tag, LayoutPanelLeft
 } from 'lucide-react';
 import clsx from 'clsx';
 import { Sidebar } from '@/components/Sidebar';
@@ -259,14 +259,14 @@ export default function LineagePage() {
         if (node.type === 'DATASET') {
             return {
                 fill: hoveredNode === node.id ? 'var(--color-obsidian-panel-header)' : 'var(--color-obsidian-panel)',
-                stroke: selectedNode?.id === node.id ? 'var(--color-obsidian-info)' : 'var(--color-obsidian-border)',
-                iconColor: 'var(--color-obsidian-info)',
+                stroke: selectedNode?.id === node.id ? '#38bdf8' : 'var(--color-obsidian-border)',
+                iconColor: '#38bdf8', // sky-400
             };
         }
         return {
             fill: hoveredNode === node.id ? 'var(--color-obsidian-panel-header)' : 'var(--color-obsidian-panel)',
-            stroke: selectedNode?.id === node.id ? 'var(--color-obsidian-success)' : 'var(--color-obsidian-border)',
-            iconColor: 'var(--color-obsidian-success)',
+            stroke: selectedNode?.id === node.id ? '#818cf8' : 'var(--color-obsidian-border)',
+            iconColor: '#818cf8', // indigo-400
         };
     };
 
@@ -285,35 +285,43 @@ export default function LineagePage() {
         <div className="flex h-screen bg-obsidian-bg text-foreground font-sans overflow-hidden">
             <Sidebar />
 
-            <div className="flex-1 flex flex-col min-w-0">
+            <main className="flex-1 flex flex-col min-w-0 overflow-hidden bg-obsidian-bg">
                 {/* ─── Top Bar ─── */}
-                <div className="h-9 bg-obsidian-panel border-b border-obsidian-border flex items-center px-4 justify-between shrink-0">
+                <div className="flex items-center px-4 justify-between shrink-0 h-10 bg-black/60 border-b border-obsidian-border/30 z-10 w-full">
                     <div className="flex items-center gap-3 text-[12px]">
-                        <GitBranch className="w-3.5 h-3.5 text-obsidian-purple" />
-                        <span className="text-foreground font-medium">Data Lineage</span>
-                        <span className="text-obsidian-muted">·</span>
+                        <button
+                            onClick={() => window.dispatchEvent(new CustomEvent('openclaw:toggle-sidebar'))}
+                            className="p-1.5 hover:bg-white/10 rounded-md text-obsidian-muted hover:text-white transition-all active:scale-95 border border-transparent hover:border-obsidian-border/50"
+                            title="Toggle Explorer"
+                        >
+                            <LayoutPanelLeft className="w-4 h-4 drop-shadow-[0_0_8px_rgba(255,255,255,0.2)]" />
+                        </button>
+                        <div className="w-[1px] h-4 bg-obsidian-border/50"></div>
+                        <GitBranch className="w-4 h-4 text-indigo-400 drop-shadow-[0_0_8px_rgba(129,140,248,0.5)]" />
+                        <span className="text-white font-semibold tracking-wide">Data Lineage</span>
+                        <span className="text-obsidian-muted/50">·</span>
 
                         {/* Namespace Selector */}
                         <div className="relative">
                             <button
                                 onClick={() => setNsDropdownOpen(!nsDropdownOpen)}
-                                className="flex items-center gap-1.5 px-2.5 py-1 bg-obsidian-panel/50 backdrop-blur-md border border-obsidian-border/50 rounded-md text-[11px] font-medium hover:border-obsidian-border hover:bg-obsidian-panel-hover transition-all active:scale-95 shadow-sm"
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-[#18181b] border border-obsidian-border/50 rounded-md text-[11px] font-medium hover:border-white/20 hover:bg-[#27272a] transition-all active:scale-95 shadow-sm"
                             >
-                                <Layers className="w-3.5 h-3.5 text-obsidian-purple" />
-                                <span className={clsx(selectedNs ? "text-foreground" : "text-obsidian-muted")}>
+                                <Layers className="w-3 h-3 text-indigo-400" />
+                                <span className={clsx(selectedNs ? "text-white/90" : "text-obsidian-muted")}>
                                     {selectedNs || 'Select Namespace'}
                                 </span>
                                 <ChevronDown className={clsx("w-3.5 h-3.5 text-obsidian-muted transition-transform duration-200", nsDropdownOpen && "rotate-180")} />
                             </button>
                             {nsDropdownOpen && (
-                                <div className="absolute top-8 left-0 mt-1 bg-obsidian-panel/80 backdrop-blur-xl border border-obsidian-border/50 rounded-lg shadow-2xl z-50 min-w-[200px] overflow-hidden flex flex-col">
+                                <div className="absolute top-9 left-0 mt-1 bg-[#18181b]/95 backdrop-blur-xl border border-obsidian-border/50 rounded-lg shadow-2xl z-50 min-w-[200px] overflow-hidden flex flex-col">
                                     {namespaces.map(ns => (
                                         <button
                                             key={ns.name}
                                             onClick={() => { setSelectedNs(ns.name); setNsDropdownOpen(false); }}
                                             className={clsx(
-                                                "w-full text-left px-3 py-2 text-[11px] transition-all border-l-2 border-transparent hover:bg-white/5",
-                                                selectedNs === ns.name ? "bg-white/5 border-obsidian-purple text-foreground font-medium" : "text-obsidian-muted hover:text-foreground"
+                                                "w-full text-left px-3 py-2.5 text-[11px] transition-all border-l-2 border-transparent hover:bg-white/5",
+                                                selectedNs === ns.name ? "bg-indigo-500/10 border-indigo-500 text-white font-medium" : "text-obsidian-muted hover:text-white"
                                             )}
                                         >
                                             {ns.name}
@@ -326,16 +334,15 @@ export default function LineagePage() {
                             )}
                         </div>
 
-                        <span className="text-obsidian-muted">·</span>
-                        <span className="text-obsidian-muted">{jobs.length} jobs</span>
-                        <span className="text-obsidian-muted">·</span>
-                        <span className="text-obsidian-muted">{datasets.length} datasets</span>
+                        <span className="text-obsidian-muted/50">·</span>
+                        <span className="text-obsidian-muted font-mono bg-white/5 px-2 py-0.5 rounded">{jobs.length} jobs</span>
+                        <span className="text-obsidian-muted font-mono bg-white/5 px-2 py-0.5 rounded">{datasets.length} datasets</span>
                     </div>
 
                     <div className="flex items-center gap-2">
                         <button
                             onClick={fetchNamespaces}
-                            className="p-1 hover:bg-obsidian-panel-hover rounded text-obsidian-muted hover:text-foreground transition-colors"
+                            className="p-1.5 hover:bg-white/10 rounded-md text-obsidian-muted hover:text-white transition-colors border border-transparent hover:border-white/10"
                             title="Refresh"
                         >
                             <RefreshCw className="w-3.5 h-3.5" />
@@ -347,14 +354,17 @@ export default function LineagePage() {
                 <div className="flex-1 flex overflow-hidden">
 
                     {/* Left: Job/Dataset List */}
-                    <div className="w-[260px] border-r border-obsidian-border flex flex-col bg-obsidian-panel overflow-hidden shrink-0 shadow-[4px_0_24px_rgba(0,0,0,0.2)] z-10">
+                    <div className="w-[280px] border-r border-obsidian-border/30 flex flex-col bg-[#09090b]/80 backdrop-blur-xl overflow-hidden shrink-0 shadow-[4px_0_24px_rgba(0,0,0,0.4)] z-10 transition-all duration-300">
                         {/* Jobs Section */}
-                        <div className="flex-1 overflow-hidden flex flex-col border-b border-obsidian-border/50">
-                            <div className="px-3 py-2.5 text-[10px] font-bold text-obsidian-muted uppercase tracking-wider flex items-center gap-1.5 bg-black/20 shrink-0 shadow-sm border-b border-obsidian-border/30">
-                                <Box className="w-3.5 h-3.5 text-obsidian-success" />
-                                Jobs ({jobs.length})
+                        <div className="flex-1 overflow-hidden flex flex-col border-b border-obsidian-border/30">
+                            <div className="px-4 py-3 text-[10px] font-bold text-obsidian-muted uppercase tracking-widest flex items-center justify-between bg-black/40 shrink-0 shadow-sm border-b border-obsidian-border/20 sticky top-0 z-10 backdrop-blur-md">
+                                <div className="flex items-center gap-1.5">
+                                    <Box className="w-3.5 h-3.5 text-indigo-400" />
+                                    Jobs
+                                </div>
+                                <span className="bg-white/10 px-1.5 py-0.5 rounded text-white/70">{jobs.length}</span>
                             </div>
-                            <div className="flex-1 overflow-y-auto w-full">
+                            <div className="flex-1 overflow-y-auto w-full custom-scrollbar">
                                 {jobs.map((job: any) => {
                                     const isSelected = selectedNode?.id === `job:${selectedNs}:${job.name}`;
                                     return (
@@ -362,30 +372,33 @@ export default function LineagePage() {
                                             key={job.name}
                                             onClick={() => fetchLineage(`job:${selectedNs}:${job.name}`)}
                                             className={clsx(
-                                                "w-full text-left px-3 py-2 text-[11px] flex items-center gap-2 group transition-all active:scale-95 border-l-2",
+                                                "w-full text-left px-4 py-2.5 text-[11.5px] flex items-center gap-2.5 group transition-colors border-l-[3px]",
                                                 isSelected
-                                                    ? "bg-obsidian-success/10 border-obsidian-success text-foreground font-medium shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
-                                                    : "bg-transparent border-transparent hover:bg-obsidian-panel-hover text-obsidian-muted hover:text-foreground"
+                                                    ? "bg-indigo-500/10 border-indigo-400 text-white font-medium shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]"
+                                                    : "bg-transparent border-transparent hover:bg-white/5 text-obsidian-muted hover:text-white/90"
                                             )}
                                         >
-                                            <Circle className={clsx("w-2.5 h-2.5 flex-shrink-0 transition-colors", isSelected ? "text-obsidian-success" : "")} style={{ color: !isSelected ? getRunStateColor(job.latestRun?.state) : undefined }} />
-                                            <span className="truncate">{job.name}</span>
+                                            <Circle className={clsx("w-2 h-2 flex-shrink-0 transition-colors", isSelected ? "text-indigo-400" : "")} style={{ color: !isSelected ? getRunStateColor(job.latestRun?.state) : undefined }} />
+                                            <span className="truncate flex-1">{job.name}</span>
                                         </button>
                                     );
                                 })}
                                 {jobs.length === 0 && !loading && (
-                                    <div className="px-3 py-4 text-[10px] text-obsidian-muted italic text-center">No jobs in namespace</div>
+                                    <div className="px-4 py-6 text-[11px] text-obsidian-muted/50 italic text-center">No jobs in namespace</div>
                                 )}
                             </div>
                         </div>
 
                         {/* Datasets Section */}
                         <div className="flex-1 overflow-hidden flex flex-col">
-                            <div className="px-3 py-2.5 text-[10px] font-bold text-obsidian-muted uppercase tracking-wider flex items-center gap-1.5 bg-black/20 shrink-0 shadow-sm border-b border-obsidian-border/30">
-                                <Database className="w-3.5 h-3.5 text-obsidian-info" />
-                                Datasets ({datasets.length})
+                            <div className="px-4 py-3 text-[10px] font-bold text-obsidian-muted uppercase tracking-widest flex items-center justify-between bg-black/40 shrink-0 shadow-sm border-b border-obsidian-border/20 sticky top-0 z-10 backdrop-blur-md">
+                                <div className="flex items-center gap-1.5">
+                                    <Database className="w-3.5 h-3.5 text-sky-400" />
+                                    Datasets
+                                </div>
+                                <span className="bg-white/10 px-1.5 py-0.5 rounded text-white/70">{datasets.length}</span>
                             </div>
-                            <div className="flex-1 overflow-y-auto w-full pb-4">
+                            <div className="flex-1 overflow-y-auto w-full pb-6 custom-scrollbar">
                                 {datasets.map((ds: any) => {
                                     const isSelected = selectedNode?.id === `dataset:${selectedNs}:${ds.name}`;
                                     return (
@@ -393,19 +406,19 @@ export default function LineagePage() {
                                             key={ds.name}
                                             onClick={() => fetchLineage(`dataset:${selectedNs}:${ds.name}`)}
                                             className={clsx(
-                                                "w-full text-left px-3 py-2 text-[11px] flex items-center gap-2 group transition-all active:scale-95 border-l-2",
+                                                "w-full text-left px-4 py-2.5 text-[11.5px] flex items-center gap-2.5 group transition-colors border-l-[3px]",
                                                 isSelected
-                                                    ? "bg-obsidian-info/10 border-obsidian-info text-foreground font-medium shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
-                                                    : "bg-transparent border-transparent hover:bg-obsidian-panel-hover text-obsidian-muted hover:text-foreground"
+                                                    ? "bg-sky-500/10 border-sky-400 text-white font-medium shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]"
+                                                    : "bg-transparent border-transparent hover:bg-white/5 text-obsidian-muted hover:text-white/90"
                                             )}
                                         >
-                                            <Database className={clsx("w-3.5 h-3.5 flex-shrink-0 transition-colors", isSelected ? "text-obsidian-info glow-icon" : "text-obsidian-info/70")} />
-                                            <span className="truncate">{ds.name}</span>
+                                            <Database className={clsx("w-3.5 h-3.5 flex-shrink-0 transition-colors", isSelected ? "text-sky-400 drop-shadow-[0_0_5px_rgba(56,189,248,0.4)]" : "text-sky-400/50 group-hover:text-sky-400/80")} />
+                                            <span className="truncate flex-1">{ds.name}</span>
                                         </button>
                                     );
                                 })}
                                 {datasets.length === 0 && !loading && (
-                                    <div className="px-3 py-4 text-[10px] text-obsidian-muted italic text-center">No datasets in namespace</div>
+                                    <div className="px-4 py-6 text-[11px] text-obsidian-muted/50 italic text-center">No datasets in namespace</div>
                                 )}
                             </div>
                         </div>
@@ -466,6 +479,9 @@ export default function LineagePage() {
                                 onWheel={handleWheel}
                             >
                                 <defs>
+                                    <pattern id="ide-grid" width="30" height="30" patternUnits="userSpaceOnUse">
+                                        <circle cx="1" cy="1" r="1" fill="rgba(255,255,255,0.05)" />
+                                    </pattern>
                                     <filter id="nodeShadow" x="-20%" y="-20%" width="140%" height="140%">
                                         <feDropShadow dx="0" dy="4" stdDeviation="6" floodColor="#000000" floodOpacity="0.4" />
                                     </filter>
@@ -481,17 +497,18 @@ export default function LineagePage() {
                                     </filter>
                                     <linearGradient id="edgeGradient" x1="0%" y1="0%" x2="100%" y2="0%">
                                         <stop offset="0%" stopColor="var(--color-obsidian-border)" stopOpacity="0.4" />
-                                        <stop offset="50%" stopColor="var(--color-obsidian-info)" stopOpacity="0.8" />
+                                        <stop offset="50%" stopColor="var(--color-obsidian-info)" stopOpacity="0.9" />
                                         <stop offset="100%" stopColor="var(--color-obsidian-border)" stopOpacity="0.4" />
                                     </linearGradient>
                                     <style>
                                         {`
                                             @keyframes flowAnim {
-                                                to { stroke-dashoffset: -20; }
+                                                to { stroke-dashoffset: -40; }
                                             }
                                         `}
                                     </style>
                                 </defs>
+                                <rect width="100%" height="100%" fill="url(#ide-grid)" pointerEvents="none" />
                                 <g transform={`translate(${pan.x}, ${pan.y}) scale(${zoom})`}>
                                     {/* Edges */}
                                     {lineageEdges.map((edge, i) => {
@@ -501,16 +518,24 @@ export default function LineagePage() {
                                         const isConnectedToSelected = selectedNode && (selectedNode.id === src.id || selectedNode.id === tgt.id);
                                         return (
                                             <g key={i}>
+                                                {/* Background invisible wider line for hovering/clicking (optional) */}
+                                                <path
+                                                    d={edgePath(src, tgt)}
+                                                    fill="none"
+                                                    stroke="transparent"
+                                                    strokeWidth={10}
+                                                />
+                                                {/* Main Edge */}
                                                 <path
                                                     d={edgePath(src, tgt)}
                                                     fill="none"
                                                     stroke={isConnectedToSelected ? "url(#edgeGradient)" : "var(--color-obsidian-border)"}
                                                     strokeWidth={isConnectedToSelected ? 2.5 : 1.5}
-                                                    opacity={isConnectedToSelected ? 1 : 0.5}
-                                                    strokeDasharray={isConnectedToSelected ? "4 4" : "none"}
-                                                    style={isConnectedToSelected ? { animation: 'flowAnim 1s linear infinite' } : {}}
+                                                    opacity={isConnectedToSelected ? 1 : 0.3}
+                                                    strokeDasharray={isConnectedToSelected ? "4 8" : "none"}
+                                                    style={isConnectedToSelected ? { animation: 'flowAnim 1.5s linear infinite' } : {}}
                                                 />
-                                                {/* Arrowhead */}
+                                                {/* Arrowhead / Data Dot */}
                                                 <circle
                                                     cx={tgt.x}
                                                     cy={tgt.y + NODE_H / 2}
@@ -539,67 +564,61 @@ export default function LineagePage() {
                                                 onMouseLeave={() => setHoveredNode(null)}
                                                 className="cursor-pointer transition-all duration-300"
                                             >
-                                                {/* Background Plate with shadow */}
-                                                <rect
-                                                    x={0} y={0}
-                                                    width={NODE_W} height={NODE_H}
-                                                    rx={8}
-                                                    fill={isSelected ? '#131317' : (style.fill || '#0d0d12')}
-                                                    stroke={isSelected ? style.stroke : (isHovered ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.08)')}
-                                                    strokeWidth={isSelected ? 2 : 1.5}
-                                                    filter={isSelected || isHovered ? "url(#nodeShadowHover)" : "url(#nodeShadow)"}
-                                                    opacity={0.95}
-                                                />
-
-                                                {/* Outer Glow for Selected */}
                                                 {isSelected && (
                                                     <rect
-                                                        x={-2} y={-2}
-                                                        width={NODE_W + 4} height={NODE_H + 4}
+                                                        x={-4} y={-4}
+                                                        width={NODE_W + 8} height={NODE_H + 8}
                                                         rx={10}
                                                         fill="none"
                                                         stroke={style.stroke}
                                                         strokeWidth={2}
                                                         filter="url(#glowSelected)"
-                                                        opacity={0.6}
+                                                        opacity={0.7}
                                                     />
                                                 )}
+                                                <foreignObject x="0" y="0" width={NODE_W} height={NODE_H}>
+                                                    <div className={clsx(
+                                                        "w-full h-full rounded-lg border flex flex-col justify-center px-3 relative overflow-hidden transition-all duration-300",
+                                                        isSelected ? "bg-black/80 shadow-[0_0_20px_rgba(0,0,0,0.5)] border-transparent" : "bg-obsidian-panel/80 hover:bg-obsidian-panel shadow-lg",
+                                                        isHovered && !isSelected ? "border-white/20" : "border-obsidian-border/50"
+                                                    )}
+                                                        style={{
+                                                            backdropFilter: 'blur(8px)',
+                                                            borderColor: isSelected ? style.stroke : undefined
+                                                        }}
+                                                    >
+                                                        {/* Top Gradient Highlight */}
+                                                        {isSelected && (
+                                                            <div className="absolute top-0 left-0 right-0 h-[2px] opacity-80"
+                                                                style={{ background: `linear-gradient(90deg, transparent, ${style.stroke}, transparent)` }}
+                                                            />
+                                                        )}
 
-                                                {/* Type badge background */}
-                                                <rect
-                                                    x={12} y={10}
-                                                    width={node.type === 'DATASET' ? 58 : 38}
-                                                    height={16}
-                                                    rx={4}
-                                                    fill={style.iconColor}
-                                                    opacity={isSelected || isHovered ? 0.2 : 0.12}
-                                                />
-
-                                                {/* Type Text */}
-                                                <text
-                                                    x={node.type === 'DATASET' ? 41 : 31}
-                                                    y={21}
-                                                    textAnchor="middle"
-                                                    fill={style.iconColor}
-                                                    fontSize={9}
-                                                    fontWeight={600}
-                                                    fontFamily="monospace"
-                                                    letterSpacing={0.5}
-                                                >
-                                                    {node.type === 'DATASET' ? 'DATASET' : 'JOB'}
-                                                </text>
-
-                                                {/* Name */}
-                                                <text
-                                                    x={14}
-                                                    y={38}
-                                                    fill="var(--color-foreground)"
-                                                    fontSize={12}
-                                                    fontFamily="'Inter', sans-serif"
-                                                    fontWeight={isSelected ? 600 : 500}
-                                                >
-                                                    {label}
-                                                </text>
+                                                        <div className="flex items-center gap-2.5">
+                                                            <div className={clsx(
+                                                                "p-1.5 rounded-md shrink-0 transition-colors",
+                                                                isSelected ? "bg-white/10" : "bg-black/20"
+                                                            )}>
+                                                                {node.type === 'DATASET' ? (
+                                                                    <Database className="w-4 h-4" style={{ color: style.iconColor }} />
+                                                                ) : (
+                                                                    <Box className="w-4 h-4" style={{ color: style.iconColor }} />
+                                                                )}
+                                                            </div>
+                                                            <div className="flex flex-col min-w-0">
+                                                                <span className={clsx(
+                                                                    "text-[12px] truncate transition-colors",
+                                                                    isSelected ? "text-white font-semibold" : "text-foreground font-medium"
+                                                                )}>
+                                                                    {label}
+                                                                </span>
+                                                                <span className="text-[9px] text-obsidian-muted uppercase tracking-wider font-mono">
+                                                                    {node.type}
+                                                                </span>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </foreignObject>
                                             </g>
                                         );
                                     })}
@@ -609,17 +628,17 @@ export default function LineagePage() {
 
                         {/* Legend */}
                         {lineageNodes.length > 0 && (
-                            <div className="absolute bottom-3 left-3 flex gap-4 text-[10px] text-obsidian-muted bg-obsidian-panel/80 px-3 py-1.5 rounded border border-obsidian-border transition-all active:scale-95">
-                                <div className="flex items-center gap-1.5">
-                                    <div className="w-3.5 h-3.5 rounded bg-obsidian-info/20 border border-obsidian-info" />
+                            <div className="absolute bottom-4 left-4 flex gap-5 text-[10px] text-white/60 bg-[#18181b]/90 backdrop-blur-md px-4 py-2 rounded-lg border border-white/10 shadow-lg">
+                                <div className="flex items-center gap-2">
+                                    <div className="w-3 h-3 rounded-sm bg-sky-500/20 border border-sky-500/50" />
                                     Dataset
                                 </div>
-                                <div className="flex items-center gap-1.5">
-                                    <div className="w-3.5 h-3.5 rounded bg-obsidian-success/20 border border-obsidian-success" />
+                                <div className="flex items-center gap-2">
+                                    <div className="w-3 h-3 rounded-sm bg-indigo-500/20 border border-indigo-500/50" />
                                     Job
                                 </div>
-                                <div className="flex items-center gap-1.5">
-                                    <ArrowRight className="w-3.5 h-3.5" />
+                                <div className="flex items-center gap-2">
+                                    <ArrowRight className="w-3.5 h-3.5 text-white/40" />
                                     Data Flow
                                 </div>
                             </div>
@@ -628,21 +647,21 @@ export default function LineagePage() {
 
                     {/* Right: Detail Panel */}
                     {selectedNode && (
-                        <div className="w-[300px] border-l border-obsidian-border flex flex-col bg-obsidian-panel/95 backdrop-blur-md overflow-hidden shrink-0 shadow-[-4px_0_24px_rgba(0,0,0,0.3)] z-10 transition-all duration-300 transform translate-x-0">
-                            <div className="px-5 py-4 border-b border-obsidian-border/50 bg-black/20 shadow-sm shrink-0">
-                                <div className="flex items-center gap-2.5 mb-2">
+                        <div className="w-[320px] border-l border-white/5 flex flex-col bg-[#09090b]/80 backdrop-blur-xl overflow-hidden shrink-0 shadow-[-4px_0_24px_rgba(0,0,0,0.4)] z-10 transition-all duration-300 transform translate-x-0">
+                            <div className="px-5 py-4 border-b border-white/5 bg-black/40 shadow-sm shrink-0">
+                                <div className="flex items-center gap-2.5 mb-2.5">
                                     {selectedNode.type === 'DATASET' ? (
-                                        <Database className="w-4.5 h-4.5 text-obsidian-info drop-shadow-[0_0_8px_rgba(34,211,238,0.5)]" />
+                                        <Database className="w-4.5 h-4.5 text-sky-400 drop-shadow-[0_0_8px_rgba(56,189,248,0.3)]" />
                                     ) : (
-                                        <Box className="w-4.5 h-4.5 text-obsidian-success drop-shadow-[0_0_8px_rgba(76,175,80,0.5)]" />
+                                        <Box className="w-4.5 h-4.5 text-indigo-400 drop-shadow-[0_0_8px_rgba(129,140,248,0.3)]" />
                                     )}
                                     <span className="text-[14px] font-semibold text-white tracking-wide truncate">{selectedNode.data.name}</span>
                                 </div>
                                 <span className={clsx(
-                                    "text-[9px] px-2 py-0.5 rounded font-mono font-bold tracking-widest uppercase shadow-[inset_0_1px_0_rgba(255,255,255,0.1)]",
+                                    "text-[9px] px-2 py-0.5 rounded font-mono font-bold tracking-widest uppercase shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]",
                                     selectedNode.type === 'DATASET'
-                                        ? "bg-obsidian-info/10 border border-obsidian-info/20 text-obsidian-info glow-text"
-                                        : "bg-obsidian-success/10 border border-obsidian-success/20 text-obsidian-success glow-text"
+                                        ? "bg-sky-500/10 border border-sky-500/20 text-sky-400"
+                                        : "bg-indigo-500/10 border border-indigo-500/20 text-indigo-400"
                                 )}>
                                     {selectedNode.type}
                                 </span>
@@ -728,7 +747,7 @@ export default function LineagePage() {
                         </div>
                     )}
                 </div>
-            </div>
+            </main>
         </div>
     );
 }

@@ -4,7 +4,7 @@ import { Sidebar } from '@/components/Sidebar';
 import DagGraph from '@/components/DagGraph';
 import {
     Play, RefreshCw, Pause, Search, ChevronRight, ChevronDown,
-    Clock, AlertCircle, CheckCircle2, XCircle,
+    LayoutPanelLeft, Clock, AlertCircle, CheckCircle2, XCircle,
     Loader2, Tag, User, Calendar, Zap,
     Activity, CircleStop, RotateCcw, Code2, FileText, Maximize2, Minimize2, GitBranch,
     AlignLeft
@@ -55,13 +55,13 @@ function StateBadge({ state, size = 'sm' }: { state: string | null | undefined; 
     return (
         <span
             className={clsx(
-                "inline-flex items-center gap-1 rounded font-semibold uppercase tracking-wider",
-                size === 'sm' ? "px-1.5 py-0.5 text-[9px]" : "px-2 py-1 text-[10px]"
+                "inline-flex items-center gap-1.5 rounded-full font-medium tracking-wide shadow-sm border border-white/5",
+                size === 'sm' ? "px-2 py-0.5 text-[10px]" : "px-3 py-1 text-[11px]"
             )}
             style={{ backgroundColor: colors.bg, color: colors.text }}
         >
             <Icon className={clsx(
-                "flex-shrink-0",
+                "flex-shrink-0 opacity-80",
                 size === 'sm' ? "w-2.5 h-2.5" : "w-3 h-3",
                 state === 'running' && "animate-spin"
             )} />
@@ -331,14 +331,30 @@ export default function WorkflowsPage() {
     const selectedDagData = selectedDag ? dags.find(d => d.dag_id === selectedDag) : null;
 
     return (
-        <div className="flex h-screen bg-obsidian-bg text-foreground font-sans overflow-hidden">
+        <div className="flex h-screen bg-[#09090b] text-foreground font-sans overflow-hidden">
             <Sidebar />
-            <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
+
+            {/* Background ambient light */}
+            <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden">
+                <div className="absolute -top-[15%] -right-[10%] w-[45%] h-[45%] bg-obsidian-purple/[0.04] blur-[120px] rounded-full" />
+                <div className="absolute top-[30%] -left-[10%] w-[40%] h-[40%] bg-obsidian-info/[0.03] blur-[100px] rounded-full" />
+            </div>
+
+            <main className="flex-1 flex flex-col min-w-0 overflow-hidden bg-transparent backdrop-blur-xl relative z-10">
 
                 {/* ─── Top Toolbar ─── */}
-                <header className="h-10 bg-obsidian-panel border-b border-obsidian-border flex items-center justify-between px-4 shrink-0">
+                <header className="flex items-center px-4 justify-between shrink-0 h-10 bg-black/40 backdrop-blur-md border-b border-white/5 z-10 w-full relative">
+                    <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-obsidian-info/30 to-obsidian-purple/30" />
                     <div className="flex items-center gap-3">
                         <div className="flex items-center gap-2">
+                            <button
+                                onClick={() => window.dispatchEvent(new CustomEvent('openclaw:toggle-sidebar'))}
+                                className="p-1.5 hover:bg-white/10 rounded-md text-obsidian-muted hover:text-white transition-all active:scale-95 border border-transparent hover:border-obsidian-border/50"
+                                title="Toggle Explorer"
+                            >
+                                <LayoutPanelLeft className="w-4 h-4 drop-shadow-[0_0_8px_rgba(255,255,255,0.2)]" />
+                            </button>
+                            <div className="w-[1px] h-4 bg-obsidian-border/50 mx-1"></div>
                             <Activity className="w-4 h-4 text-obsidian-info" />
                             <span className="text-[12px] font-bold text-foreground tracking-wide">Orchestration</span>
                         </div>
@@ -366,15 +382,15 @@ export default function WorkflowsPage() {
                 </header>
 
                 {/* ─── Filter Bar ─── */}
-                <div className="h-9 bg-obsidian-panel border-b border-obsidian-border flex items-center px-4 gap-3 shrink-0">
-                    <div className="flex items-center gap-1.5 bg-obsidian-bg rounded px-2 py-1 flex-1 max-w-xs transition-all active:scale-95">
-                        <Search className="w-3.5 h-3.5 text-obsidian-muted" />
+                <div className="h-10 bg-black/20 backdrop-blur-md border-b border-white/5 flex items-center px-4 gap-4 shrink-0 z-10">
+                    <div className="flex items-center gap-2 bg-white/[0.03] border border-white/10 rounded-md px-2.5 py-1.5 flex-1 max-w-sm transition-all focus-within:border-obsidian-info/50 focus-within:bg-white/[0.05]">
+                        <Search className="w-4 h-4 text-obsidian-muted" />
                         <input
                             type="text"
                             placeholder="Search pipelines..."
                             value={search}
                             onChange={(e) => setSearch(e.target.value)}
-                            className="bg-transparent text-[11px] text-foreground placeholder-[#6c707e] outline-none w-full"
+                            className="bg-transparent text-[12px] text-foreground placeholder-[#6c707e] outline-none w-full"
                         />
                     </div>
                     <div className="flex items-center gap-1.5">
@@ -416,7 +432,7 @@ export default function WorkflowsPage() {
                 <div className="flex-1 flex overflow-hidden">
 
                     {/* DAG List / Graph View */}
-                    <div className={clsx("flex-1 overflow-auto", selectedDag ? "border-r border-obsidian-border" : "")}>
+                    <div className={clsx("flex-1 overflow-auto", selectedDag ? "border-r border-white/5" : "")}>
                         {/* Show graph in main area when graph tab is active */}
                         {selectedDag && sidebarTab === 'graph' ? (
                             <DagGraph
@@ -434,22 +450,22 @@ export default function WorkflowsPage() {
                                 <span className="text-[11px] text-obsidian-muted max-w-sm text-center">{error}</span>
                                 <button
                                     onClick={fetchDags}
-                                    className="mt-2 px-3 py-1.5 bg-obsidian-info/20 text-obsidian-info rounded text-[11px] hover:bg-obsidian-info/30 transition-colors active:scale-95"
+                                    className="mt-2 px-3 py-1.5 bg-obsidian-info/20 text-obsidian-info rounded-md text-[11px] font-medium hover:bg-obsidian-info/30 transition-colors border border-obsidian-info/30 active:scale-95"
                                 >
                                     Retry Connection
                                 </button>
                             </div>
                         ) : (
                             <table className="w-full text-left border-collapse">
-                                <thead className="sticky top-0 bg-obsidian-panel z-10 shadow-[0_1px_0_#393b40]">
+                                <thead className="sticky top-0 bg-black/40 backdrop-blur-md z-10 shadow-[0_1px_0_rgba(255,255,255,0.05)]">
                                     <tr>
-                                        <th className="p-1.5 px-3 text-[10px] text-obsidian-muted font-medium uppercase tracking-wider w-8"></th>
-                                        <th className="p-1.5 px-3 text-[10px] text-obsidian-muted font-medium uppercase tracking-wider text-left">Pipeline</th>
-                                        <th className="p-1.5 px-3 text-[10px] text-obsidian-muted font-medium uppercase tracking-wider text-left w-24">Schedule</th>
-                                        <th className="p-1.5 px-3 text-[10px] text-obsidian-muted font-medium uppercase tracking-wider text-left w-24">Last Run</th>
-                                        <th className="p-1.5 px-3 text-[10px] text-obsidian-muted font-medium uppercase tracking-wider text-left w-20">State</th>
-                                        <th className="p-1.5 px-3 text-[10px] text-obsidian-muted font-medium uppercase tracking-wider text-left w-20">Duration</th>
-                                        <th className="p-1.5 px-3 text-[10px] text-obsidian-muted font-medium uppercase tracking-wider text-center w-44">Actions</th>
+                                        <th className="p-2 px-4 text-[10px] text-obsidian-muted font-semibold tracking-wider w-8"></th>
+                                        <th className="p-2 px-4 text-[10px] text-obsidian-muted font-semibold tracking-wider text-left">Pipeline</th>
+                                        <th className="p-2 px-4 text-[10px] text-obsidian-muted font-semibold tracking-wider text-left w-28">Schedule</th>
+                                        <th className="p-2 px-4 text-[10px] text-obsidian-muted font-semibold tracking-wider text-left w-28">Last Run</th>
+                                        <th className="p-2 px-4 text-[10px] text-obsidian-muted font-semibold tracking-wider text-left w-24">State</th>
+                                        <th className="p-2 px-4 text-[10px] text-obsidian-muted font-semibold tracking-wider text-left w-24">Duration</th>
+                                        <th className="p-2 px-4 text-[10px] text-obsidian-muted font-semibold tracking-wider text-center w-48">Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody className="text-[12px]">
@@ -461,8 +477,8 @@ export default function WorkflowsPage() {
                                                 key={dag.dag_id}
                                                 onClick={() => setSelectedDag(isSelected ? null : dag.dag_id)}
                                                 className={clsx(
-                                                    "border-b border-obsidian-border/50 group cursor-pointer transition-colors",
-                                                    isSelected ? "bg-[#214283]/30" : "hover:bg-obsidian-panel"
+                                                    "border-b border-white/5 group cursor-pointer transition-colors",
+                                                    isSelected ? "bg-white/[0.04]" : "hover:bg-white/[0.02]"
                                                 )}
                                             >
                                                 {/* Status indicator */}
@@ -526,13 +542,13 @@ export default function WorkflowsPage() {
                                                 <td className="p-1.5 px-3" onClick={(e) => e.stopPropagation()}>
                                                     <div className="flex items-center gap-1.5 justify-center">
 
-                                                        {/* 1. TRIGGER — green, starts a new run */}
+                                                        {/* 1. TRIGGER — outline style */}
                                                         <button
                                                             onClick={() => handleAction(dag.dag_id, 'trigger')}
                                                             disabled={!!actionLoading}
-                                                            className="flex items-center gap-1 px-2 py-1 rounded text-[9px] font-semibold
-                                         bg-obsidian-success/10 text-obsidian-success hover:bg-obsidian-success/25
-                                         border border-obsidian-success/20 transition-colors disabled:opacity-30 active:scale-95"
+                                                            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[10px] font-medium
+                                         bg-transparent text-obsidian-success hover:bg-obsidian-success/10
+                                         border border-obsidian-success/30 hover:border-obsidian-success/50 transition-all disabled:opacity-30 active:scale-95"
                                                         >
                                                             {actionLoading === `${dag.dag_id}-trigger`
                                                                 ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -540,14 +556,14 @@ export default function WorkflowsPage() {
                                                             <span>Run</span>
                                                         </button>
 
-                                                        {/* 2. CANCEL — red, only if currently running */}
+                                                        {/* 2. CANCEL — outline style */}
                                                         {isRunning && dag.last_run && (
                                                             <button
                                                                 onClick={() => handleAction(dag.dag_id, 'cancel', dag.last_run!.run_id)}
                                                                 disabled={!!actionLoading}
-                                                                className="flex items-center gap-1 px-2 py-1 rounded text-[9px] font-semibold
-                                           bg-obsidian-danger/10 text-obsidian-danger hover:bg-obsidian-danger/25
-                                           border border-obsidian-danger/20 transition-colors disabled:opacity-30 active:scale-95"
+                                                                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[10px] font-medium
+                                           bg-transparent text-obsidian-danger hover:bg-obsidian-danger/10
+                                           border border-obsidian-danger/30 hover:border-obsidian-danger/50 transition-all disabled:opacity-30 active:scale-95"
                                                             >
                                                                 {actionLoading === `${dag.dag_id}-cancel`
                                                                     ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -556,15 +572,15 @@ export default function WorkflowsPage() {
                                                             </button>
                                                         )}
 
-                                                        {/* 3. PAUSE/RESUME — schedule toggle */}
+                                                        {/* 3. PAUSE/RESUME — outline style */}
                                                         <button
                                                             onClick={() => handleAction(dag.dag_id, dag.is_paused ? 'unpause' : 'pause')}
                                                             disabled={!!actionLoading}
                                                             className={clsx(
-                                                                "flex items-center gap-1 px-2 py-1 rounded text-[9px] font-semibold border transition-colors disabled:opacity-30",
+                                                                "flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[10px] font-medium border bg-transparent transition-all disabled:opacity-30",
                                                                 dag.is_paused
-                                                                    ? "bg-obsidian-info/10 text-obsidian-info hover:bg-obsidian-info/25 border-obsidian-info/20"
-                                                                    : "bg-obsidian-warning/10 text-obsidian-warning hover:bg-obsidian-warning/25 border-obsidian-warning/20"
+                                                                    ? "text-obsidian-info hover:bg-obsidian-info/10 border-obsidian-info/30 hover:border-obsidian-info/50"
+                                                                    : "text-obsidian-warning hover:bg-obsidian-warning/10 border-obsidian-warning/30 hover:border-obsidian-warning/50"
                                                             )}
                                                         >
                                                             {actionLoading === `${dag.dag_id}-pause` || actionLoading === `${dag.dag_id}-unpause`
@@ -594,14 +610,14 @@ export default function WorkflowsPage() {
                     {/* ─── Run History Sidebar ─── */}
                     {selectedDag && (
                         <div className={clsx(
-                            "flex flex-col bg-obsidian-bg shrink-0 transition-all duration-200",
+                            "flex flex-col bg-[#09090b]/80 backdrop-blur-2xl border-l border-white/5 shrink-0 transition-all duration-200 z-20",
                             fullscreenSidebar
-                                ? "fixed inset-0 z-50 w-full"
-                                : "w-[380px]"
+                                ? "fixed inset-0 w-full"
+                                : "w-[400px]"
                         )}>
                             {/* Header */}
                             <div className={clsx(
-                                "bg-obsidian-panel border-b border-obsidian-border flex items-center justify-between shrink-0",
+                                "bg-black/40 border-b border-white/5 flex items-center justify-between shrink-0",
                                 fullscreenSidebar ? "h-12 px-6" : "h-10 px-4"
                             )}>
                                 <div className="flex items-center gap-2 min-w-0">
@@ -630,7 +646,7 @@ export default function WorkflowsPage() {
 
                             {/* DAG Info */}
                             {selectedDagData && (
-                                <div className="px-4 py-3 border-b border-obsidian-border text-[11px] space-y-2">
+                                <div className="px-4 py-3 border-b border-white/5 text-[11px] space-y-2">
                                     {selectedDagData.description && (
                                         <p className="text-obsidian-muted leading-relaxed">{selectedDagData.description}</p>
                                     )}
@@ -667,14 +683,14 @@ export default function WorkflowsPage() {
                             )}
 
                             {/* Tab Bar */}
-                            <div className="flex border-b border-obsidian-border shrink-0">
+                            <div className="flex border-b border-white/5 shrink-0">
                                 <button
                                     onClick={() => setSidebarTab('graph')}
                                     className={clsx(
-                                        "flex-1 flex items-center justify-center gap-1.5 py-2 text-[10px] font-semibold transition-colors",
+                                        "flex-1 flex items-center justify-center gap-1.5 py-2.5 text-[10px] font-medium transition-all",
                                         sidebarTab === 'graph'
-                                            ? "text-foreground border-b-2 border-[#3574f0] bg-obsidian-panel/50"
-                                            : "text-obsidian-muted hover:text-foreground hover:bg-obsidian-panel/30"
+                                            ? "text-foreground border-b-2 border-obsidian-info bg-white/[0.04]"
+                                            : "text-obsidian-muted hover:text-foreground hover:bg-white/[0.02]"
                                     )}
                                 >
                                     <GitBranch className="w-3.5 h-3.5" /> Graph
@@ -682,10 +698,10 @@ export default function WorkflowsPage() {
                                 <button
                                     onClick={() => setSidebarTab('runs')}
                                     className={clsx(
-                                        "flex-1 flex items-center justify-center gap-1.5 py-2 text-[10px] font-semibold transition-colors",
+                                        "flex-1 flex items-center justify-center gap-1.5 py-2.5 text-[10px] font-medium transition-all",
                                         sidebarTab === 'runs'
-                                            ? "text-foreground border-b-2 border-[#3574f0] bg-obsidian-panel/50"
-                                            : "text-obsidian-muted hover:text-foreground hover:bg-obsidian-panel/30"
+                                            ? "text-foreground border-b-2 border-obsidian-info bg-white/[0.04]"
+                                            : "text-obsidian-muted hover:text-foreground hover:bg-white/[0.02]"
                                     )}
                                 >
                                     <FileText className="w-3.5 h-3.5" /> Runs
@@ -693,10 +709,10 @@ export default function WorkflowsPage() {
                                 <button
                                     onClick={() => setSidebarTab('code')}
                                     className={clsx(
-                                        "flex-1 flex items-center justify-center gap-1.5 py-2 text-[10px] font-semibold transition-colors",
+                                        "flex-1 flex items-center justify-center gap-1.5 py-2.5 text-[10px] font-medium transition-all",
                                         sidebarTab === 'code'
-                                            ? "text-foreground border-b-2 border-[#3574f0] bg-obsidian-panel/50"
-                                            : "text-obsidian-muted hover:text-foreground hover:bg-obsidian-panel/30"
+                                            ? "text-foreground border-b-2 border-obsidian-info bg-white/[0.04]"
+                                            : "text-obsidian-muted hover:text-foreground hover:bg-white/[0.02]"
                                     )}
                                 >
                                     <Code2 className="w-3.5 h-3.5" /> Code
@@ -705,7 +721,7 @@ export default function WorkflowsPage() {
 
                             {/* Runs List header */}
                             {sidebarTab === 'runs' && (
-                                <div className="px-4 py-2 border-b border-obsidian-border flex items-center justify-between shrink-0">
+                                <div className="px-4 py-2 border-b border-white/5 flex items-center justify-between shrink-0">
                                     <span className="text-[10px] text-obsidian-muted uppercase font-semibold tracking-wider">Recent Runs</span>
                                     <button
                                         onClick={() => handleAction(selectedDag, 'trigger')}
@@ -733,13 +749,13 @@ export default function WorkflowsPage() {
                                                 const isExpanded = expandedRun === run.run_id;
                                                 const isRunRunning = run.state === 'running' || run.state === 'queued';
                                                 return (
-                                                    <div key={run.run_id} className="border-b border-obsidian-border/30">
+                                                    <div key={run.run_id} className="border-b border-white/5">
                                                         {/* Run row */}
                                                         <div
                                                             onClick={() => toggleRunExpand(run.run_id)}
                                                             className={clsx(
                                                                 "px-4 py-2.5 cursor-pointer transition-colors",
-                                                                isExpanded ? "bg-obsidian-panel" : "hover:bg-obsidian-panel/50"
+                                                                isExpanded ? "bg-white/[0.04]" : "hover:bg-white/[0.02]"
                                                             )}
                                                         >
                                                             <div className="flex items-center justify-between mb-1">
@@ -774,7 +790,7 @@ export default function WorkflowsPage() {
 
                                                         {/* Expanded: Task Instances */}
                                                         {isExpanded && (
-                                                            <div className="bg-[#1a1b1e] border-t border-obsidian-border/30">
+                                                            <div className="bg-black/20 backdrop-blur-md border-t border-white/5">
                                                                 {tasksLoading ? (
                                                                     <div className="flex items-center justify-center py-4">
                                                                         <Loader2 className="w-4 h-4 text-obsidian-info animate-spin" />
@@ -861,12 +877,18 @@ export default function WorkflowsPage() {
                                                                                                         const res = await fetch(`/api/orchestrator/dags/${selectedDag}/runs/${expandedRun}/tasks/${ti.task_id}/logs/${ti.try_number}`);
                                                                                                         const data = await res.json();
                                                                                                         if (data.error || data.detail) {
-                                                                                                            setTaskLogs({ task_id: ti.task_id, try_number: ti.try_number, content: `Error: ${data.error || data.detail}` });
+                                                                                                            const errMsg = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail);
+                                                                                                            setTaskLogs({ task_id: ti.task_id, try_number: ti.try_number, content: `Error: ${data.error || errMsg}` });
                                                                                                         } else {
-                                                                                                            setTaskLogs({ task_id: ti.task_id, try_number: ti.try_number, content: data.content || data.text || 'No logs found' });
+                                                                                                            let parsedContent = data.content || data.text || 'No logs found';
+                                                                                                            if (typeof parsedContent !== 'string') {
+                                                                                                                parsedContent = JSON.stringify(parsedContent, null, 2);
+                                                                                                            }
+                                                                                                            setTaskLogs({ task_id: ti.task_id, try_number: ti.try_number, content: parsedContent });
                                                                                                         }
-                                                                                                    } catch {
-                                                                                                        setTaskLogs({ task_id: ti.task_id, try_number: ti.try_number, content: 'Failed to load logs' });
+                                                                                                    } catch (err) {
+                                                                                                        const msg = err instanceof Error ? err.message : String(err);
+                                                                                                        setTaskLogs({ task_id: ti.task_id, try_number: ti.try_number, content: `Failed to load logs: ${msg}` });
                                                                                                     } finally {
                                                                                                         setTaskLogsLoading(false);
                                                                                                     }
@@ -902,12 +924,18 @@ export default function WorkflowsPage() {
                                                                                                             });
                                                                                                             const data = await res.json();
                                                                                                             if (data.error || data.detail) {
-                                                                                                                setTaskCode({ task_id: ti.task_id, filename: 'Error', content: `# ${data.error || data.detail}` });
+                                                                                                                const errMsg = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail);
+                                                                                                                setTaskCode({ task_id: ti.task_id, filename: 'Error', content: `# ${data.error || errMsg}` });
                                                                                                             } else {
-                                                                                                                setTaskCode(data);
+                                                                                                                let contentStr = data.content || '';
+                                                                                                                if (typeof contentStr !== 'string') {
+                                                                                                                    contentStr = JSON.stringify(contentStr, null, 2);
+                                                                                                                }
+                                                                                                                setTaskCode({ ...data, task_id: ti.task_id, content: contentStr });
                                                                                                             }
-                                                                                                        } catch {
-                                                                                                            setTaskCode({ task_id: ti.task_id, filename: 'Error', content: '# Failed to load source' });
+                                                                                                        } catch (err) {
+                                                                                                            const msg = err instanceof Error ? err.message : String(err);
+                                                                                                            setTaskCode({ task_id: ti.task_id, filename: 'Error', content: `# Failed to load source: ${msg}` });
                                                                                                         } finally {
                                                                                                             setTaskCodeLoading(false);
                                                                                                         }
