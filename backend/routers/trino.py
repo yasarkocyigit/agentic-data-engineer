@@ -38,9 +38,12 @@ async def execute_trino_query(request: TrinoQueryRequest):
         query = query[:-1]
 
     # ─── Apply row limit if provided and query doesn't already have LIMIT ───
+    # Only apply limit to SELECT-like queries, never to DDL/DML
+    _DDL_PREFIXES = ('CREATE', 'DROP', 'ALTER', 'ANALYZE', 'GRANT', 'REVOKE', 'SET', 'RESET', 'USE', 'CALL', 'DEALLOCATE', 'PREPARE', 'EXECUTE', 'COMMENT', 'COMMIT', 'ROLLBACK', 'START', 'INSERT', 'UPDATE', 'DELETE', 'MERGE')
+    is_ddl = query.upper().lstrip().startswith(_DDL_PREFIXES)
     has_limit = _LIMIT_PATTERN.search(query)
     effective_limit = None
-    if request.limit and not has_limit:
+    if request.limit and not has_limit and not is_ddl:
         query = f"{query} LIMIT {request.limit}"
         effective_limit = request.limit
     elif has_limit:
@@ -132,19 +135,22 @@ async def execute_trino_query(request: TrinoQueryRequest):
             raise HTTPException(status_code=400, detail=error_msg)
 
         # Format columns
-        col_names = [col["name"] for col in columns]
+        col_names = [col["name"] for col in columns] if columns else []
 
         # Format data: array of arrays → array of objects
-        # Use list comprehension for speed instead of loop + dict assignment
-        formatted_data = [
-            {col_names[i]: val for i, val in enumerate(row)}
-            for row in all_data
-        ]
+        if col_names and all_data:
+            formatted_data = [
+                {col_names[i]: val for i, val in enumerate(row)}
+                for row in all_data
+            ]
+        else:
+            formatted_data = []
 
         return {
             "columns": col_names,
             "data": formatted_data,
             "stats": stats,
+            "message": "Query executed successfully" if not col_names else None,
         }
 
     except HTTPException:
