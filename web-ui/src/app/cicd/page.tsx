@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
     GitPullRequest, ExternalLink, RefreshCw, Loader2, AlertCircle,
     CheckCircle2, Maximize2, Minimize2, Search, Star, Clock,
@@ -14,10 +14,45 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import rehypeRaw from 'rehype-raw';
 import Editor, { OnMount } from "@monaco-editor/react";
 
-const GITEA_URL = 'http://localhost:3030';
+function resolveGiteaUrl(): string {
+    if (typeof window !== 'undefined') {
+        const runtimeUrl = (window as Window & { __OPENCLAW_GITEA_URL__?: string }).__OPENCLAW_GITEA_URL__?.trim();
+        if (runtimeUrl) return runtimeUrl;
+        return `${window.location.protocol}//${window.location.hostname}:3030`;
+    }
+    return 'http://localhost:3030';
+}
+
+function resolveGiteaSshHost(giteaUrl: string): string {
+    try {
+        return new URL(giteaUrl).hostname;
+    } catch {
+        return typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+    }
+}
+
+function resolveGiteaSshPort(giteaUrl: string): number {
+    if (typeof window !== 'undefined') {
+        const runtimePort = (window as Window & { __OPENCLAW_GITEA_SSH_PORT__?: string | number }).__OPENCLAW_GITEA_SSH_PORT__;
+        if (runtimePort !== undefined && runtimePort !== null) {
+            const parsed = Number(runtimePort);
+            if (Number.isFinite(parsed) && parsed > 0) return parsed;
+        }
+    }
+    try {
+        const host = new URL(giteaUrl).hostname;
+        if (host === 'localhost' || host === '127.0.0.1') return 2222;
+    } catch {
+        // no-op fallback below
+    }
+    return 22;
+}
+
+const GITEA_URL = resolveGiteaUrl();
+const GITEA_SSH_HOST = resolveGiteaSshHost(GITEA_URL);
+const GITEA_SSH_PORT = resolveGiteaSshPort(GITEA_URL);
 
 // ─── Types ───
 
@@ -71,7 +106,7 @@ interface PullRequest {
     body: string;
     state: string;
     user: { login: string; avatar_url: string };
-    head: { label: string; ref: string };
+    head: { label: string; ref: string; sha?: string };
     base: { label: string; ref: string };
     created_at: string;
     updated_at: string;
@@ -83,18 +118,151 @@ interface PullRequest {
     deletions: number;
 }
 
+interface CommitStatusItem {
+    id?: number;
+    context?: string;
+    state?: string;
+    description?: string;
+    target_url?: string;
+    created_at?: string;
+    updated_at?: string;
+}
+
 interface ActionRun {
     id: number;
     name: string;
     status: string;
     conclusion: string;
     head_branch: string;
+    head_sha?: string;
+    workflow_id?: string | number;
     created_at: string;
     updated_at: string;
     run_number: number;
 }
 
+interface ActionJob {
+    id?: number;
+    name?: string;
+    status?: string;
+    conclusion?: string;
+    started_at?: string;
+    completed_at?: string;
+    runner_name?: string;
+    steps?: { number?: number; name?: string; status?: string; conclusion?: string }[];
+}
+
+interface IssueItem {
+    id: number;
+    number: number;
+    title: string;
+    state: string;
+    created_at: string;
+    updated_at: string;
+    body?: string;
+    comments?: number;
+    user?: { login?: string; avatar_url?: string };
+    labels?: { id: number; name: string; color?: string }[];
+}
+
+interface ReleaseItem {
+    id: number;
+    tag_name: string;
+    name?: string;
+    body?: string;
+    draft?: boolean;
+    prerelease?: boolean;
+    created_at?: string;
+    published_at?: string;
+    author?: { login?: string };
+}
+
+interface PullComment {
+    id: number;
+    body?: string;
+    created_at?: string;
+    user?: { login?: string; avatar_url?: string };
+}
+
+interface PullReview {
+    id: number;
+    body?: string;
+    submitted_at?: string;
+    state?: string;
+    user?: { login?: string; avatar_url?: string };
+}
+
+interface ParsedPatchLine {
+    text: string;
+    oldPosition: number;
+    newPosition: number;
+    kind: 'hunk' | 'add' | 'del' | 'ctx' | 'meta';
+}
+
+interface PullInlineComment {
+    id: number;
+    body?: string;
+    path?: string;
+    new_position?: number;
+    old_position?: number;
+    created_at?: string;
+    user?: { login?: string; avatar_url?: string };
+    review_id?: number;
+}
+
+interface BranchProtectionRule {
+    branch_name?: string;
+    rule_name?: string;
+    enable_status_check?: boolean;
+    status_check_contexts?: string[];
+    required_approvals?: number;
+    dismiss_stale_approvals?: boolean;
+    block_on_rejected_reviews?: boolean;
+    block_on_outdated_branch?: boolean;
+    block_on_official_review_requests?: boolean;
+    enable_force_push?: boolean;
+    require_signed_commits?: boolean;
+}
+
 // ─── Utility ───
+
+function parsePatchLines(patch: string): ParsedPatchLine[] {
+    const lines = patch.split('\n');
+    const parsed: ParsedPatchLine[] = [];
+    let oldPos = 0;
+    let newPos = 0;
+    for (const line of lines) {
+        if (line.startsWith('@@')) {
+            const m = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+            oldPos = m ? Number(m[1]) : 0;
+            newPos = m ? Number(m[2]) : 0;
+            parsed.push({ text: line, oldPosition: 0, newPosition: 0, kind: 'hunk' });
+            continue;
+        }
+        if (line.startsWith('+') && !line.startsWith('+++')) {
+            parsed.push({ text: line, oldPosition: 0, newPosition: newPos, kind: 'add' });
+            newPos += 1;
+            continue;
+        }
+        if (line.startsWith('-') && !line.startsWith('---')) {
+            parsed.push({ text: line, oldPosition: oldPos, newPosition: 0, kind: 'del' });
+            oldPos += 1;
+            continue;
+        }
+        if (line.startsWith('diff --git') || line.startsWith('index ') || line.startsWith('--- ') || line.startsWith('+++ ')) {
+            parsed.push({ text: line, oldPosition: 0, newPosition: 0, kind: 'meta' });
+            continue;
+        }
+        if (oldPos > 0 || newPos > 0) {
+            parsed.push({ text: line, oldPosition: oldPos, newPosition: newPos, kind: 'ctx' });
+            oldPos += 1;
+            newPos += 1;
+            continue;
+        }
+        parsed.push({ text: line, oldPosition: 0, newPosition: 0, kind: 'ctx' });
+    }
+    return parsed;
+}
 
 function timeAgo(dateStr: string | null): string {
     if (!dateStr) return '—';
@@ -203,6 +371,33 @@ async function fetchJsonWithTimeout(url: string, timeoutMs = 10000) {
     }
 }
 
+function encodeBase64Utf8(value: string): string {
+    const bytes = new TextEncoder().encode(value);
+    let binary = '';
+    const chunkSize = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+    }
+    return btoa(binary);
+}
+
+function normalizeCheckState(value?: string | null): string {
+    return (value || 'unknown').toLowerCase();
+}
+
+function isBlockingCheckState(value?: string | null): boolean {
+    const state = normalizeCheckState(value);
+    return state === 'failure' || state === 'error' || state === 'failed';
+}
+
+function checkStateStyle(value?: string | null): { bg: string; text: string; border: string } {
+    const state = normalizeCheckState(value);
+    if (state === 'success') return { bg: 'bg-obsidian-success/10', text: 'text-obsidian-success', border: 'border-obsidian-success/20' };
+    if (state === 'pending' || state === 'running' || state === 'waiting') return { bg: 'bg-obsidian-warning/10', text: 'text-obsidian-warning', border: 'border-obsidian-warning/20' };
+    if (isBlockingCheckState(state)) return { bg: 'bg-obsidian-danger/10', text: 'text-obsidian-danger', border: 'border-obsidian-danger/20' };
+    return { bg: 'bg-obsidian-border-active/30', text: 'text-obsidian-muted', border: 'border-white/10' };
+}
+
 // ─── Health Dot ───
 
 function HealthDot({ status }: { status: 'online' | 'offline' | 'checking' }) {
@@ -291,7 +486,8 @@ function DiffBlock({ patch, filename }: { patch: string; filename: string }) {
 
 // ─── Main Page ───
 
-type DetailTab = 'files' | 'commits' | 'pulls' | 'branches' | 'actions' | 'tags';
+type DetailTab = 'files' | 'commits' | 'pulls' | 'branches' | 'actions' | 'tags' | 'issues' | 'releases' | 'security' | 'insights';
+type UiNoticeTone = 'success' | 'error' | 'info';
 
 export default function CICDPage() {
     const [health, setHealth] = useState<'checking' | 'online' | 'offline'>('checking');
@@ -307,13 +503,26 @@ export default function CICDPage() {
     const [detailTab, setDetailTab] = useState<DetailTab>('files');
     const [branches, setBranches] = useState<GiteaBranch[]>([]);
     const [commits, setCommits] = useState<GiteaCommit[]>([]);
+    const [commitsPage, setCommitsPage] = useState(1);
+    const [commitsHasMore, setCommitsHasMore] = useState(false);
+    const [commitsLoadingMore, setCommitsLoadingMore] = useState(false);
     const [actionRuns, setActionRuns] = useState<ActionRun[]>([]);
+    const [actionsPage, setActionsPage] = useState(1);
+    const [actionsHasMore, setActionsHasMore] = useState(false);
+    const [actionsLoadingMore, setActionsLoadingMore] = useState(false);
+    const [selectedActionRun, setSelectedActionRun] = useState<number | null>(null);
+    const [actionJobs, setActionJobs] = useState<ActionJob[]>([]);
+    const [actionJobsLoading, setActionJobsLoading] = useState(false);
+    const [actionRunCommand, setActionRunCommand] = useState<{ runId: number; action: 'rerun' | 'cancel' } | null>(null);
     const [detailLoading, setDetailLoading] = useState(false);
     const [activeBranch, setActiveBranch] = useState<string>('');
     const [showBranchDropdown, setShowBranchDropdown] = useState(false);
 
     // Tags
     const [tags, setTags] = useState<{ name: string; commit: { sha: string }; tarball_url: string }[]>([]);
+    const [tagsPage, setTagsPage] = useState(1);
+    const [tagsHasMore, setTagsHasMore] = useState(false);
+    const [tagsLoadingMore, setTagsLoadingMore] = useState(false);
 
     // File tree state
     const [treeEntries, setTreeEntries] = useState<Record<string, TreeEntry[]>>({});
@@ -373,6 +582,9 @@ export default function CICDPage() {
     // Pull requests
     const [pulls, setPulls] = useState<PullRequest[]>([]);
     const [prState, setPrState] = useState<'open' | 'closed' | 'all'>('all');
+    const [pullsPage, setPullsPage] = useState(1);
+    const [pullsHasMore, setPullsHasMore] = useState(false);
+    const [pullsLoadingMore, setPullsLoadingMore] = useState(false);
     const [showCreatePR, setShowCreatePR] = useState(false);
     const [selectedPR, setSelectedPR] = useState<number | null>(null);
     const [prDetail, setPrDetail] = useState<{ pull: PullRequest; files: { filename: string; status: string; additions: number; deletions: number; patch?: string }[] } | null>(null);
@@ -381,17 +593,68 @@ export default function CICDPage() {
     const [prBody, setPrBody] = useState('');
     const [prHead, setPrHead] = useState('');
     const [prBase, setPrBase] = useState('');
+    const [prChecksState, setPrChecksState] = useState<string>('unknown');
+    const [prChecks, setPrChecks] = useState<CommitStatusItem[]>([]);
+    const [prChecksLoading, setPrChecksLoading] = useState(false);
+    const [prComments, setPrComments] = useState<PullComment[]>([]);
+    const [prReviews, setPrReviews] = useState<PullReview[]>([]);
+    const [prInlineComments, setPrInlineComments] = useState<PullInlineComment[]>([]);
+    const [prActivityLoading, setPrActivityLoading] = useState(false);
+    const [prConflictHint, setPrConflictHint] = useState<{ prNumber: number; message: string } | null>(null);
+    const [prUpdateLoading, setPrUpdateLoading] = useState(false);
+    const [inlineDraft, setInlineDraft] = useState<{ path: string; newPosition: number; oldPosition: number; body: string } | null>(null);
+    const [inlineSubmitting, setInlineSubmitting] = useState(false);
+
+    // Security / branch protection
+    const [branchProtectionLoading, setBranchProtectionLoading] = useState(false);
+    const [branchProtectionSaving, setBranchProtectionSaving] = useState(false);
+    const [branchProtectionExists, setBranchProtectionExists] = useState(false);
+    const [branchProtectionError, setBranchProtectionError] = useState<string | null>(null);
+    const [branchProtection, setBranchProtection] = useState<BranchProtectionRule>({
+        enable_status_check: true,
+        status_check_contexts: [],
+        required_approvals: 1,
+        dismiss_stale_approvals: true,
+        block_on_rejected_reviews: true,
+        block_on_outdated_branch: true,
+        block_on_official_review_requests: false,
+        enable_force_push: false,
+        require_signed_commits: false,
+    });
+    const [statusCheckContextsInput, setStatusCheckContextsInput] = useState('');
+
+    // Issues / Releases
+    const [issues, setIssues] = useState<IssueItem[]>([]);
+    const [issuesState, setIssuesState] = useState<'open' | 'closed' | 'all'>('open');
+    const [issuesPage, setIssuesPage] = useState(1);
+    const [issuesHasMore, setIssuesHasMore] = useState(false);
+    const [issuesLoadingMore, setIssuesLoadingMore] = useState(false);
+    const [releases, setReleases] = useState<ReleaseItem[]>([]);
+    const [releasesPage, setReleasesPage] = useState(1);
+    const [releasesHasMore, setReleasesHasMore] = useState(false);
+    const [releasesLoadingMore, setReleasesLoadingMore] = useState(false);
 
     // Branch create
     const [showCreateBranch, setShowCreateBranch] = useState(false);
     const [newBranchName, setNewBranchName] = useState('');
     const [baseBranch, setBaseBranch] = useState('');
+    const [deleteBranchTarget, setDeleteBranchTarget] = useState<string | null>(null);
+    const [deletingBranch, setDeletingBranch] = useState<string | null>(null);
+    const [uiNotice, setUiNotice] = useState<{ tone: UiNoticeTone; message: string } | null>(null);
 
     // About sidebar
     const [repoLanguages, setRepoLanguages] = useState<Record<string, number>>({});
     const [repoTopics, setRepoTopics] = useState<string[]>([]);
     const [showCloneDropdown, setShowCloneDropdown] = useState(false);
     const [cloneCopied, setCloneCopied] = useState<string | null>(null);
+    const fileRequestIdRef = useRef(0);
+    const prRequestIdRef = useRef(0);
+
+    useEffect(() => {
+        if (!uiNotice) return;
+        const timer = window.setTimeout(() => setUiNotice(null), 3500);
+        return () => window.clearTimeout(timer);
+    }, [uiNotice]);
 
     // ─── Health Check ───
     const checkHealth = useCallback(async () => {
@@ -402,7 +665,10 @@ export default function CICDPage() {
                 setHealth('online');
                 setGiteaVersion(data.version || '');
             } else { setHealth('offline'); }
-        } catch { setHealth('offline'); }
+        } catch (err) {
+            console.error('[CICD] health check failed:', err);
+            setHealth('offline');
+        }
     }, []);
 
     // ─── Fetch Repos ───
@@ -423,51 +689,313 @@ export default function CICDPage() {
             const res = await fetch(`/api/gitea/repos/${owner}/${repo}/branches`);
             const data = await res.json();
             setBranches(data.branches || []);
-        } catch { setBranches([]); }
+        } catch (err) {
+            console.error('[CICD] fetchBranches failed:', err);
+            setBranches([]);
+        }
     }, []);
 
-    const fetchTags = useCallback(async (owner: string, repo: string) => {
+    const fetchTags = useCallback(async (
+        owner: string,
+        repo: string,
+        opts?: { page?: number; append?: boolean }
+    ) => {
+        const page = opts?.page ?? 1;
+        const append = Boolean(opts?.append);
+        const limit = 20;
+        if (append) setTagsLoadingMore(true);
         try {
-            const res = await fetch(`/api/gitea/repos/${owner}/${repo}/tags`);
+            const res = await fetch(`/api/gitea/repos/${owner}/${repo}/tags?limit=${limit}&page=${page}`);
             const data = await res.json();
-            setTags(Array.isArray(data) ? data : (data.tags || []));
-        } catch { setTags([]); }
+            const list = Array.isArray(data) ? data : (data.tags || []);
+            setTags(prev => {
+                if (!append) return list;
+                const seen = new Set(prev.map(t => t.name));
+                const merged = [...prev];
+                for (const tag of list) {
+                    if (!seen.has(tag.name)) merged.push(tag);
+                }
+                return merged;
+            });
+            setTagsPage(page);
+            setTagsHasMore(Array.isArray(list) && list.length === limit);
+        } catch (err) {
+            console.error('[CICD] fetchTags failed:', err);
+            if (!append) {
+                setTags([]);
+                setTagsHasMore(false);
+            }
+        } finally {
+            if (append) setTagsLoadingMore(false);
+        }
     }, []);
 
-    const fetchCommits = useCallback(async (owner: string, repo: string, ref?: string) => {
+    const fetchCommits = useCallback(async (
+        owner: string,
+        repo: string,
+        ref?: string,
+        opts?: { page?: number; append?: boolean }
+    ) => {
+        const page = opts?.page ?? 1;
+        const append = Boolean(opts?.append);
+        const limit = 30;
+        if (append) setCommitsLoadingMore(true);
         try {
             const sha = ref ? `&sha=${encodeURIComponent(ref)}` : '';
-            const res = await fetch(`/api/gitea/repos/${owner}/${repo}/commits?limit=30${sha}`);
+            const res = await fetch(`/api/gitea/repos/${owner}/${repo}/commits?limit=${limit}&page=${page}${sha}`);
             const data = await res.json();
-            setCommits(data.commits || []);
-        } catch { setCommits([]); }
+            const list = data.commits || [];
+            setCommits(prev => {
+                if (!append) return list;
+                const seen = new Set(prev.map(c => c.sha));
+                const merged = [...prev];
+                for (const commit of list) {
+                    if (!seen.has(commit.sha)) merged.push(commit);
+                }
+                return merged;
+            });
+            setCommitsPage(page);
+            setCommitsHasMore(Array.isArray(list) && list.length === limit);
+        } catch (err) {
+            console.error('[CICD] fetchCommits failed:', err);
+            if (!append) {
+                setCommits([]);
+                setCommitsHasMore(false);
+            }
+        } finally {
+            if (append) setCommitsLoadingMore(false);
+        }
     }, []);
 
-    const fetchActions = useCallback(async (owner: string, repo: string) => {
+    const fetchIssues = useCallback(async (
+        owner: string,
+        repo: string,
+        state: string = 'open',
+        opts?: { page?: number; append?: boolean }
+    ) => {
+        const page = opts?.page ?? 1;
+        const append = Boolean(opts?.append);
+        const limit = 20;
+        if (append) setIssuesLoadingMore(true);
         try {
-            const res = await fetch(`/api/gitea/repos/${owner}/${repo}/actions/runs?limit=20`);
+            const res = await fetch(`/api/gitea/repos/${owner}/${repo}/issues?state=${state}&limit=${limit}&page=${page}`);
+            const data = await res.json();
+            const list = data.issues || [];
+            setIssues(prev => {
+                if (!append) return list;
+                const seen = new Set(prev.map(i => i.number));
+                const merged = [...prev];
+                for (const issue of list) {
+                    if (!seen.has(issue.number)) merged.push(issue);
+                }
+                return merged;
+            });
+            setIssuesPage(page);
+            setIssuesHasMore(Array.isArray(list) && list.length === limit);
+        } catch (err) {
+            console.error('[CICD] fetchIssues failed:', err);
+            if (!append) {
+                setIssues([]);
+                setIssuesHasMore(false);
+            }
+        } finally {
+            if (append) setIssuesLoadingMore(false);
+        }
+    }, []);
+
+    const fetchReleases = useCallback(async (
+        owner: string,
+        repo: string,
+        opts?: { page?: number; append?: boolean }
+    ) => {
+        const page = opts?.page ?? 1;
+        const append = Boolean(opts?.append);
+        const limit = 20;
+        if (append) setReleasesLoadingMore(true);
+        try {
+            const res = await fetch(`/api/gitea/repos/${owner}/${repo}/releases?limit=${limit}&page=${page}`);
+            const data = await res.json();
+            const list = data.releases || [];
+            setReleases(prev => {
+                if (!append) return list;
+                const seen = new Set(prev.map(r => r.id));
+                const merged = [...prev];
+                for (const release of list) {
+                    if (!seen.has(release.id)) merged.push(release);
+                }
+                return merged;
+            });
+            setReleasesPage(page);
+            setReleasesHasMore(Array.isArray(list) && list.length === limit);
+        } catch (err) {
+            console.error('[CICD] fetchReleases failed:', err);
+            if (!append) {
+                setReleases([]);
+                setReleasesHasMore(false);
+            }
+        } finally {
+            if (append) setReleasesLoadingMore(false);
+        }
+    }, []);
+
+    const fetchActions = useCallback(async (
+        owner: string,
+        repo: string,
+        opts?: { page?: number; append?: boolean }
+    ) => {
+        const page = opts?.page ?? 1;
+        const append = Boolean(opts?.append);
+        const limit = 20;
+        if (append) setActionsLoadingMore(true);
+        try {
+            const res = await fetch(`/api/gitea/repos/${owner}/${repo}/actions/runs?limit=${limit}&page=${page}`);
             const data = await res.json();
             const runs = data.workflow_runs || data.tasks || data.task_list || [];
-            setActionRuns(Array.isArray(runs) ? runs : []);
-        } catch { setActionRuns([]); }
+            const normalizedRuns = Array.isArray(runs) ? runs : [];
+            setActionRuns(prev => {
+                if (!append) return normalizedRuns;
+                const seen = new Set(prev.map(r => r.id));
+                const merged = [...prev];
+                for (const run of normalizedRuns) {
+                    if (!seen.has(run.id)) merged.push(run);
+                }
+                return merged;
+            });
+            setActionsPage(page);
+            setActionsHasMore(normalizedRuns.length === limit);
+            if (!append) {
+                setSelectedActionRun(null);
+                setActionJobs([]);
+            }
+        } catch (err) {
+            console.error('[CICD] fetchActions failed:', err);
+            if (!append) {
+                setActionRuns([]);
+                setActionsHasMore(false);
+            }
+        } finally {
+            if (append) setActionsLoadingMore(false);
+        }
     }, []);
 
-    const fetchPulls = useCallback(async (owner: string, repo: string, state: string = 'all') => {
+    const fetchActionRunJobs = useCallback(async (owner: string, repo: string, runId: number) => {
+        setActionJobsLoading(true);
         try {
-            const res = await fetch(`/api/gitea/repos/${owner}/${repo}/pulls?state=${state}&limit=20`);
+            const res = await fetch(`/api/gitea/repos/${owner}/${repo}/actions/runs/${runId}/jobs`);
             const data = await res.json();
-            setPulls(data.pulls || []);
-        } catch { setPulls([]); }
+            const jobs = Array.isArray(data?.jobs)
+                ? data.jobs
+                : Array.isArray(data)
+                    ? data
+                    : [data];
+            setActionJobs(jobs.filter(Boolean));
+        } catch (err) {
+            console.error('[CICD] fetchActionRunJobs failed:', err);
+            setActionJobs([]);
+        } finally {
+            setActionJobsLoading(false);
+        }
+    }, []);
+
+    const fetchPulls = useCallback(async (
+        owner: string,
+        repo: string,
+        state: string = 'all',
+        opts?: { page?: number; append?: boolean }
+    ) => {
+        const page = opts?.page ?? 1;
+        const append = Boolean(opts?.append);
+        const limit = 20;
+        if (append) setPullsLoadingMore(true);
+        try {
+            const res = await fetch(`/api/gitea/repos/${owner}/${repo}/pulls?state=${state}&limit=${limit}&page=${page}`);
+            const data = await res.json();
+            const list = data.pulls || [];
+            setPulls(prev => {
+                if (!append) return list;
+                const seen = new Set(prev.map(pr => pr.number));
+                const merged = [...prev];
+                for (const pr of list) {
+                    if (!seen.has(pr.number)) merged.push(pr);
+                }
+                return merged;
+            });
+            setPullsPage(page);
+            setPullsHasMore(Array.isArray(list) && list.length === limit);
+        } catch (err) {
+            console.error('[CICD] fetchPulls failed:', err);
+            if (!append) {
+                setPulls([]);
+                setPullsHasMore(false);
+            }
+        } finally {
+            if (append) setPullsLoadingMore(false);
+        }
+    }, []);
+
+    const fetchPRChecks = useCallback(async (owner: string, repo: string, ref: string) => {
+        if (!ref) {
+            setPrChecksState('unknown');
+            setPrChecks([]);
+            return;
+        }
+        setPrChecksLoading(true);
+        try {
+            const res = await fetch(`/api/gitea/repos/${owner}/${repo}/commits/${encodeURIComponent(ref)}/status`);
+            const data = await res.json();
+            setPrChecksState(normalizeCheckState(data?.state));
+            setPrChecks(Array.isArray(data?.statuses) ? data.statuses : []);
+        } catch (err) {
+            console.error('[CICD] fetchPRChecks failed:', err);
+            setPrChecksState('unknown');
+            setPrChecks([]);
+        } finally {
+            setPrChecksLoading(false);
+        }
     }, []);
 
     const fetchPRDetail = useCallback(async (owner: string, repo: string, prNumber: number) => {
+        const requestId = ++prRequestIdRef.current;
         setPrDetailLoading(true);
         try {
             const res = await fetch(`/api/gitea/repos/${owner}/${repo}/pulls/${prNumber}`);
             const data = await res.json();
+            if (requestId !== prRequestIdRef.current) return;
             setPrDetail(data);
-        } catch { setPrDetail(null); }
-        finally { setPrDetailLoading(false); }
+            if (data?.pull?.mergeable === false) {
+                setPrConflictHint({ prNumber, message: 'PR is not mergeable with current base. Update branch from base and retry.' });
+            } else {
+                setPrConflictHint((prev) => (prev?.prNumber === prNumber ? null : prev));
+            }
+            const headRef = data?.pull?.head?.sha || data?.pull?.head?.ref || '';
+            fetchPRChecks(owner, repo, headRef);
+        } catch (err) {
+            console.error('[CICD] fetchPRDetail failed:', err);
+            if (requestId !== prRequestIdRef.current) return;
+            setPrDetail(null);
+            setPrChecksState('unknown');
+            setPrChecks([]);
+        } finally {
+            if (requestId === prRequestIdRef.current) setPrDetailLoading(false);
+        }
+    }, [fetchPRChecks]);
+
+    const fetchPRActivity = useCallback(async (owner: string, repo: string, prNumber: number) => {
+        setPrActivityLoading(true);
+        try {
+            const res = await fetch(`/api/gitea/repos/${owner}/${repo}/pulls/${prNumber}/activity`);
+            const data = await res.json();
+            setPrComments(Array.isArray(data.comments) ? data.comments : []);
+            setPrReviews(Array.isArray(data.reviews) ? data.reviews : []);
+            setPrInlineComments(Array.isArray(data.inline_comments) ? data.inline_comments : []);
+        } catch (err) {
+            console.error('[CICD] fetchPRActivity failed:', err);
+            setPrComments([]);
+            setPrReviews([]);
+            setPrInlineComments([]);
+        } finally {
+            setPrActivityLoading(false);
+        }
     }, []);
 
     const fetchTree = useCallback(async (owner: string, repo: string, path: string = '', ref?: string) => {
@@ -476,12 +1004,14 @@ export default function CICDPage() {
             const res = await fetch(`/api/gitea/repos/${owner}/${repo}/tree?path=${encodeURIComponent(path)}${refParam}`);
             const data = await res.json();
             setTreeEntries(prev => ({ ...prev, [path || '/']: data.entries || [] }));
-        } catch {
+        } catch (err) {
+            console.error('[CICD] fetchTree failed:', err);
             setTreeEntries(prev => ({ ...prev, [path || '/']: [] }));
         }
     }, []);
 
     const fetchFileContent = useCallback(async (owner: string, repo: string, path: string, ref?: string) => {
+        const requestId = ++fileRequestIdRef.current;
         setFileLoading(true);
         setSelectedFile(path);
         setEditMode(false);
@@ -490,21 +1020,26 @@ export default function CICDPage() {
             const res = await fetch(`/api/gitea/repos/${owner}/${repo}/file?path=${encodeURIComponent(path)}${refParam}`);
             if (!res.ok) {
                 const errData = await res.json().catch(() => ({}));
+                if (requestId !== fileRequestIdRef.current) return;
                 console.error('[CICD] fetchFileContent error:', res.status, errData);
                 setFileContent(`// Error ${res.status}: Could not load file "${path}"\n// ${errData?.detail || 'Unknown error'}`);
                 setEditSha('');
                 return;
             }
             const data = await res.json();
+            if (requestId !== fileRequestIdRef.current) return;
             const content = data.content ?? '';
             console.log('[CICD] File loaded:', path, 'length:', content.length);
             setFileContent(content);
             setEditSha(data.sha || '');
         } catch (err) {
+            if (requestId !== fileRequestIdRef.current) return;
             console.error('[CICD] fetchFileContent exception:', err);
             setFileContent(`// Error loading file "${path}"`);
         }
-        finally { setFileLoading(false); }
+        finally {
+            if (requestId === fileRequestIdRef.current) setFileLoading(false);
+        }
     }, []);
 
     const fetchCommitDetail = useCallback(async (owner: string, repo: string, sha: string) => {
@@ -514,7 +1049,10 @@ export default function CICDPage() {
             const data = await res.json();
             setSelectedCommit(data);
             setExpandedDiffs(new Set());
-        } catch { setSelectedCommit(null); }
+        } catch (err) {
+            console.error('[CICD] fetchCommitDetail failed:', err);
+            setSelectedCommit(null);
+        }
         finally { setCommitLoading(false); }
     }, []);
 
@@ -523,14 +1061,20 @@ export default function CICDPage() {
         try {
             const res = await fetch(`/api/gitea/repos/${owner}/${repo}/languages`);
             if (res.ok) { const d = await res.json(); setRepoLanguages(d || {}); }
-        } catch { setRepoLanguages({}); }
+        } catch (err) {
+            console.error('[CICD] fetchLanguages failed:', err);
+            setRepoLanguages({});
+        }
     }, []);
 
     const fetchTopics = useCallback(async (owner: string, repo: string) => {
         try {
             const res = await fetch(`/api/gitea/repos/${owner}/${repo}/topics`);
             if (res.ok) { const d = await res.json(); setRepoTopics(d?.topics || []); }
-        } catch { setRepoTopics([]); }
+        } catch (err) {
+            console.error('[CICD] fetchTopics failed:', err);
+            setRepoTopics([]);
+        }
     }, []);
 
     // ─── Select Repo ───
@@ -551,19 +1095,48 @@ export default function CICDPage() {
         setShowBranchDropdown(false);
         setSelectedPR(null);
         setPrDetail(null);
+        setPrComments([]);
+        setPrReviews([]);
+        setPrInlineComments([]);
+        setInlineDraft(null);
+        setPrConflictHint(null);
+        setPrChecksState('unknown');
+        setPrChecks([]);
+        setIssuesState('open');
+        setIssues([]);
+        setReleases([]);
+        setCommitsPage(1);
+        setTagsPage(1);
+        setIssuesPage(1);
+        setReleasesPage(1);
+        setPullsPage(1);
+        setActionsPage(1);
+        setCommitsHasMore(false);
+        setTagsHasMore(false);
+        setIssuesHasMore(false);
+        setReleasesHasMore(false);
+        setPullsHasMore(false);
+        setActionsHasMore(false);
+        setSelectedActionRun(null);
+        setActionJobs([]);
         const [owner, name] = repo.full_name.split('/');
-        await Promise.all([
-            fetchTree(owner, name, '', defaultBranch),
-            fetchBranches(owner, name),
-            fetchCommits(owner, name, defaultBranch),
-            fetchPulls(owner, name, 'all'),
-            fetchActions(owner, name),
-            fetchTags(owner, name),
-            fetchLanguages(owner, name),
-            fetchTopics(owner, name),
-        ]);
-        setDetailLoading(false);
-    }, [fetchTree, fetchBranches, fetchCommits, fetchPulls, fetchActions, fetchTags, fetchLanguages, fetchTopics]);
+        try {
+            await Promise.all([
+                fetchTree(owner, name, '', defaultBranch),
+                fetchBranches(owner, name),
+                fetchCommits(owner, name, defaultBranch, { page: 1 }),
+                fetchPulls(owner, name, 'all', { page: 1 }),
+                fetchActions(owner, name, { page: 1 }),
+                fetchTags(owner, name, { page: 1 }),
+                fetchIssues(owner, name, 'open', { page: 1 }),
+                fetchReleases(owner, name, { page: 1 }),
+                fetchLanguages(owner, name),
+                fetchTopics(owner, name),
+            ]);
+        } finally {
+            setDetailLoading(false);
+        }
+    }, [fetchTree, fetchBranches, fetchCommits, fetchPulls, fetchActions, fetchTags, fetchIssues, fetchReleases, fetchLanguages, fetchTopics]);
 
     // ─── Switch Branch ───
     const switchBranch = useCallback(async (branchName: string) => {
@@ -575,25 +1148,41 @@ export default function CICDPage() {
         setSelectedFile(null);
         setFileContent('');
         setTreeEntries({});
+        setCommitsPage(1);
+        setCommitsHasMore(false);
+        setSelectedCommit(null);
 
         await Promise.all([
             fetchTree(owner, name, '', branchName),
-            fetchCommits(owner, name, branchName),
+            fetchCommits(owner, name, branchName, { page: 1 }),
         ]);
     }, [selectedRepo, fetchTree, fetchCommits]);
 
     // ─── Delete Branch ───
     const handleDeleteBranch = useCallback(async (branchName: string) => {
         if (!selectedRepo) return;
-        if (!confirm(`Delete branch "${branchName}"? This cannot be undone.`)) return;
         const [owner, name] = selectedRepo.full_name.split('/');
         console.log('Deleting branch:', owner, name, branchName);
+        setDeletingBranch(branchName);
         try {
-            const res = await fetch(`/api/gitea/repos/${owner}/${name}/branches/${branchName}`, { method: 'DELETE' });
-            if (!res.ok) { alert('Failed to delete branch'); return; }
+            const res = await fetch(
+                `/api/gitea/repos/${owner}/${name}/branches?branch=${encodeURIComponent(branchName)}`,
+                { method: 'DELETE' }
+            );
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({ detail: res.statusText }));
+                setUiNotice({ tone: 'error', message: `Failed to delete branch: ${err.detail || res.statusText}` });
+                return;
+            }
             if (activeBranch === branchName) await switchBranch(selectedRepo.default_branch || 'main');
             fetchBranches(owner, name);
-        } catch { alert('Failed to delete branch'); }
+            setUiNotice({ tone: 'success', message: `Branch "${branchName}" deleted` });
+        } catch (err) {
+            console.error('[CICD] handleDeleteBranch failed:', err);
+            setUiNotice({ tone: 'error', message: `Failed to delete branch: ${err instanceof Error ? err.message : 'Unknown error'}` });
+        } finally {
+            setDeletingBranch((current) => (current === branchName ? null : current));
+        }
     }, [selectedRepo, activeBranch, switchBranch, fetchBranches]);
 
     // ─── Save File (inline edit) ───
@@ -607,7 +1196,7 @@ export default function CICDPage() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     path: selectedFile,
-                    content: btoa(unescape(encodeURIComponent(editContent))),
+                    content: encodeBase64Utf8(editContent),
                     message: editMessage,
                     sha: editSha,
                     branch: activeBranch,
@@ -647,7 +1236,6 @@ export default function CICDPage() {
             if (!res.ok) {
                 const err = await res.json().catch(() => ({ detail: res.statusText }));
                 alert(`Failed to delete file: ${err.detail || res.statusText}`);
-                setFileLoading(false);
                 return;
             }
             setSelectedFile(null);
@@ -656,6 +1244,7 @@ export default function CICDPage() {
             await fetchCommits(owner, name, activeBranch);
         } catch (e) {
             alert(`Failed to delete file: ${e instanceof Error ? e.message : 'Unknown error'}`);
+        } finally {
             setFileLoading(false);
         }
     }, [selectedRepo, selectedFile, editSha, activeBranch, fetchTree, fetchCommits]);
@@ -689,7 +1278,7 @@ export default function CICDPage() {
     useEffect(() => {
         if (!selectedRepo) return;
         const [owner, name] = selectedRepo.full_name.split('/');
-        const interval = setInterval(() => fetchActions(owner, name), 15000);
+        const interval = setInterval(() => fetchActions(owner, name, { page: 1 }), 15000);
         return () => clearInterval(interval);
     }, [selectedRepo, fetchActions]);
 
@@ -722,8 +1311,13 @@ export default function CICDPage() {
         const newSelected = selectedPR === prNumber ? null : prNumber;
         setSelectedPR(newSelected);
         setPrDetail(null);
+        setPrComments([]);
+        setPrReviews([]);
+        setPrChecksState('unknown');
+        setPrChecks([]);
         if (newSelected !== null) {
             fetchPRDetail(owner, name, newSelected);
+            fetchPRActivity(owner, name, newSelected);
         }
     };
 
@@ -768,7 +1362,7 @@ export default function CICDPage() {
             }
             setPrTitle(''); setPrBody(''); setPrHead(''); setPrBase('');
             setShowCreatePR(false);
-            fetchPulls(owner, name, prState);
+            fetchPulls(owner, name, prState, { page: 1 });
         } catch (e) {
             alert(`Failed to create PR: ${e instanceof Error ? e.message : 'Unknown error'}`);
         }
@@ -777,7 +1371,8 @@ export default function CICDPage() {
     const handleMergePR = async (prNumber: number, style: string = 'merge') => {
         if (!selectedRepo) return;
         const [owner, name] = selectedRepo.full_name.split('/');
-        // Removed native confirm for better UX
+        const styleLabel = style.charAt(0).toUpperCase() + style.slice(1);
+        if (!window.confirm(`Merge PR #${prNumber} using "${styleLabel}" strategy?`)) return;
         try {
             const res = await fetch(`/api/gitea/repos/${owner}/${name}/pulls/${prNumber}/merge`, {
                 method: 'POST',
@@ -786,12 +1381,19 @@ export default function CICDPage() {
             });
             if (!res.ok) {
                 const err = await res.json().catch(() => ({ detail: res.statusText }));
-                alert(`Failed to merge PR: ${err.detail || res.statusText}`);
+                const detail = String(err.detail || res.statusText || 'merge failed');
+                const lower = detail.toLowerCase();
+                if (res.status === 409 || lower.includes('conflict') || lower.includes('not mergeable')) {
+                    setPrConflictHint({ prNumber, message: detail });
+                }
+                alert(`Failed to merge PR: ${detail}`);
                 return;
             }
+            setPrConflictHint(null);
             alert(`PR #${prNumber} merged successfully!`);
             fetchPRDetail(owner, name, prNumber);
-            fetchPulls(owner, name, prState);
+            fetchPRActivity(owner, name, prNumber);
+            fetchPulls(owner, name, prState, { page: 1 });
         } catch (e) {
             alert(`Failed to merge PR: ${e instanceof Error ? e.message : 'Unknown error'}`);
         }
@@ -800,7 +1402,7 @@ export default function CICDPage() {
     const handleClosePR = async (prNumber: number) => {
         if (!selectedRepo) return;
         const [owner, name] = selectedRepo.full_name.split('/');
-        // Removed native confirm for better UX
+        if (!window.confirm(`Close PR #${prNumber}?`)) return;
         try {
             const res = await fetch(`/api/gitea/repos/${owner}/${name}/pulls/${prNumber}/close`, {
                 method: 'PATCH',
@@ -813,32 +1415,232 @@ export default function CICDPage() {
             const data = await res.json();
             alert(`PR #${prNumber} Closed!`);
             setPrDetail(prev => prev ? { ...prev, pull: data.pull } : null);
-            fetchPulls(owner, name, prState);
+            fetchPRActivity(owner, name, prNumber);
+            fetchPulls(owner, name, prState, { page: 1 });
         } catch (e) {
             alert(`Failed to close PR: ${e instanceof Error ? e.message : 'Unknown error'}`);
         }
     };
 
-    const handleApprovePR = async (prNumber: number) => {
+    const submitPRReview = async (prNumber: number, event: 'APPROVED' | 'REQUEST_CHANGES' | 'COMMENT', body: string) => {
         if (!selectedRepo) return;
         const [owner, name] = selectedRepo.full_name.split('/');
         try {
             const res = await fetch(`/api/gitea/repos/${owner}/${name}/pulls/${prNumber}/reviews`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({}),
+                body: JSON.stringify({ event, body }),
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({ detail: res.statusText || 'unknown error' }));
+                alert(`Failed to submit review: ${err.detail || res.statusText}`);
+                return;
+            }
+            const actionLabel = event === 'APPROVED' ? 'approved' : event === 'REQUEST_CHANGES' ? 'requested changes on' : 'commented on';
+            alert(`PR #${prNumber} ${actionLabel} ✅`);
+            fetchPRDetail(owner, name, prNumber);
+            fetchPRActivity(owner, name, prNumber);
+        } catch (e) {
+            alert(`Failed to submit review: ${e instanceof Error ? e.message : 'Unknown error'}`);
+        }
+    };
+
+    const handleUpdatePRBranch = async (prNumber: number, style: 'merge' | 'rebase') => {
+        if (!selectedRepo) return;
+        const [owner, name] = selectedRepo.full_name.split('/');
+        setPrUpdateLoading(true);
+        try {
+            const res = await fetch(`/api/gitea/repos/${owner}/${name}/pulls/${prNumber}/update?style=${style}`, {
+                method: 'POST',
             });
             if (!res.ok) {
                 const err = await res.json().catch(() => ({ detail: res.statusText }));
-                alert(`Failed to approve PR: ${err.detail || res.statusText}`);
+                alert(`Failed to update PR branch: ${err.detail || res.statusText}`);
                 return;
             }
-            alert(`PR #${prNumber} approved! ✅`);
+            setPrConflictHint(null);
+            setUiNotice({ tone: 'success', message: `PR #${prNumber} branch updated with ${style}` });
             fetchPRDetail(owner, name, prNumber);
+            fetchPRActivity(owner, name, prNumber);
+            fetchPulls(owner, name, prState, { page: 1 });
         } catch (e) {
-            alert(`Failed to approve PR: ${e instanceof Error ? e.message : 'Unknown error'}`);
+            alert(`Failed to update PR branch: ${e instanceof Error ? e.message : 'Unknown error'}`);
+        } finally {
+            setPrUpdateLoading(false);
         }
     };
+
+    const handleSubmitInlineComment = async (prNumber: number) => {
+        if (!selectedRepo || !inlineDraft) return;
+        const [owner, name] = selectedRepo.full_name.split('/');
+        const message = inlineDraft.body.trim();
+        if (!message) return;
+        setInlineSubmitting(true);
+        try {
+            const res = await fetch(`/api/gitea/repos/${owner}/${name}/pulls/${prNumber}/inline-comments`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    path: inlineDraft.path,
+                    new_position: inlineDraft.newPosition,
+                    old_position: inlineDraft.oldPosition,
+                    body: message,
+                    commit_id: prDetail?.pull?.head?.sha || '',
+                }),
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({ detail: res.statusText }));
+                alert(`Failed to add inline comment: ${err.detail || res.statusText}`);
+                return;
+            }
+            setUiNotice({ tone: 'success', message: 'Inline comment added' });
+            setInlineDraft(null);
+            fetchPRActivity(owner, name, prNumber);
+        } catch (e) {
+            alert(`Failed to add inline comment: ${e instanceof Error ? e.message : 'Unknown error'}`);
+        } finally {
+            setInlineSubmitting(false);
+        }
+    };
+
+    const handleActionRunCommand = async (runId: number, action: 'rerun' | 'cancel') => {
+        if (!selectedRepo) return;
+        const [owner, name] = selectedRepo.full_name.split('/');
+        setActionRunCommand({ runId, action });
+        try {
+            const res = await fetch(`/api/gitea/repos/${owner}/${name}/actions/runs/${runId}/${action}`, {
+                method: 'POST',
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({ detail: res.statusText }));
+                alert(`Failed to ${action} run #${runId}: ${err.detail || res.statusText}`);
+                return;
+            }
+            setUiNotice({ tone: 'success', message: action === 'rerun' ? `Run #${runId} rerun dispatched` : `Run #${runId} cancelled` });
+            fetchActions(owner, name, { page: 1 });
+        } catch (e) {
+            alert(`Failed to ${action} run #${runId}: ${e instanceof Error ? e.message : 'Unknown error'}`);
+        } finally {
+            setActionRunCommand(null);
+        }
+    };
+
+    const handleApprovePR = async (prNumber: number) => {
+        await submitPRReview(prNumber, 'APPROVED', 'LGTM ✅');
+    };
+
+    const handleRequestChangesPR = async (prNumber: number) => {
+        const reason = window.prompt('Why are you requesting changes? (optional)', 'Please address review feedback.');
+        if (reason === null) return;
+        await submitPRReview(prNumber, 'REQUEST_CHANGES', reason);
+    };
+
+    const handleCommentPR = async (prNumber: number) => {
+        const comment = window.prompt('Add review comment');
+        if (!comment) return;
+        await submitPRReview(prNumber, 'COMMENT', comment);
+    };
+
+    const loadBranchProtection = useCallback(async (owner: string, repo: string, branchName: string) => {
+        setBranchProtectionLoading(true);
+        setBranchProtectionError(null);
+        try {
+            const res = await fetch(`/api/gitea/repos/${owner}/${repo}/branch-protections`);
+            const data = await res.json();
+            const list = Array.isArray(data.protections) ? data.protections : [];
+            const rule = list.find((item: BranchProtectionRule) =>
+                item.rule_name === branchName || item.branch_name === branchName
+            ) as BranchProtectionRule | undefined;
+            if (!rule) {
+                setBranchProtectionExists(false);
+                setBranchProtection({
+                    branch_name: branchName,
+                    rule_name: branchName,
+                    enable_status_check: true,
+                    status_check_contexts: [],
+                    required_approvals: 1,
+                    dismiss_stale_approvals: true,
+                    block_on_rejected_reviews: true,
+                    block_on_outdated_branch: true,
+                    block_on_official_review_requests: false,
+                    enable_force_push: false,
+                    require_signed_commits: false,
+                });
+                setStatusCheckContextsInput('');
+                return;
+            }
+            setBranchProtectionExists(true);
+            setBranchProtection({
+                branch_name: branchName,
+                rule_name: rule.rule_name || rule.branch_name || branchName,
+                enable_status_check: Boolean(rule.enable_status_check),
+                status_check_contexts: Array.isArray(rule.status_check_contexts) ? rule.status_check_contexts : [],
+                required_approvals: Number(rule.required_approvals ?? 1),
+                dismiss_stale_approvals: Boolean(rule.dismiss_stale_approvals),
+                block_on_rejected_reviews: Boolean(rule.block_on_rejected_reviews),
+                block_on_outdated_branch: Boolean(rule.block_on_outdated_branch),
+                block_on_official_review_requests: Boolean(rule.block_on_official_review_requests),
+                enable_force_push: Boolean(rule.enable_force_push),
+                require_signed_commits: Boolean(rule.require_signed_commits),
+            });
+            setStatusCheckContextsInput((Array.isArray(rule.status_check_contexts) ? rule.status_check_contexts : []).join(', '));
+        } catch (err) {
+            setBranchProtectionError(err instanceof Error ? err.message : 'Failed to load branch protection');
+        } finally {
+            setBranchProtectionLoading(false);
+        }
+    }, []);
+
+    const saveBranchProtection = async () => {
+        if (!selectedRepo) return;
+        const [owner, name] = selectedRepo.full_name.split('/');
+        const branchName = selectedRepo.default_branch || 'main';
+        const contexts = statusCheckContextsInput
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean);
+        setBranchProtectionSaving(true);
+        setBranchProtectionError(null);
+        try {
+            const payload = {
+                branch_name: branchName,
+                rule_name: branchProtection.rule_name || branchName,
+                enable_status_check: Boolean(branchProtection.enable_status_check),
+                status_check_contexts: contexts,
+                required_approvals: Math.max(0, Number(branchProtection.required_approvals ?? 0)),
+                dismiss_stale_approvals: Boolean(branchProtection.dismiss_stale_approvals),
+                block_on_rejected_reviews: Boolean(branchProtection.block_on_rejected_reviews),
+                block_on_outdated_branch: Boolean(branchProtection.block_on_outdated_branch),
+                block_on_official_review_requests: Boolean(branchProtection.block_on_official_review_requests),
+                enable_force_push: Boolean(branchProtection.enable_force_push),
+                require_signed_commits: Boolean(branchProtection.require_signed_commits),
+            };
+            const res = await fetch(`/api/gitea/repos/${owner}/${name}/branch-protections/${encodeURIComponent(branchName)}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({ detail: res.statusText }));
+                setBranchProtectionError(err.detail || res.statusText);
+                return;
+            }
+            setBranchProtectionExists(true);
+            setUiNotice({ tone: 'success', message: `Branch protection saved for ${branchName}` });
+            await loadBranchProtection(owner, name, branchName);
+        } catch (err) {
+            setBranchProtectionError(err instanceof Error ? err.message : 'Failed to save branch protection');
+        } finally {
+            setBranchProtectionSaving(false);
+        }
+    };
+
+    useEffect(() => {
+        if (!selectedRepo || detailTab !== 'security') return;
+        const [owner, name] = selectedRepo.full_name.split('/');
+        const branchName = selectedRepo.default_branch || 'main';
+        loadBranchProtection(owner, name, branchName);
+    }, [selectedRepo, detailTab, loadBranchProtection]);
 
 
     // ─── Filter Repos ───
@@ -853,19 +1655,20 @@ export default function CICDPage() {
             if (!selectedRepo) return;
             const entries = treeEntries[currentPath || '/'] || [];
             const readmeEntry = entries.find(e => e.name.toLowerCase() === 'readme.md' && e.type === 'file');
-            if (readmeEntry) {
-                const [owner, name] = selectedRepo.full_name.split('/');
-                const refParam = activeBranch ? `&ref=${encodeURIComponent(activeBranch)}` : '';
-                try {
-                    const res = await fetch(`/api/gitea/repos/${owner}/${name}/file?path=${encodeURIComponent(readmeEntry.path)}${refParam}`);
-                    const data = await res.json();
-                    setReadmeContent(data.content || '');
-                } catch {
+                if (readmeEntry) {
+                    const [owner, name] = selectedRepo.full_name.split('/');
+                    const refParam = activeBranch ? `&ref=${encodeURIComponent(activeBranch)}` : '';
+                    try {
+                        const res = await fetch(`/api/gitea/repos/${owner}/${name}/file?path=${encodeURIComponent(readmeEntry.path)}${refParam}`);
+                        const data = await res.json();
+                        setReadmeContent(data.content || '');
+                    } catch (err) {
+                        console.error('[CICD] README load failed:', err);
+                        setReadmeContent(null);
+                    }
+                } else {
                     setReadmeContent(null);
                 }
-            } else {
-                setReadmeContent(null);
-            }
         };
         loadReadme();
     }, [treeEntries, currentPath, selectedRepo, activeBranch]);
@@ -877,9 +1680,13 @@ export default function CICDPage() {
         { key: 'files', label: 'Files', icon: Folder },
         { key: 'commits', label: 'Commits', icon: GitCommit, count: commits.length },
         { key: 'pulls', label: 'PRs', icon: GitPullRequest, count: pulls.length },
+        { key: 'issues', label: 'Issues', icon: AlertCircle, count: issues.length },
         { key: 'branches', label: 'Branches', icon: GitBranch, count: branches.length },
         { key: 'tags', label: 'Tags', icon: Star, count: tags.length },
+        { key: 'releases', label: 'Releases', icon: PackageOpen, count: releases.length },
         { key: 'actions', label: 'Actions', icon: Play, count: actionRuns.length },
+        { key: 'security', label: 'Security', icon: Scale },
+        { key: 'insights', label: 'Insights', icon: BookOpen },
     ];
 
     // ─── Create File ───
@@ -896,9 +1703,9 @@ export default function CICDPage() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     path: newFilePath,
-                    content: btoa(' '), // Empty file (space) to ensure it's not empty string if API requires content
+                    content: encodeBase64Utf8(''),
                     message: `Create ${newFilePath}`,
-                    sha: '0000000000000000000000000000000000000000', // Dummy SHA to satisfy Pydantic model
+                    sha: '',
                     branch: activeBranch,
                 }),
             });
@@ -1150,7 +1957,11 @@ export default function CICDPage() {
                                                                             {(['HTTPS', 'SSH'] as const).map(protocol => {
                                                                                 const url = protocol === 'HTTPS'
                                                                                     ? `${GITEA_URL}/${selectedRepo.full_name}.git`
-                                                                                    : `git@${new URL(GITEA_URL).hostname}:${selectedRepo.full_name}.git`;
+                                                                                    : (
+                                                                                        GITEA_SSH_PORT === 22
+                                                                                            ? `git@${GITEA_SSH_HOST}:${selectedRepo.full_name}.git`
+                                                                                            : `ssh://git@${GITEA_SSH_HOST}:${GITEA_SSH_PORT}/${selectedRepo.full_name}.git`
+                                                                                    );
                                                                                 return (
                                                                                     <div key={protocol} className="px-3 py-2 border-b border-white/5 last:border-b-0">
                                                                                         <div className="text-[11px] font-medium text-obsidian-muted mb-1.5">{protocol}</div>
@@ -1266,7 +2077,6 @@ export default function CICDPage() {
                                                                 <div className="p-8 prose prose-invert prose-obsidian max-w-none prose-a:text-obsidian-info hover:prose-a:underline prose-headings:border-b prose-headings:border-white/10 prose-headings:pb-2 prose-img:inline prose-img:m-0.5 prose-p:leading-relaxed [&_p:has(img)]:text-center [&_p:has(img)]:leading-loose">
                                                                     <ReactMarkdown
                                                                         remarkPlugins={[remarkGfm]}
-                                                                        rehypePlugins={[rehypeRaw]}
                                                                         components={{
                                                                             code({ node, inline, className, children, ...props }: any) {
                                                                                 const match = /language-(\w+)/.exec(className || '');
@@ -1476,7 +2286,6 @@ export default function CICDPage() {
                                                                         <div className="px-10 py-10 max-w-[900px] mx-auto prose prose-invert max-w-none prose-a:text-obsidian-info hover:prose-a:underline prose-headings:border-b prose-headings:border-obsidian-border prose-headings:pb-2">
                                                                             <ReactMarkdown
                                                                                 remarkPlugins={[remarkGfm]}
-                                                                                rehypePlugins={[rehypeRaw]}
                                                                                 components={{
                                                                                     code({ node, inline, className, children, ...props }: any) {
                                                                                         const match = /language-(\w+)/.exec(className || '');
@@ -1574,6 +2383,22 @@ export default function CICDPage() {
                                                     </div>
                                                 </div>
                                             ))}
+                                            {commitsHasMore && (
+                                                <div className="px-4 py-3 flex justify-center border-b border-white/5">
+                                                    <button
+                                                        onClick={() => {
+                                                            if (!selectedRepo || commitsLoadingMore) return;
+                                                            const [owner, repo] = selectedRepo.full_name.split('/');
+                                                            fetchCommits(owner, repo, activeBranch, { page: commitsPage + 1, append: true });
+                                                        }}
+                                                        disabled={commitsLoadingMore}
+                                                        className="px-3 py-1.5 rounded-md text-[11px] font-medium border border-white/10 bg-white/[0.02] hover:bg-white/[0.05] disabled:opacity-50 flex items-center gap-1.5"
+                                                    >
+                                                        {commitsLoadingMore && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                                                        Load more commits
+                                                    </button>
+                                                </div>
+                                            )}
                                         </div>
                                         {/* Commit Detail */}
                                         {selectedCommit && (
@@ -1639,7 +2464,19 @@ export default function CICDPage() {
                                         {/* PR Controls */}
                                         <div className="flex items-center gap-2 px-4 py-2 border-b border-white/5 bg-black/20 backdrop-blur-md transition-all active:scale-95">
                                             {(['all', 'open', 'closed'] as const).map(s => (
-                                                <button key={s} onClick={() => { setPrState(s); if (selectedRepo) { const [o, n] = selectedRepo.full_name.split('/'); fetchPulls(o, n, s); } }}
+                                                <button key={s} onClick={() => {
+                                                    setPrState(s);
+                                                    setSelectedPR(null);
+                                                    setPrDetail(null);
+                                                    setPrComments([]);
+                                                    setPrReviews([]);
+                                                    setPrChecksState('unknown');
+                                                    setPrChecks([]);
+                                                    if (selectedRepo) {
+                                                        const [o, n] = selectedRepo.full_name.split('/');
+                                                        fetchPulls(o, n, s, { page: 1 });
+                                                    }
+                                                }}
                                                     className={clsx("px-2 py-1 rounded text-[10px] font-medium transition-all",
                                                         prState === s ? "bg-obsidian-info/20 text-obsidian-info" : "text-obsidian-muted hover:text-foreground"
                                                     )}>{s.charAt(0).toUpperCase() + s.slice(1)}</button>
@@ -1717,7 +2554,70 @@ export default function CICDPage() {
                                                 {/* PR Actions Panel (expands on click) */}
                                                 {selectedPR === pr.number && (
                                                     <div className="px-4 pb-3 pt-2 bg-white/[0.01] flex items-center gap-2 flex-wrap border-b border-white/5">
-                                                        {pr.state === 'open' ? (
+                                                        <div className="w-full mb-1">
+                                                            <div className="flex items-center gap-2 text-[10px]">
+                                                                <span className="text-obsidian-muted font-medium">Checks</span>
+                                                                <span className={clsx("px-2 py-0.5 rounded border font-medium", checkStateStyle(prChecksState).bg, checkStateStyle(prChecksState).text, checkStateStyle(prChecksState).border)}>
+                                                                    {prChecksLoading ? 'loading...' : prChecksState}
+                                                                </span>
+                                                                {!prChecksLoading && prChecks.length > 0 && (
+                                                                    <span className="text-obsidian-muted">{prChecks.length} context{prChecks.length !== 1 ? 's' : ''}</span>
+                                                                )}
+                                                                {isBlockingCheckState(prChecksState) && (
+                                                                    <span className="text-obsidian-danger ml-auto">Merge is blocked by failing checks</span>
+                                                                )}
+                                                            </div>
+                                                            {!prChecksLoading && prChecks.length > 0 && (
+                                                                <div className="mt-2 flex flex-wrap gap-1.5">
+                                                                    {prChecks.slice(0, 8).map((check, idx) => {
+                                                                        const style = checkStateStyle(check.state);
+                                                                        const label = check.context || `check-${idx + 1}`;
+                                                                        const badge = (
+                                                                            <span className={clsx("px-2 py-0.5 rounded border text-[9px] font-medium", style.bg, style.text, style.border)}>
+                                                                                {label}: {normalizeCheckState(check.state)}
+                                                                            </span>
+                                                                        );
+                                                                        if (check.target_url) {
+                                                                            return (
+                                                                                <a
+                                                                                    key={`${label}-${idx}`}
+                                                                                    href={check.target_url}
+                                                                                    target="_blank"
+                                                                                    rel="noopener noreferrer"
+                                                                                    onClick={e => e.stopPropagation()}
+                                                                                >
+                                                                                    {badge}
+                                                                                </a>
+                                                                            );
+                                                                        }
+                                                                        return <span key={`${label}-${idx}`}>{badge}</span>;
+                                                                    })}
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                        {prConflictHint?.prNumber === pr.number && (
+                                                            <div className="w-full mb-2 rounded-md border border-obsidian-warning/30 bg-obsidian-warning/10 px-3 py-2 text-[10px] text-obsidian-warning">
+                                                                <div className="font-semibold mb-1">Merge conflict detected</div>
+                                                                <div className="text-obsidian-muted mb-2">{prConflictHint.message}</div>
+                                                                <div className="flex items-center gap-2">
+                                                                    <button
+                                                                        onClick={(e) => { e.stopPropagation(); handleUpdatePRBranch(pr.number, 'rebase'); }}
+                                                                        disabled={prUpdateLoading}
+                                                                        className="px-2 py-1 rounded border border-obsidian-info/30 bg-obsidian-info/10 text-obsidian-info hover:bg-obsidian-info/20 disabled:opacity-50"
+                                                                    >
+                                                                        {prUpdateLoading ? 'Updating...' : 'Update Branch (Rebase)'}
+                                                                    </button>
+                                                                    <button
+                                                                        onClick={(e) => { e.stopPropagation(); handleUpdatePRBranch(pr.number, 'merge'); }}
+                                                                        disabled={prUpdateLoading}
+                                                                        className="px-2 py-1 rounded border border-white/20 bg-white/[0.05] text-foreground hover:bg-white/[0.1] disabled:opacity-50"
+                                                                    >
+                                                                        Update Branch (Merge)
+                                                                    </button>
+                                                                </div>
+                                                            </div>
+                                                        )}
+                                                        {!pr.merged && pr.state === 'open' ? (
                                                             <>
                                                                 <button
                                                                     onClick={(e) => { e.stopPropagation(); handleApprovePR(pr.number); }}
@@ -1725,23 +2625,38 @@ export default function CICDPage() {
                                                                 >
                                                                     <CheckCircle2 className="w-3.5 h-3.5" /> Approve
                                                                 </button>
+                                                                <button
+                                                                    onClick={(e) => { e.stopPropagation(); handleRequestChangesPR(pr.number); }}
+                                                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-obsidian-warning/10 text-obsidian-warning border border-obsidian-warning/20 rounded-md text-[11px] font-medium hover:bg-obsidian-warning/20 transition-colors active:scale-95"
+                                                                >
+                                                                    <AlertCircle className="w-3.5 h-3.5" /> Request changes
+                                                                </button>
+                                                                <button
+                                                                    onClick={(e) => { e.stopPropagation(); handleCommentPR(pr.number); }}
+                                                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-white/[0.02] text-foreground border border-white/10 rounded-md text-[11px] font-medium hover:bg-white/[0.06] transition-colors active:scale-95"
+                                                                >
+                                                                    <MessageSquare className="w-3.5 h-3.5" /> Comment
+                                                                </button>
                                                                 <div className="w-px h-4 bg-obsidian-border-active/50 mx-1"></div>
                                                                 <button
                                                                     onClick={(e) => { e.stopPropagation(); handleMergePR(pr.number, 'merge'); }}
-                                                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-obsidian-info/10 text-obsidian-info border border-obsidian-info/20 rounded-md text-[11px] font-medium hover:bg-obsidian-info/20 transition-colors active:scale-95"
+                                                                    disabled={isBlockingCheckState(prChecksState)}
+                                                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-obsidian-info/10 text-obsidian-info border border-obsidian-info/20 rounded-md text-[11px] font-medium hover:bg-obsidian-info/20 transition-colors active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
                                                                 >
                                                                     <GitMerge className="w-3.5 h-3.5" /> Merge
                                                                 </button>
                                                                 <button
                                                                     onClick={(e) => { e.stopPropagation(); handleMergePR(pr.number, 'squash'); }}
-                                                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-obsidian-warning/10 text-obsidian-warning border border-obsidian-warning/20 rounded-md text-[11px] font-medium hover:bg-obsidian-warning/20 transition-colors active:scale-95"
+                                                                    disabled={isBlockingCheckState(prChecksState)}
+                                                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-obsidian-warning/10 text-obsidian-warning border border-obsidian-warning/20 rounded-md text-[11px] font-medium hover:bg-obsidian-warning/20 transition-colors active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
                                                                 >
                                                                     <Minimize2 className="w-3.5 h-3.5" /> Squash
                                                                 </button>
                                                                 <button
                                                                     onClick={(e) => { e.stopPropagation(); handleMergePR(pr.number, 'rebase'); }}
+                                                                    disabled={isBlockingCheckState(prChecksState)}
                                                                     title="Rebase and Merge"
-                                                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-obsidian-warning/10 text-obsidian-warning border border-obsidian-warning/20 rounded-md text-[11px] font-medium hover:bg-obsidian-warning/20 transition-colors active:scale-95"
+                                                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-obsidian-warning/10 text-obsidian-warning border border-obsidian-warning/20 rounded-md text-[11px] font-medium hover:bg-obsidian-warning/20 transition-colors active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
                                                                 >
                                                                     <RefreshCw className="w-3.5 h-3.5" /> Rebase
                                                                 </button>
@@ -1755,12 +2670,12 @@ export default function CICDPage() {
                                                         ) : (
                                                             <div className={clsx(
                                                                 "flex items-center gap-2 px-3 py-1.5 rounded-md border text-[11px] font-medium",
-                                                                pr.state === 'merged'
+                                                                pr.merged
                                                                     ? "bg-obsidian-primary/10 text-obsidian-primary border-obsidian-primary/20"
                                                                     : "bg-obsidian-border-active/30 text-obsidian-muted border-obsidian-border/50"
                                                             )}>
-                                                                {pr.state === 'merged' ? <GitMerge className="w-3.5 h-3.5" /> : <XCircle className="w-3.5 h-3.5" />}
-                                                                {pr.state === 'merged' ? 'Merged' : 'Closed'}
+                                                                {pr.merged ? <GitMerge className="w-3.5 h-3.5" /> : <XCircle className="w-3.5 h-3.5" />}
+                                                                {pr.merged ? 'Merged' : 'Closed'}
                                                             </div>
                                                         )}
                                                     </div>
@@ -1780,35 +2695,293 @@ export default function CICDPage() {
                                                             <span className="text-obsidian-success ml-auto">+{prDetail.files.reduce((s, f) => s + (f.additions || 0), 0)}</span>
                                                             <span className="text-obsidian-danger ml-1">-{prDetail.files.reduce((s, f) => s + (f.deletions || 0), 0)}</span>
                                                         </div>
-                                                        {prDetail.files.map((file, fi) => (
-                                                            <div key={fi} className="border-b border-obsidian-border/20">
-                                                                <div
-                                                                    className="px-4 py-1.5 flex items-center gap-2 cursor-pointer hover:bg-obsidian-panel/60 bg-obsidian-bg/30 transition-all active:scale-95"
-                                                                    onClick={e => { e.stopPropagation(); setExpandedDiffs(prev => { const nx = new Set(prev); nx.has(file.filename) ? nx.delete(file.filename) : nx.add(file.filename); return nx; }); }}
-                                                                >
-                                                                    <ChevronRight className={"w-3 h-3 text-obsidian-muted shrink-0 transition-transform" + (expandedDiffs.has(file.filename) ? " rotate-90" : "")} />
-                                                                    <span className={"text-[9px] px-1 rounded font-mono shrink-0 " + (file.status === 'added' ? "bg-obsidian-success/15 text-obsidian-success" : file.status === 'removed' ? "bg-obsidian-danger/15 text-obsidian-danger" : "bg-obsidian-warning/15 text-obsidian-warning")}>{(file.status || 'M').slice(0, 1).toUpperCase()}</span>
-                                                                    <span className="font-mono text-[11px] text-foreground truncate flex-1">{file.filename}</span>
-                                                                    <span className="text-[9px] text-obsidian-success shrink-0">+{file.additions || 0}</span>
-                                                                    <span className="text-[9px] text-obsidian-danger shrink-0 ml-1">-{file.deletions || 0}</span>
-                                                                </div>
-                                                                {expandedDiffs.has(file.filename) && file.patch && (
-                                                                    <div className="overflow-x-auto text-[11px] font-mono leading-5" style={{ fontFamily: 'JetBrains Mono,Menlo,Monaco,Consolas,monospace' }}>
-                                                                        {file.patch.split('\n').map((line, li) => {
-                                                                            let bg = 'transparent', color = '#bcbec4';
-                                                                            if (line.startsWith('+') && !line.startsWith('+++')) { bg = '#1a3a2a'; color = '#6aab73'; }
-                                                                            else if (line.startsWith('-') && !line.startsWith('---')) { bg = '#3a1a1a'; color = 'obsidian-danger'; }
-                                                                            else if (line.startsWith('@@')) { bg = '#1a2a3a'; color = '#3574f0'; }
-                                                                            return <div key={li} className="px-4 py-0 whitespace-pre" style={{ backgroundColor: bg, color }}>{line}</div>;
-                                                                        })}
+                                                        {prDetail.files.map((file, fi) => {
+                                                            const fileInlineComments = prInlineComments.filter((c) => c.path === file.filename);
+                                                            return (
+                                                                <div key={fi} className="border-b border-obsidian-border/20">
+                                                                    <div
+                                                                        className="px-4 py-1.5 flex items-center gap-2 cursor-pointer hover:bg-obsidian-panel/60 bg-obsidian-bg/30 transition-all active:scale-95"
+                                                                        onClick={e => { e.stopPropagation(); setExpandedDiffs(prev => { const nx = new Set(prev); nx.has(file.filename) ? nx.delete(file.filename) : nx.add(file.filename); return nx; }); }}
+                                                                    >
+                                                                        <ChevronRight className={"w-3 h-3 text-obsidian-muted shrink-0 transition-transform" + (expandedDiffs.has(file.filename) ? " rotate-90" : "")} />
+                                                                        <span className={"text-[9px] px-1 rounded font-mono shrink-0 " + (file.status === 'added' ? "bg-obsidian-success/15 text-obsidian-success" : file.status === 'removed' ? "bg-obsidian-danger/15 text-obsidian-danger" : "bg-obsidian-warning/15 text-obsidian-warning")}>{(file.status || 'M').slice(0, 1).toUpperCase()}</span>
+                                                                        <span className="font-mono text-[11px] text-foreground truncate flex-1">{file.filename}</span>
+                                                                        {fileInlineComments.length > 0 && (
+                                                                            <span className="text-[9px] text-obsidian-info shrink-0">{fileInlineComments.length} inline comment{fileInlineComments.length === 1 ? '' : 's'}</span>
+                                                                        )}
+                                                                        <span className="text-[9px] text-obsidian-success shrink-0">+{file.additions || 0}</span>
+                                                                        <span className="text-[9px] text-obsidian-danger shrink-0 ml-1">-{file.deletions || 0}</span>
                                                                     </div>
-                                                                )}
+                                                                    {expandedDiffs.has(file.filename) && file.patch && (
+                                                                        <div className="overflow-x-auto text-[11px] font-mono leading-5" style={{ fontFamily: 'JetBrains Mono,Menlo,Monaco,Consolas,monospace' }}>
+                                                                            {parsePatchLines(file.patch).map((line, li) => {
+                                                                                let bg = 'transparent', color = '#bcbec4';
+                                                                                if (line.kind === 'add') { bg = '#1a3a2a'; color = '#6aab73'; }
+                                                                                else if (line.kind === 'del') { bg = '#3a1a1a'; color = '#ff5261'; }
+                                                                                else if (line.kind === 'hunk') { bg = '#1a2a3a'; color = '#3574f0'; }
+
+                                                                                const lineComments = fileInlineComments.filter((c) =>
+                                                                                    (line.newPosition > 0 && c.new_position === line.newPosition) ||
+                                                                                    (line.oldPosition > 0 && c.old_position === line.oldPosition)
+                                                                                );
+
+                                                                                return (
+                                                                                    <div key={`${file.filename}-${li}`}>
+                                                                                        <div className="px-2 py-0 whitespace-pre flex items-center gap-2" style={{ backgroundColor: bg, color }}>
+                                                                                            <span className="w-10 text-right text-[9px] text-obsidian-muted/80">{line.oldPosition > 0 ? line.oldPosition : ''}</span>
+                                                                                            <span className="w-10 text-right text-[9px] text-obsidian-muted/80">{line.newPosition > 0 ? line.newPosition : ''}</span>
+                                                                                            <span className="flex-1">{line.text}</span>
+                                                                                            {(line.newPosition > 0 || line.oldPosition > 0) && (
+                                                                                                <button
+                                                                                                    onClick={(e) => {
+                                                                                                        e.stopPropagation();
+                                                                                                        setInlineDraft({
+                                                                                                            path: file.filename,
+                                                                                                            newPosition: line.newPosition,
+                                                                                                            oldPosition: line.oldPosition,
+                                                                                                            body: '',
+                                                                                                        });
+                                                                                                    }}
+                                                                                                    className="px-1.5 py-0.5 rounded border border-obsidian-info/30 bg-obsidian-info/10 text-obsidian-info text-[9px] hover:bg-obsidian-info/20"
+                                                                                                >
+                                                                                                    Comment
+                                                                                                </button>
+                                                                                            )}
+                                                                                        </div>
+                                                                                        {lineComments.length > 0 && (
+                                                                                            <div className="px-4 py-1.5 bg-black/20 border-t border-white/5 space-y-1">
+                                                                                                {lineComments.map((comment) => (
+                                                                                                    <div key={`${comment.id}-${comment.review_id || 0}`} className="text-[10px] text-foreground/90">
+                                                                                                        <span className="text-obsidian-info">{comment.user?.login || 'unknown'}</span>
+                                                                                                        <span className="text-obsidian-muted"> · line {comment.new_position || comment.old_position || '-'}</span>
+                                                                                                        <div className="text-[11px] mt-0.5 whitespace-pre-wrap">{comment.body || ''}</div>
+                                                                                                    </div>
+                                                                                                ))}
+                                                                                            </div>
+                                                                                        )}
+                                                                                    </div>
+                                                                                );
+                                                                            })}
+                                                                        </div>
+                                                                    )}
+                                                                    {expandedDiffs.has(file.filename) && inlineDraft?.path === file.filename && (
+                                                                        <div className="px-4 py-3 bg-black/20 border-t border-white/10 space-y-2">
+                                                                            <div className="text-[10px] text-obsidian-muted">
+                                                                                Inline comment on <span className="font-mono text-foreground">{inlineDraft.path}</span>
+                                                                                {' '}line <span className="text-obsidian-info">{inlineDraft.newPosition || inlineDraft.oldPosition}</span>
+                                                                            </div>
+                                                                            <textarea
+                                                                                rows={3}
+                                                                                value={inlineDraft.body}
+                                                                                onChange={(e) => setInlineDraft(prev => prev ? { ...prev, body: e.target.value } : prev)}
+                                                                                placeholder="Write inline review comment..."
+                                                                                className="w-full bg-black/30 border border-white/10 rounded px-2 py-1.5 text-[11px] text-foreground placeholder-obsidian-muted outline-none resize-y"
+                                                                            />
+                                                                            <div className="flex items-center justify-end gap-2">
+                                                                                <button
+                                                                                    onClick={() => setInlineDraft(null)}
+                                                                                    disabled={inlineSubmitting}
+                                                                                    className="px-3 py-1.5 rounded text-[10px] border border-white/10 text-obsidian-muted hover:text-foreground"
+                                                                                >
+                                                                                    Cancel
+                                                                                </button>
+                                                                                <button
+                                                                                    onClick={() => handleSubmitInlineComment(pr.number)}
+                                                                                    disabled={inlineSubmitting || !inlineDraft.body.trim()}
+                                                                                    className="px-3 py-1.5 rounded text-[10px] border border-obsidian-info/30 bg-obsidian-info/20 text-obsidian-info hover:bg-obsidian-info/30 disabled:opacity-50 inline-flex items-center gap-1.5"
+                                                                                >
+                                                                                    {inlineSubmitting && <Loader2 className="w-3 h-3 animate-spin" />}
+                                                                                    Submit Comment
+                                                                                </button>
+                                                                            </div>
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                )}
+                                                {selectedPR === pr.number && (
+                                                    <div className="border-t border-white/5 bg-black/10 px-4 py-3">
+                                                        <div className="text-[11px] font-semibold text-foreground mb-2">Conversation</div>
+                                                        {prActivityLoading ? (
+                                                            <div className="flex items-center gap-2 text-[11px] text-obsidian-muted">
+                                                                <Loader2 className="w-3.5 h-3.5 animate-spin text-obsidian-info" />
+                                                                Loading comments and reviews...
                                                             </div>
-                                                        ))}
+                                                        ) : (prComments.length === 0 && prReviews.length === 0 && prInlineComments.length === 0) ? (
+                                                            <div className="text-[11px] text-obsidian-muted">No comments or reviews yet.</div>
+                                                        ) : (
+                                                            <div className="space-y-2">
+                                                                {[...prComments.map(c => ({ kind: 'comment' as const, at: c.created_at || '', by: c.user?.login || 'unknown', body: c.body || '' })),
+                                                                ...prReviews.map(r => ({ kind: 'review' as const, at: r.submitted_at || '', by: r.user?.login || 'unknown', body: r.body || '', state: r.state || 'REVIEWED' })),
+                                                                ...prInlineComments.map(ic => ({
+                                                                    kind: 'inline' as const,
+                                                                    at: ic.created_at || '',
+                                                                    by: ic.user?.login || 'unknown',
+                                                                    body: ic.body || '',
+                                                                    state: `INLINE ${ic.path || ''}:${ic.new_position || ic.old_position || '-'}`.trim(),
+                                                                }))]
+                                                                    .sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime())
+                                                                    .map((item, idx) => (
+                                                                        <div key={`${item.kind}-${idx}`} className="rounded-md border border-white/10 bg-white/[0.02] p-2.5">
+                                                                            <div className="flex items-center gap-2 text-[10px] text-obsidian-muted mb-1">
+                                                                                <span className="font-medium text-foreground">{item.by}</span>
+                                                                                <span>{item.kind === 'review' ? (item.state || 'REVIEWED') : item.kind === 'inline' ? (item.state || 'INLINE') : 'COMMENTED'}</span>
+                                                                                <span className="ml-auto">{timeAgo(item.at)}</span>
+                                                                            </div>
+                                                                            {item.body ? (
+                                                                                <div className="text-[11px] text-foreground/90 whitespace-pre-wrap">{item.body}</div>
+                                                                            ) : (
+                                                                                <div className="text-[11px] text-obsidian-muted italic">No message</div>
+                                                                            )}
+                                                                        </div>
+                                                                    ))}
+                                                            </div>
+                                                        )}
                                                     </div>
                                                 )}
                                             </div>
                                         ))}
+                                        {pullsHasMore && (
+                                            <div className="px-4 py-3 flex justify-center border-b border-white/5">
+                                                <button
+                                                    onClick={() => {
+                                                        if (!selectedRepo || pullsLoadingMore) return;
+                                                        const [owner, repo] = selectedRepo.full_name.split('/');
+                                                        fetchPulls(owner, repo, prState, { page: pullsPage + 1, append: true });
+                                                    }}
+                                                    disabled={pullsLoadingMore}
+                                                    className="px-3 py-1.5 rounded-md text-[11px] font-medium border border-white/10 bg-white/[0.02] hover:bg-white/[0.05] disabled:opacity-50 flex items-center gap-1.5"
+                                                >
+                                                    {pullsLoadingMore && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                                                    Load more PRs
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                ) : detailTab === 'issues' ? (
+                                    /* ─── Issues Tab ─── */
+                                    <div className="flex-1 overflow-auto">
+                                        <div className="flex items-center gap-2 px-4 py-2 border-b border-white/5 bg-black/20 backdrop-blur-md">
+                                            {(['open', 'closed', 'all'] as const).map(s => (
+                                                <button
+                                                    key={s}
+                                                    onClick={() => {
+                                                        setIssuesState(s);
+                                                        if (!selectedRepo) return;
+                                                        const [owner, repo] = selectedRepo.full_name.split('/');
+                                                        fetchIssues(owner, repo, s, { page: 1 });
+                                                    }}
+                                                    className={clsx(
+                                                        "px-2 py-1 rounded text-[10px] font-medium transition-all",
+                                                        issuesState === s ? "bg-obsidian-info/20 text-obsidian-info" : "text-obsidian-muted hover:text-foreground"
+                                                    )}
+                                                >
+                                                    {s.charAt(0).toUpperCase() + s.slice(1)}
+                                                </button>
+                                            ))}
+                                            <span className="ml-auto text-[11px] text-obsidian-muted">{issues.length} issues</span>
+                                        </div>
+                                        {issues.length === 0 ? (
+                                            <div className="text-center py-10 text-obsidian-muted text-[11px]">No issues</div>
+                                        ) : (
+                                            <>
+                                                {issues.map(issue => (
+                                                    <div key={issue.id} className="px-4 py-3 border-b border-white/5 hover:bg-white/[0.02] transition-colors">
+                                                        <div className="flex items-start gap-2">
+                                                            <AlertCircle className={clsx("w-4 h-4 mt-0.5", issue.state === 'open' ? "text-obsidian-success" : "text-obsidian-muted")} />
+                                                            <div className="flex-1 min-w-0">
+                                                                <div className="text-[12px] font-medium text-foreground truncate">#{issue.number} {issue.title}</div>
+                                                                <div className="flex items-center gap-2 mt-1 text-[10px] text-obsidian-muted">
+                                                                    <span>{issue.state}</span>
+                                                                    <span>{issue.user?.login || 'unknown'}</span>
+                                                                    <span>{timeAgo(issue.updated_at || issue.created_at)}</span>
+                                                                    {(issue.comments || 0) > 0 && (
+                                                                        <span className="ml-auto flex items-center gap-1"><MessageSquare className="w-3 h-3" />{issue.comments}</span>
+                                                                    )}
+                                                                </div>
+                                                                {Array.isArray(issue.labels) && issue.labels.length > 0 && (
+                                                                    <div className="flex flex-wrap gap-1 mt-2">
+                                                                        {issue.labels.slice(0, 4).map(label => (
+                                                                            <span
+                                                                                key={label.id}
+                                                                                className="text-[9px] px-1.5 py-0.5 rounded font-medium"
+                                                                                style={{ backgroundColor: `#${label.color || '6c707e'}33`, color: `#${label.color || '6c707e'}` }}
+                                                                            >
+                                                                                {label.name}
+                                                                            </span>
+                                                                        ))}
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                                {issuesHasMore && (
+                                                    <div className="px-4 py-3 flex justify-center">
+                                                        <button
+                                                            onClick={() => {
+                                                                if (!selectedRepo || issuesLoadingMore) return;
+                                                                const [owner, repo] = selectedRepo.full_name.split('/');
+                                                                fetchIssues(owner, repo, issuesState, { page: issuesPage + 1, append: true });
+                                                            }}
+                                                            disabled={issuesLoadingMore}
+                                                            className="px-3 py-1.5 rounded-md text-[11px] font-medium border border-white/10 bg-white/[0.02] hover:bg-white/[0.05] disabled:opacity-50 flex items-center gap-1.5"
+                                                        >
+                                                            {issuesLoadingMore && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                                                            Load more issues
+                                                        </button>
+                                                    </div>
+                                                )}
+                                            </>
+                                        )}
+                                    </div>
+
+                                ) : detailTab === 'releases' ? (
+                                    /* ─── Releases Tab ─── */
+                                    <div className="flex-1 overflow-auto">
+                                        <div className="px-4 py-2 border-b border-white/5 bg-black/20 backdrop-blur-md text-[11px] text-obsidian-muted">
+                                            {releases.length} release{releases.length !== 1 ? 's' : ''}
+                                        </div>
+                                        {releases.length === 0 ? (
+                                            <div className="text-center py-10 text-obsidian-muted text-[11px]">No releases</div>
+                                        ) : (
+                                            <>
+                                                {releases.map(release => (
+                                                    <div key={release.id} className="px-4 py-3 border-b border-white/5 hover:bg-white/[0.02] transition-colors">
+                                                        <div className="flex items-center gap-2">
+                                                            <PackageOpen className="w-4 h-4 text-obsidian-info" />
+                                                            <span className="text-[12px] font-medium text-foreground">{release.name || release.tag_name}</span>
+                                                            <span className="text-[10px] text-obsidian-muted font-mono">{release.tag_name}</span>
+                                                            {release.prerelease && <span className="text-[9px] px-1.5 py-0.5 rounded bg-obsidian-warning/15 text-obsidian-warning">prerelease</span>}
+                                                            {release.draft && <span className="text-[9px] px-1.5 py-0.5 rounded bg-obsidian-border-active/30 text-obsidian-muted">draft</span>}
+                                                            <span className="ml-auto text-[10px] text-obsidian-muted">{timeAgo(release.published_at || release.created_at || null)}</span>
+                                                        </div>
+                                                        {release.body && (
+                                                            <p className="mt-2 text-[11px] text-obsidian-muted whitespace-pre-wrap line-clamp-3">{release.body}</p>
+                                                        )}
+                                                    </div>
+                                                ))}
+                                                {releasesHasMore && (
+                                                    <div className="px-4 py-3 flex justify-center">
+                                                        <button
+                                                            onClick={() => {
+                                                                if (!selectedRepo || releasesLoadingMore) return;
+                                                                const [owner, repo] = selectedRepo.full_name.split('/');
+                                                                fetchReleases(owner, repo, { page: releasesPage + 1, append: true });
+                                                            }}
+                                                            disabled={releasesLoadingMore}
+                                                            className="px-3 py-1.5 rounded-md text-[11px] font-medium border border-white/10 bg-white/[0.02] hover:bg-white/[0.05] disabled:opacity-50 flex items-center gap-1.5"
+                                                        >
+                                                            {releasesLoadingMore && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                                                            Load more releases
+                                                        </button>
+                                                    </div>
+                                                )}
+                                            </>
+                                        )}
                                     </div>
 
                                 ) : detailTab === 'branches' ? (
@@ -1867,7 +3040,7 @@ export default function CICDPage() {
                                                     </button>
                                                     {branch.name !== selectedRepo?.default_branch && !branch.protected && (
                                                         <button
-                                                            onClick={() => handleDeleteBranch(branch.name)}
+                                                            onClick={() => setDeleteBranchTarget(branch.name)}
                                                             className="flex items-center gap-1 px-2 py-0.5 text-[9px] bg-obsidian-danger/10 text-obsidian-danger rounded hover:bg-obsidian-danger/20 transition-colors active:scale-95"
                                                         >
                                                             🗑 Delete
@@ -1897,9 +3070,25 @@ export default function CICDPage() {
                                                 )}
                                             </div>
                                         ))}
+                                        {tagsHasMore && (
+                                            <div className="px-4 py-3 flex justify-center border-b border-white/5">
+                                                <button
+                                                    onClick={() => {
+                                                        if (!selectedRepo || tagsLoadingMore) return;
+                                                        const [owner, repo] = selectedRepo.full_name.split('/');
+                                                        fetchTags(owner, repo, { page: tagsPage + 1, append: true });
+                                                    }}
+                                                    disabled={tagsLoadingMore}
+                                                    className="px-3 py-1.5 rounded-md text-[11px] font-medium border border-white/10 bg-white/[0.02] hover:bg-white/[0.05] disabled:opacity-50 flex items-center gap-1.5"
+                                                >
+                                                    {tagsLoadingMore && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                                                    Load more tags
+                                                </button>
+                                            </div>
+                                        )}
                                     </div>
 
-                                ) : (
+                                ) : detailTab === 'actions' ? (
                                     /* ─── Actions Tab ─── */
                                     <div className="flex-1 overflow-auto">
                                         {actionRuns.length === 0 ? (
@@ -1908,22 +3097,280 @@ export default function CICDPage() {
                                                 <span className="text-[12px]">No workflow runs</span>
                                             </div>
                                         ) : actionRuns.map((run) => (
-                                            <div key={run.id} className="px-4 py-2.5 border-b border-white/5 hover:bg-white/[0.02] transition-all active:scale-95">
-                                                <div className="flex items-center justify-between mb-1">
-                                                    <div className="flex items-center gap-2">
-                                                        <ActionBadge status={run.status || 'unknown'} conclusion={run.conclusion} />
-                                                        <span className="text-[11px] text-foreground font-medium truncate">{run.name || `Run #${run.id}`}</span>
-                                                    </div>
-                                                    <span className="text-[10px] text-obsidian-muted shrink-0 ml-2">{timeAgo(run.updated_at || run.created_at)}</span>
-                                                </div>
-                                                <div className="flex items-center gap-2 text-[10px] text-obsidian-muted pl-1">
-                                                    {run.head_branch && (
-                                                        <span className="flex items-center gap-0.5"><GitBranch className="w-2.5 h-2.5" />{run.head_branch}</span>
+                                            <div key={run.id} className="border-b border-white/5">
+                                                <div
+                                                    className={clsx(
+                                                        "px-4 py-2.5 hover:bg-white/[0.02] transition-all active:scale-95 cursor-pointer",
+                                                        selectedActionRun === run.id && "bg-white/[0.03]"
                                                     )}
-                                                    {run.run_number && <span>#{run.run_number}</span>}
+                                                    onClick={() => {
+                                                        if (!selectedRepo) return;
+                                                        const [owner, repo] = selectedRepo.full_name.split('/');
+                                                        if (selectedActionRun === run.id) {
+                                                            setSelectedActionRun(null);
+                                                            setActionJobs([]);
+                                                            return;
+                                                        }
+                                                        setSelectedActionRun(run.id);
+                                                        fetchActionRunJobs(owner, repo, run.id);
+                                                    }}
+                                                >
+                                                    <div className="flex items-center justify-between mb-1">
+                                                        <div className="flex items-center gap-2 min-w-0">
+                                                            <ActionBadge status={run.status || 'unknown'} conclusion={run.conclusion} />
+                                                            <span className="text-[11px] text-foreground font-medium truncate">{run.name || `Run #${run.id}`}</span>
+                                                        </div>
+                                                        <span className="text-[10px] text-obsidian-muted shrink-0 ml-2">{timeAgo(run.updated_at || run.created_at)}</span>
+                                                    </div>
+                                                    <div className="flex items-center gap-2 text-[10px] text-obsidian-muted pl-1">
+                                                        {run.head_branch && (
+                                                            <span className="flex items-center gap-0.5"><GitBranch className="w-2.5 h-2.5" />{run.head_branch}</span>
+                                                        )}
+                                                        {run.run_number && <span>#{run.run_number}</span>}
+                                                        <div className="ml-auto flex items-center gap-1.5">
+                                                            <button
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    handleActionRunCommand(run.id, 'rerun');
+                                                                }}
+                                                                disabled={Boolean(actionRunCommand && actionRunCommand.runId === run.id)}
+                                                                className="px-2 py-0.5 rounded border border-obsidian-info/30 bg-obsidian-info/10 text-obsidian-info hover:bg-obsidian-info/20 disabled:opacity-50 text-[9px]"
+                                                            >
+                                                                {actionRunCommand?.runId === run.id && actionRunCommand.action === 'rerun' ? 'Running...' : 'Re-run'}
+                                                            </button>
+                                                            <button
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    handleActionRunCommand(run.id, 'cancel');
+                                                                }}
+                                                                disabled={Boolean(actionRunCommand && actionRunCommand.runId === run.id)}
+                                                                className="px-2 py-0.5 rounded border border-obsidian-danger/30 bg-obsidian-danger/10 text-obsidian-danger hover:bg-obsidian-danger/20 disabled:opacity-50 text-[9px]"
+                                                            >
+                                                                {actionRunCommand?.runId === run.id && actionRunCommand.action === 'cancel' ? 'Cancelling...' : 'Cancel'}
+                                                            </button>
+                                                            <span className="text-[9px] text-obsidian-info">
+                                                            {selectedActionRun === run.id ? 'Hide details' : 'View details'}
+                                                            </span>
+                                                        </div>
+                                                    </div>
                                                 </div>
+
+                                                {selectedActionRun === run.id && (
+                                                    <div className="px-4 pb-3 bg-white/[0.01] border-t border-white/5">
+                                                        {actionJobsLoading ? (
+                                                            <div className="flex items-center gap-2 text-[11px] text-obsidian-muted py-2">
+                                                                <Loader2 className="w-3.5 h-3.5 animate-spin text-obsidian-info" />
+                                                                Loading run details...
+                                                            </div>
+                                                        ) : actionJobs.length === 0 ? (
+                                                            <div className="text-[11px] text-obsidian-muted py-2">No job details returned by Gitea for this run.</div>
+                                                        ) : (
+                                                            <div className="space-y-2 pt-2">
+                                                                {actionJobs.map((job, idx) => (
+                                                                    <div key={`${job.id || idx}`} className="rounded-md border border-white/10 bg-black/20 p-2.5">
+                                                                        <div className="flex items-center gap-2 text-[11px]">
+                                                                            <span className="font-medium text-foreground">{job.name || `Job ${idx + 1}`}</span>
+                                                                            <ActionBadge status={job.status || 'unknown'} conclusion={job.conclusion} />
+                                                                            {job.runner_name && <span className="ml-auto text-[10px] text-obsidian-muted">{job.runner_name}</span>}
+                                                                        </div>
+                                                                        {Array.isArray(job.steps) && job.steps.length > 0 && (
+                                                                            <div className="mt-2 space-y-1">
+                                                                                {job.steps.map((step, si) => (
+                                                                                    <div key={`${step.number || si}`} className="flex items-center gap-2 text-[10px] text-obsidian-muted">
+                                                                                        <span className="w-4 text-right">{step.number ?? si + 1}</span>
+                                                                                        <span className="text-foreground/90">{step.name || `Step ${si + 1}`}</span>
+                                                                                        <span className="ml-auto">{step.conclusion || step.status || 'unknown'}</span>
+                                                                                    </div>
+                                                                                ))}
+                                                                            </div>
+                                                                        )}
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                )}
                                             </div>
                                         ))}
+                                        {actionsHasMore && (
+                                            <div className="px-4 py-3 flex justify-center">
+                                                <button
+                                                    onClick={() => {
+                                                        if (!selectedRepo || actionsLoadingMore) return;
+                                                        const [owner, repo] = selectedRepo.full_name.split('/');
+                                                        fetchActions(owner, repo, { page: actionsPage + 1, append: true });
+                                                    }}
+                                                    disabled={actionsLoadingMore}
+                                                    className="px-3 py-1.5 rounded-md text-[11px] font-medium border border-white/10 bg-white/[0.02] hover:bg-white/[0.05] disabled:opacity-50 flex items-center gap-1.5"
+                                                >
+                                                    {actionsLoadingMore && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                                                    Load more runs
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
+                                ) : detailTab === 'security' ? (
+                                    /* ─── Security Tab ─── */
+                                    <div className="flex-1 overflow-auto">
+                                        <div className="px-4 py-3 border-b border-white/5 bg-black/20 backdrop-blur-md">
+                                            <div className="text-[12px] font-semibold text-foreground flex items-center gap-2">
+                                                <Scale className="w-4 h-4 text-obsidian-warning" />
+                                                Branch Protection
+                                            </div>
+                                        </div>
+                                        <div className="p-6 space-y-4">
+                                            <div className="rounded-lg border border-white/10 bg-black/20 p-4">
+                                                <div className="text-[12px] text-foreground font-medium mb-1">Target Branch</div>
+                                                <div className="text-[11px] text-obsidian-muted">
+                                                    Default branch:
+                                                    <span className="font-mono text-foreground ml-1">{selectedRepo?.default_branch || 'main'}</span>
+                                                    <span className="ml-2 text-obsidian-info">{branchProtectionExists ? '(existing rule)' : '(new rule)'}</span>
+                                                </div>
+                                            </div>
+
+                                            {branchProtectionLoading ? (
+                                                <div className="rounded-lg border border-white/10 bg-black/20 p-4 text-[11px] text-obsidian-muted flex items-center gap-2">
+                                                    <Loader2 className="w-3.5 h-3.5 animate-spin text-obsidian-info" />
+                                                    Loading branch protection...
+                                                </div>
+                                            ) : (
+                                                <div className="rounded-lg border border-white/10 bg-black/20 p-4 space-y-3">
+                                                    <label className="flex items-center gap-2 text-[11px] text-foreground">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={Boolean(branchProtection.enable_status_check)}
+                                                            onChange={(e) => setBranchProtection(prev => ({ ...prev, enable_status_check: e.target.checked }))}
+                                                        />
+                                                        Enable required status checks
+                                                    </label>
+
+                                                    <div className="space-y-1">
+                                                        <div className="text-[10px] text-obsidian-muted">Status check contexts (comma separated)</div>
+                                                        <input
+                                                            value={statusCheckContextsInput}
+                                                            onChange={(e) => setStatusCheckContextsInput(e.target.value)}
+                                                            placeholder="build, test, lint"
+                                                            className="w-full bg-black/30 border border-white/10 rounded px-2 py-1.5 text-[11px] text-foreground outline-none"
+                                                        />
+                                                    </div>
+
+                                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                                        <label className="space-y-1">
+                                                            <div className="text-[10px] text-obsidian-muted">Required approvals</div>
+                                                            <input
+                                                                type="number"
+                                                                min={0}
+                                                                value={branchProtection.required_approvals ?? 1}
+                                                                onChange={(e) => setBranchProtection(prev => ({ ...prev, required_approvals: Number(e.target.value || 0) }))}
+                                                                className="w-full bg-black/30 border border-white/10 rounded px-2 py-1.5 text-[11px] text-foreground outline-none"
+                                                            />
+                                                        </label>
+                                                        <label className="flex items-center gap-2 text-[11px] text-foreground mt-5">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={Boolean(branchProtection.dismiss_stale_approvals)}
+                                                                onChange={(e) => setBranchProtection(prev => ({ ...prev, dismiss_stale_approvals: e.target.checked }))}
+                                                            />
+                                                            Dismiss stale approvals
+                                                        </label>
+                                                    </div>
+
+                                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                                        <label className="flex items-center gap-2 text-[11px] text-foreground">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={Boolean(branchProtection.block_on_rejected_reviews)}
+                                                                onChange={(e) => setBranchProtection(prev => ({ ...prev, block_on_rejected_reviews: e.target.checked }))}
+                                                            />
+                                                            Block on rejected reviews
+                                                        </label>
+                                                        <label className="flex items-center gap-2 text-[11px] text-foreground">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={Boolean(branchProtection.block_on_outdated_branch)}
+                                                                onChange={(e) => setBranchProtection(prev => ({ ...prev, block_on_outdated_branch: e.target.checked }))}
+                                                            />
+                                                            Block on outdated branch
+                                                        </label>
+                                                        <label className="flex items-center gap-2 text-[11px] text-foreground">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={Boolean(branchProtection.enable_force_push)}
+                                                                onChange={(e) => setBranchProtection(prev => ({ ...prev, enable_force_push: e.target.checked }))}
+                                                            />
+                                                            Allow force push
+                                                        </label>
+                                                        <label className="flex items-center gap-2 text-[11px] text-foreground">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={Boolean(branchProtection.require_signed_commits)}
+                                                                onChange={(e) => setBranchProtection(prev => ({ ...prev, require_signed_commits: e.target.checked }))}
+                                                            />
+                                                            Require signed commits
+                                                        </label>
+                                                    </div>
+
+                                                    {branchProtectionError && (
+                                                        <div className="rounded border border-obsidian-danger/30 bg-obsidian-danger/10 px-2 py-1.5 text-[11px] text-obsidian-danger">
+                                                            {branchProtectionError}
+                                                        </div>
+                                                    )}
+
+                                                    <div className="flex items-center justify-end gap-2 pt-1">
+                                                        <button
+                                                            onClick={() => {
+                                                                if (!selectedRepo) return;
+                                                                const [owner, repo] = selectedRepo.full_name.split('/');
+                                                                loadBranchProtection(owner, repo, selectedRepo.default_branch || 'main');
+                                                            }}
+                                                            disabled={branchProtectionLoading || branchProtectionSaving}
+                                                            className="px-3 py-1.5 rounded-md text-[11px] border border-white/10 text-obsidian-muted hover:text-foreground hover:bg-white/[0.04] disabled:opacity-50"
+                                                        >
+                                                            Reload
+                                                        </button>
+                                                        <button
+                                                            onClick={saveBranchProtection}
+                                                            disabled={branchProtectionLoading || branchProtectionSaving}
+                                                            className="px-3 py-1.5 rounded-md text-[11px] border border-obsidian-info/30 bg-obsidian-info/20 text-obsidian-info hover:bg-obsidian-info/30 disabled:opacity-50 inline-flex items-center gap-1.5"
+                                                        >
+                                                            {branchProtectionSaving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                                                            Save Rules
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            )}
+
+                                            <div className="rounded-lg border border-white/10 bg-black/20 p-4">
+                                                <div className="text-[12px] text-foreground font-medium mb-1">PR Conflict Handling</div>
+                                                <div className="text-[11px] text-obsidian-muted">
+                                                    PR detayında merge conflict olursa "Update Branch (rebase/merge)" aksiyonları aktif.
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    /* ─── Insights Tab ─── */
+                                    <div className="flex-1 overflow-auto">
+                                        <div className="px-4 py-3 border-b border-white/5 bg-black/20 backdrop-blur-md">
+                                            <div className="text-[12px] font-semibold text-foreground flex items-center gap-2">
+                                                <BookOpen className="w-4 h-4 text-obsidian-info" />
+                                                Repository Insights
+                                            </div>
+                                        </div>
+                                        <div className="p-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+                                            <div className="rounded-lg border border-white/10 bg-black/20 p-4">
+                                                <div className="text-[10px] text-obsidian-muted mb-1">COMMITS (LOADED)</div>
+                                                <div className="text-[20px] font-semibold text-foreground">{commits.length}</div>
+                                            </div>
+                                            <div className="rounded-lg border border-white/10 bg-black/20 p-4">
+                                                <div className="text-[10px] text-obsidian-muted mb-1">OPEN PRs</div>
+                                                <div className="text-[20px] font-semibold text-foreground">{pulls.filter(p => p.state === 'open' && !p.merged).length}</div>
+                                            </div>
+                                            <div className="rounded-lg border border-white/10 bg-black/20 p-4">
+                                                <div className="text-[10px] text-obsidian-muted mb-1">OPEN ISSUES</div>
+                                                <div className="text-[20px] font-semibold text-foreground">{issues.filter(i => i.state === 'open').length}</div>
+                                            </div>
+                                        </div>
                                     </div>
                                 )}
                             </div>
@@ -1931,6 +3378,69 @@ export default function CICDPage() {
                     )}
                 </div>
             </main>
+
+            {deleteBranchTarget && (
+                <div className="absolute inset-0 z-[120] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+                    <div className="w-full max-w-md rounded-xl border border-white/10 bg-[#101114] shadow-2xl overflow-hidden">
+                        <div className="px-4 py-3 border-b border-white/10">
+                            <div className="text-[13px] font-semibold text-foreground">Delete branch?</div>
+                            <div className="text-[11px] text-obsidian-muted mt-1">
+                                Branch <span className="font-mono text-foreground">{deleteBranchTarget}</span> kalici olarak silinecek.
+                            </div>
+                        </div>
+                        <div className="px-4 py-3 flex items-center justify-end gap-2">
+                            <button
+                                onClick={() => setDeleteBranchTarget(null)}
+                                disabled={deletingBranch === deleteBranchTarget}
+                                className="px-3 py-1.5 rounded-md text-[11px] border border-white/10 text-obsidian-muted hover:text-foreground hover:bg-white/[0.04] disabled:opacity-50"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={async () => {
+                                    const target = deleteBranchTarget;
+                                    setDeleteBranchTarget(null);
+                                    if (target) await handleDeleteBranch(target);
+                                }}
+                                disabled={deletingBranch === deleteBranchTarget}
+                                className="px-3 py-1.5 rounded-md text-[11px] border border-obsidian-danger/40 bg-obsidian-danger/20 text-obsidian-danger hover:bg-obsidian-danger/30 disabled:opacity-50 inline-flex items-center gap-1.5"
+                            >
+                                {deletingBranch === deleteBranchTarget && <Loader2 className="w-3 h-3 animate-spin" />}
+                                Delete Branch
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {uiNotice && (
+                <div className="absolute right-4 bottom-4 z-[130] max-w-md">
+                    <div
+                        className={clsx(
+                            "flex items-start gap-2 rounded-lg border px-3 py-2 shadow-2xl backdrop-blur-md",
+                            uiNotice.tone === 'success' && "border-obsidian-success/40 bg-obsidian-success/15 text-obsidian-success",
+                            uiNotice.tone === 'error' && "border-obsidian-danger/40 bg-obsidian-danger/15 text-obsidian-danger",
+                            uiNotice.tone === 'info' && "border-obsidian-info/40 bg-obsidian-info/15 text-obsidian-info",
+                        )}
+                    >
+                        {uiNotice.tone === 'success' ? (
+                            <CheckCircle2 className="w-4 h-4 mt-0.5 shrink-0" />
+                        ) : uiNotice.tone === 'error' ? (
+                            <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                        ) : (
+                            <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                        )}
+                        <div className="text-[11px] leading-5">{uiNotice.message}</div>
+                        <button
+                            onClick={() => setUiNotice(null)}
+                            className="ml-1 text-current/80 hover:text-current"
+                            aria-label="Dismiss notification"
+                        >
+                            <X className="w-3.5 h-3.5" />
+                        </button>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

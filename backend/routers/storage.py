@@ -4,6 +4,7 @@ Ported from web-ui/src/app/api/storage/route.ts
 """
 import logging
 import math
+import os
 from fastapi import APIRouter, HTTPException, Query
 from typing import Optional
 import boto3
@@ -14,11 +15,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # ─── S3 Client (MinIO) ───
+MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "http://minio:9000")
+MINIO_ROOT_USER = os.getenv("MINIO_ROOT_USER", "admin")
+MINIO_ROOT_PASSWORD = os.getenv("MINIO_ROOT_PASSWORD", "admin123")
+
 s3 = boto3.client(
     "s3",
-    endpoint_url="http://localhost:9000",
-    aws_access_key_id="admin",
-    aws_secret_access_key="admin123",
+    endpoint_url=MINIO_ENDPOINT,
+    aws_access_key_id=MINIO_ROOT_USER,
+    aws_secret_access_key=MINIO_ROOT_PASSWORD,
     region_name="us-east-1",
     config=BotoConfig(signature_version="s3v4", s3={"addressing_style": "path"}),
 )

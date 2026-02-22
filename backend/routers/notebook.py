@@ -47,6 +47,7 @@ SPARK_DRIVER_HOST = os.getenv("SPARK_DRIVER_HOST")
 SPARK_DRIVER_BIND_ADDRESS = os.getenv("SPARK_DRIVER_BIND_ADDRESS")
 SPARK_SQL_SHUFFLE_PARTITIONS = os.getenv("SPARK_SQL_SHUFFLE_PARTITIONS", "8")
 SPARK_DEFAULT_DATABASE = os.getenv("SPARK_DEFAULT_DATABASE", "default")
+SPARK_MASTER_UI_PUBLIC_URL = (os.getenv("SPARK_MASTER_UI_PUBLIC_URL", "http://localhost:8082") or "").strip()
 SPARK_S3_ENDPOINT = os.getenv("SPARK_S3_ENDPOINT", os.getenv("MINIO_ENDPOINT", "http://minio:9000"))
 SPARK_S3_ACCESS_KEY = os.getenv("SPARK_S3_ACCESS_KEY", os.getenv("MINIO_ROOT_USER", "admin"))
 SPARK_S3_SECRET_KEY = os.getenv("SPARK_S3_SECRET_KEY", os.getenv("MINIO_ROOT_PASSWORD", "admin123"))
@@ -71,6 +72,21 @@ SPARK_DELTA_ENABLED = (os.getenv("SPARK_DELTA_ENABLED", "true") or "true").strip
 SPARK_DELTA_PACKAGE = os.getenv("SPARK_DELTA_PACKAGE", "io.delta:delta-spark_2.13:4.0.1")
 SPARK_EXTRA_PACKAGES = os.getenv("SPARK_EXTRA_PACKAGES", "")
 SPARK_JARS_REPOSITORIES = os.getenv("SPARK_JARS_REPOSITORIES", "")
+SPARK_REMOTE_URL = (os.getenv("SPARK_REMOTE_URL", "") or "").strip()
+SPARK_ICEBERG_ENABLED = (os.getenv("SPARK_ICEBERG_ENABLED", "true") or "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+SPARK_ICEBERG_CATALOG = (os.getenv("SPARK_ICEBERG_CATALOG", "lakehouse") or "lakehouse").strip()
+SPARK_ICEBERG_CATALOG_URI = (
+    os.getenv("ICEBERG_CATALOG_URI", "jdbc:postgresql://host.docker.internal:5433/controldb")
+    or "jdbc:postgresql://host.docker.internal:5433/controldb"
+).strip()
+SPARK_ICEBERG_CATALOG_USER = (os.getenv("ICEBERG_CATALOG_USER", "postgres") or "postgres").strip()
+SPARK_ICEBERG_CATALOG_PASSWORD = (os.getenv("ICEBERG_CATALOG_PASSWORD", "Gs+163264128") or "Gs+163264128").strip()
+SPARK_ICEBERG_WAREHOUSE = (os.getenv("ICEBERG_WAREHOUSE", "s3a://iceberg/warehouse/") or "s3a://iceberg/warehouse/").strip()
 NOTEBOOK_SQL_ENGINE = (os.getenv("NOTEBOOK_SQL_ENGINE", "spark") or "spark").strip().lower()
 if NOTEBOOK_SQL_ENGINE not in {"spark", "trino"}:
     NOTEBOOK_SQL_ENGINE = "spark"
@@ -80,6 +96,12 @@ NOTEBOOK_USE_GATEWAY = (os.getenv("NOTEBOOK_USE_GATEWAY", "false") or "false").s
     "yes",
     "on",
 }
+NOTEBOOK_CLUSTER_DEFAULT = (os.getenv("NOTEBOOK_CLUSTER_DEFAULT", "small") or "small").strip().lower()
+NOTEBOOK_CLUSTER_PROFILES_JSON = (os.getenv("NOTEBOOK_CLUSTER_PROFILES_JSON", "") or "").strip()
+try:
+    NOTEBOOK_CLUSTER_IDLE_TIMEOUT_SECONDS = max(120, int(os.getenv("NOTEBOOK_CLUSTER_IDLE_TIMEOUT_SECONDS", "900")))
+except ValueError:
+    NOTEBOOK_CLUSTER_IDLE_TIMEOUT_SECONDS = 900
 
 try:
     NOTEBOOK_SESSION_TTL_SECONDS = max(300, int(os.getenv("NOTEBOOK_SESSION_TTL_SECONDS", "7200")))
@@ -102,6 +124,15 @@ class ExecuteRequest(BaseModel):
     kernel_id: Optional[str] = None
 
 
+class StartKernelRequest(BaseModel):
+    cluster_id: Optional[str] = None
+
+
+class AttachClusterRequest(BaseModel):
+    cluster_id: str
+    restart: bool = True
+
+
 class SaveNotebookRequest(BaseModel):
     name: str
     cells: list[dict]
@@ -118,9 +149,11 @@ _sessions: dict[str, dict[str, Any]] = {}
 _execution_counts: dict[str, int] = {}
 _local_namespaces: dict[str, dict[str, Any]] = {}
 _session_locks: dict[str, asyncio.Lock] = {}
-_spark_session: Any = None
 _spark_session_lock = threading.Lock()
 _spark_query_lock = threading.Lock()
+_spark_sessions: dict[str, Any] = {}
+_cluster_runtime_state: dict[str, dict[str, Any]] = {}
+_capacity_cache: dict[str, dict[str, Any]] = {}
 
 
 # ─── Helpers ───
@@ -158,10 +191,504 @@ def _require_valid_notebook_name(name: str) -> str:
     return safe
 
 
+_CLUSTER_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
+
+
+def _env_int(name: str, default: int, min_value: int = 1) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return max(min_value, value)
+
+
+def _normalize_cluster_profile(raw: dict[str, Any], fallback_id: str) -> dict[str, Any]:
+    cluster_id = str(raw.get("id") or fallback_id).strip().lower()
+    if not cluster_id:
+        cluster_id = fallback_id
+    if not _CLUSTER_ID_PATTERN.match(cluster_id):
+        raise ValueError(f"invalid cluster id: {cluster_id}")
+
+    label = str(raw.get("label") or cluster_id).strip() or cluster_id
+    description = str(raw.get("description") or "").strip()
+    remote_url = str(raw.get("spark_remote_url") or raw.get("remote_url") or "").strip() or None
+    master_url = str(raw.get("spark_master_url") or raw.get("master_url") or "").strip() or None
+
+    spark_conf_raw = raw.get("spark_conf") if isinstance(raw.get("spark_conf"), dict) else {}
+    spark_conf: dict[str, str] = {}
+    for key, value in spark_conf_raw.items():
+        k = str(key).strip()
+        v = str(value).strip()
+        if k and v:
+            spark_conf[k] = v
+
+    limits_raw = raw.get("limits") if isinstance(raw.get("limits"), dict) else {}
+    max_rows_raw = limits_raw.get("max_rows", limits_raw.get("maxRows", NOTEBOOK_TABLE_ROW_LIMIT))
+    max_rows = NOTEBOOK_TABLE_ROW_LIMIT
+    try:
+        max_rows = max(10, int(max_rows_raw))
+    except Exception:
+        pass
+
+    idle_timeout_raw = limits_raw.get("idle_timeout_seconds", limits_raw.get("idleTimeoutSeconds", NOTEBOOK_CLUSTER_IDLE_TIMEOUT_SECONDS))
+    idle_timeout_seconds = NOTEBOOK_CLUSTER_IDLE_TIMEOUT_SECONDS
+    try:
+        idle_timeout_seconds = max(60, int(idle_timeout_raw))
+    except Exception:
+        pass
+
+    return {
+        "id": cluster_id,
+        "label": label,
+        "description": description,
+        "spark_remote_url": remote_url,
+        "spark_master_url": master_url,
+        "spark_conf": spark_conf,
+        "limits": {
+            "max_rows": max_rows,
+            "idle_timeout_seconds": idle_timeout_seconds,
+        },
+    }
+
+
+def _default_cluster_profiles() -> dict[str, dict[str, Any]]:
+    small_cores = _env_int("NOTEBOOK_CLUSTER_SMALL_EXECUTOR_CORES", 2)
+    medium_cores = _env_int("NOTEBOOK_CLUSTER_MEDIUM_EXECUTOR_CORES", 4)
+    large_cores = _env_int("NOTEBOOK_CLUSTER_LARGE_EXECUTOR_CORES", 8)
+    small_shuffle = _env_int("NOTEBOOK_CLUSTER_SMALL_SHUFFLE_PARTITIONS", max(4, small_cores * 4))
+    medium_shuffle = _env_int("NOTEBOOK_CLUSTER_MEDIUM_SHUFFLE_PARTITIONS", max(4, medium_cores * 4))
+    large_shuffle = _env_int("NOTEBOOK_CLUSTER_LARGE_SHUFFLE_PARTITIONS", max(4, large_cores * 4))
+
+    small = _normalize_cluster_profile(
+        {
+            "id": "small",
+            "label": "Small",
+            "description": "Light development profile",
+            "spark_remote_url": SPARK_REMOTE_URL or None,
+            "spark_master_url": SPARK_MASTER_URL,
+            "spark_conf": {
+                "spark.executor.instances": str(_env_int("NOTEBOOK_CLUSTER_SMALL_EXECUTOR_INSTANCES", 1)),
+                "spark.executor.cores": str(small_cores),
+                "spark.executor.memory": os.getenv("NOTEBOOK_CLUSTER_SMALL_EXECUTOR_MEMORY", "2g"),
+                "spark.sql.shuffle.partitions": str(small_shuffle),
+            },
+            "limits": {
+                "max_rows": _env_int("NOTEBOOK_CLUSTER_SMALL_MAX_ROWS", NOTEBOOK_TABLE_ROW_LIMIT, min_value=10),
+                "idle_timeout_seconds": _env_int(
+                    "NOTEBOOK_CLUSTER_SMALL_IDLE_TIMEOUT_SECONDS",
+                    NOTEBOOK_CLUSTER_IDLE_TIMEOUT_SECONDS,
+                    min_value=60,
+                ),
+            },
+        },
+        "small",
+    )
+    medium = _normalize_cluster_profile(
+        {
+            "id": "medium",
+            "label": "Medium",
+            "description": "Balanced profile for transformations",
+            "spark_remote_url": SPARK_REMOTE_URL or None,
+            "spark_master_url": SPARK_MASTER_URL,
+            "spark_conf": {
+                "spark.executor.instances": str(_env_int("NOTEBOOK_CLUSTER_MEDIUM_EXECUTOR_INSTANCES", 1)),
+                "spark.executor.cores": str(medium_cores),
+                "spark.executor.memory": os.getenv("NOTEBOOK_CLUSTER_MEDIUM_EXECUTOR_MEMORY", "4g"),
+                "spark.sql.shuffle.partitions": str(medium_shuffle),
+            },
+            "limits": {
+                "max_rows": _env_int("NOTEBOOK_CLUSTER_MEDIUM_MAX_ROWS", NOTEBOOK_TABLE_ROW_LIMIT, min_value=10),
+                "idle_timeout_seconds": _env_int(
+                    "NOTEBOOK_CLUSTER_MEDIUM_IDLE_TIMEOUT_SECONDS",
+                    NOTEBOOK_CLUSTER_IDLE_TIMEOUT_SECONDS,
+                    min_value=60,
+                ),
+            },
+        },
+        "medium",
+    )
+    large = _normalize_cluster_profile(
+        {
+            "id": "large",
+            "label": "Large",
+            "description": "High-throughput profile for heavy transforms",
+            "spark_remote_url": SPARK_REMOTE_URL or None,
+            "spark_master_url": SPARK_MASTER_URL,
+            "spark_conf": {
+                "spark.executor.instances": str(_env_int("NOTEBOOK_CLUSTER_LARGE_EXECUTOR_INSTANCES", 1)),
+                "spark.executor.cores": str(large_cores),
+                "spark.executor.memory": os.getenv("NOTEBOOK_CLUSTER_LARGE_EXECUTOR_MEMORY", "8g"),
+                "spark.sql.shuffle.partitions": str(large_shuffle),
+            },
+            "limits": {
+                "max_rows": _env_int("NOTEBOOK_CLUSTER_LARGE_MAX_ROWS", NOTEBOOK_TABLE_ROW_LIMIT, min_value=10),
+                "idle_timeout_seconds": _env_int(
+                    "NOTEBOOK_CLUSTER_LARGE_IDLE_TIMEOUT_SECONDS",
+                    NOTEBOOK_CLUSTER_IDLE_TIMEOUT_SECONDS,
+                    min_value=60,
+                ),
+            },
+        },
+        "large",
+    )
+    return {item["id"]: item for item in [small, medium, large]}
+
+
+def _load_cluster_profiles() -> dict[str, dict[str, Any]]:
+    if not NOTEBOOK_CLUSTER_PROFILES_JSON:
+        return _default_cluster_profiles()
+
+    try:
+        raw = json.loads(NOTEBOOK_CLUSTER_PROFILES_JSON)
+    except json.JSONDecodeError as exc:
+        logger.warning("Invalid NOTEBOOK_CLUSTER_PROFILES_JSON. Falling back to defaults: %s", exc)
+        return _default_cluster_profiles()
+
+    normalized: dict[str, dict[str, Any]] = {}
+    try:
+        if isinstance(raw, list):
+            for idx, item in enumerate(raw):
+                if not isinstance(item, dict):
+                    continue
+                profile = _normalize_cluster_profile(item, f"cluster_{idx + 1}")
+                normalized[profile["id"]] = profile
+        elif isinstance(raw, dict):
+            for key, item in raw.items():
+                if isinstance(item, dict):
+                    merged = {"id": str(key), **item}
+                else:
+                    continue
+                profile = _normalize_cluster_profile(merged, str(key))
+                normalized[profile["id"]] = profile
+    except Exception as exc:
+        logger.warning("Invalid cluster profile definition. Falling back to defaults: %s", exc)
+        return _default_cluster_profiles()
+
+    if not normalized:
+        return _default_cluster_profiles()
+    return normalized
+
+
+_CLUSTER_PROFILES = _load_cluster_profiles()
+if NOTEBOOK_CLUSTER_DEFAULT in _CLUSTER_PROFILES:
+    _DEFAULT_CLUSTER_ID = NOTEBOOK_CLUSTER_DEFAULT
+else:
+    _DEFAULT_CLUSTER_ID = next(iter(_CLUSTER_PROFILES.keys()))
+
+
+def _resolve_cluster_id(cluster_id: Optional[str]) -> str:
+    candidate = (cluster_id or "").strip().lower()
+    if not candidate:
+        return _DEFAULT_CLUSTER_ID
+    if candidate not in _CLUSTER_PROFILES:
+        raise HTTPException(status_code=400, detail=f"Unknown cluster profile: {candidate}")
+    return candidate
+
+
+def _cluster_profile(cluster_id: Optional[str]) -> dict[str, Any]:
+    resolved = _resolve_cluster_id(cluster_id)
+    return _CLUSTER_PROFILES[resolved]
+
+
+def _cluster_runtime(cluster_id: str) -> dict[str, Any]:
+    return _cluster_runtime_state.setdefault(
+        cluster_id,
+        {
+            "status": "idle",
+            "last_used": None,
+            "started_at": None,
+            "last_stopped": None,
+            "active_sessions": 0,
+            "auto_stops": 0,
+            "last_error": None,
+            "spark_ui_url": None,
+            "application_id": None,
+            "effective_resources": None,
+            "available_resources": None,
+        },
+    )
+
+
+def _safe_int(value: Any, default: int = 0, *, min_value: Optional[int] = None) -> int:
+    try:
+        parsed = int(str(value).strip())
+    except Exception:
+        return default
+    if min_value is not None:
+        return max(min_value, parsed)
+    return parsed
+
+
+def _memory_to_mb(value: Any, default_mb: int = 0) -> int:
+    if value is None:
+        return default_mb
+    text = str(value).strip().lower()
+    if not text:
+        return default_mb
+    try:
+        if text.endswith("g"):
+            return int(float(text[:-1]) * 1024)
+        if text.endswith("m"):
+            return int(float(text[:-1]))
+        if text.endswith("k"):
+            return max(1, int(float(text[:-1]) / 1024))
+        return int(float(text))
+    except Exception:
+        return default_mb
+
+
+def _format_memory_mb(mb: int) -> str:
+    if mb <= 0:
+        return "0m"
+    if mb % 1024 == 0:
+        return f"{mb // 1024}g"
+    return f"{mb}m"
+
+
+def _capacity_summary_from_workers(workers: list[dict[str, Any]]) -> dict[str, Any]:
+    cores_total = 0
+    memory_total_mb = 0
+    for worker in workers:
+        cores_total += int(worker.get("cores", 0) or 0)
+        memory_total_mb += int(worker.get("memory", 0) or 0)
+    return {
+        "workers": len(workers),
+        "total_cores": cores_total,
+        "total_memory_mb": memory_total_mb,
+        "total_memory": _format_memory_mb(memory_total_mb),
+    }
+
+
+def _fetch_master_capacity_sync(master_ui_internal: Optional[str]) -> Optional[dict[str, Any]]:
+    if not master_ui_internal:
+        return None
+    cache_key = master_ui_internal.rstrip("/")
+    now_ts = _now_utc().timestamp()
+    cached = _capacity_cache.get(cache_key)
+    if cached and (now_ts - float(cached.get("ts", 0))) < 8:
+        data = cached.get("data")
+        if isinstance(data, dict):
+            return data
+
+    try:
+        with httpx.Client(timeout=1.5) as client:
+            response = client.get(f"{cache_key}/json/")
+            if response.status_code >= 400:
+                return None
+            payload = response.json() if response.text else {}
+    except Exception:
+        return None
+
+    workers = payload.get("workers") if isinstance(payload.get("workers"), list) else []
+    normalized_workers = [w for w in workers if isinstance(w, dict)]
+    summary = _capacity_summary_from_workers(normalized_workers)
+    _capacity_cache[cache_key] = {"ts": now_ts, "data": summary}
+    return summary
+
+
+async def _fetch_master_capacity_async(master_ui_internal: Optional[str]) -> Optional[dict[str, Any]]:
+    if not master_ui_internal:
+        return None
+    cache_key = master_ui_internal.rstrip("/")
+    now_ts = _now_utc().timestamp()
+    cached = _capacity_cache.get(cache_key)
+    if cached and (now_ts - float(cached.get("ts", 0))) < 8:
+        data = cached.get("data")
+        if isinstance(data, dict):
+            return data
+
+    try:
+        payload = await _fetch_json(f"{cache_key}/json/", timeout_seconds=1.5)
+    except Exception:
+        return None
+
+    workers = payload.get("workers") if isinstance(payload.get("workers"), list) else []
+    normalized_workers = [w for w in workers if isinstance(w, dict)]
+    summary = _capacity_summary_from_workers(normalized_workers)
+    _capacity_cache[cache_key] = {"ts": now_ts, "data": summary}
+    return summary
+
+
+def _profile_resource_summary(profile: dict[str, Any]) -> dict[str, Any]:
+    conf = dict(profile.get("spark_conf") or {})
+    instances = _safe_int(conf.get("spark.executor.instances"), 1, min_value=1)
+    cores = _safe_int(conf.get("spark.executor.cores"), 1, min_value=1)
+    memory_text = str(conf.get("spark.executor.memory") or "1g")
+    memory_mb = _memory_to_mb(memory_text, 1024)
+    shuffle_partitions = _safe_int(conf.get("spark.sql.shuffle.partitions"), _safe_int(SPARK_SQL_SHUFFLE_PARTITIONS, 8), min_value=1)
+    total_cores = instances * cores
+    total_memory_mb = instances * memory_mb
+    return {
+        "executor_instances": instances,
+        "executor_cores": cores,
+        "executor_memory": _format_memory_mb(memory_mb),
+        "executor_memory_mb": memory_mb,
+        "total_cores": total_cores,
+        "total_memory_mb": total_memory_mb,
+        "shuffle_partitions": shuffle_partitions,
+    }
+
+
+def _effective_cluster_resources(cluster_id: str) -> dict[str, Any]:
+    profile = _cluster_profile(cluster_id)
+    summary = _profile_resource_summary(profile)
+    spark_session = _spark_sessions.get(cluster_id)
+    if spark_session is None:
+        return summary
+
+    def get_conf(key: str, fallback: str) -> str:
+        try:
+            value = spark_session.conf.get(key)
+            return str(value).strip() or fallback
+        except Exception:
+            return fallback
+
+    instances = _safe_int(get_conf("spark.executor.instances", str(summary["executor_instances"])), summary["executor_instances"], min_value=1)
+    cores = _safe_int(get_conf("spark.executor.cores", str(summary["executor_cores"])), summary["executor_cores"], min_value=1)
+    memory_text = get_conf("spark.executor.memory", str(summary["executor_memory"]))
+    memory_mb = _memory_to_mb(memory_text, int(summary["executor_memory_mb"]))
+    shuffle_partitions = _safe_int(
+        get_conf("spark.sql.shuffle.partitions", str(summary["shuffle_partitions"])),
+        int(summary["shuffle_partitions"]),
+        min_value=1,
+    )
+    total_cores = instances * cores
+    total_memory_mb = instances * memory_mb
+    return {
+        "executor_instances": instances,
+        "executor_cores": cores,
+        "executor_memory": _format_memory_mb(memory_mb),
+        "executor_memory_mb": memory_mb,
+        "total_cores": total_cores,
+        "total_memory_mb": total_memory_mb,
+        "shuffle_partitions": shuffle_partitions,
+    }
+
+
+def _cap_profile_resources_to_available(
+    profile_resources: dict[str, Any],
+    available_resources: Optional[dict[str, Any]],
+) -> dict[str, Any]:
+    if not isinstance(available_resources, dict):
+        return dict(profile_resources)
+
+    total_cores = _safe_int(available_resources.get("total_cores"), 0)
+    total_memory_mb = _safe_int(available_resources.get("total_memory_mb"), 0)
+    instances = _safe_int(profile_resources.get("executor_instances"), 1, min_value=1)
+    cores = _safe_int(profile_resources.get("executor_cores"), 1, min_value=1)
+    memory_mb = _safe_int(profile_resources.get("executor_memory_mb"), 1024, min_value=1)
+    shuffle_partitions = _safe_int(profile_resources.get("shuffle_partitions"), _safe_int(SPARK_SQL_SHUFFLE_PARTITIONS, 8), min_value=1)
+
+    if total_cores > 0:
+        cores = min(cores, total_cores)
+        instances = min(instances, max(1, total_cores // max(1, cores)))
+    if total_memory_mb > 0:
+        memory_mb = min(memory_mb, total_memory_mb)
+        instances = min(instances, max(1, total_memory_mb // max(1, memory_mb)))
+
+    return {
+        "executor_instances": max(1, instances),
+        "executor_cores": max(1, cores),
+        "executor_memory": _format_memory_mb(max(1, memory_mb)),
+        "executor_memory_mb": max(1, memory_mb),
+        "total_cores": max(1, instances) * max(1, cores),
+        "total_memory_mb": max(1, instances) * max(1, memory_mb),
+        "shuffle_partitions": shuffle_partitions,
+    }
+
+
+def _shuffle_tuning_from_resources(resources: Optional[dict[str, Any]]) -> dict[str, Any]:
+    source = resources or {}
+    total_cores = _safe_int(source.get("total_cores"), 0, min_value=0)
+    current_shuffle = _safe_int(source.get("shuffle_partitions"), _safe_int(SPARK_SQL_SHUFFLE_PARTITIONS, 8), min_value=1)
+    if total_cores <= 0:
+        return {
+            "current": current_shuffle,
+            "recommended": current_shuffle,
+            "recommended_min": max(1, current_shuffle // 2),
+            "recommended_max": current_shuffle * 2,
+            "status": "unknown",
+            "message": "Cluster core capacity is unknown; shuffle recommendation unavailable.",
+        }
+
+    recommended_min = max(2, total_cores * 2)
+    recommended = max(4, total_cores * 4)
+    recommended_max = max(recommended_min, total_cores * 8)
+    if current_shuffle < recommended_min:
+        status = "low"
+        message = f"Shuffle partitions is low for {total_cores} cores; increase toward ~{recommended}."
+    elif current_shuffle > recommended_max:
+        status = "high"
+        message = f"Shuffle partitions is high for {total_cores} cores; reduce toward ~{recommended}."
+    else:
+        status = "ok"
+        message = f"Shuffle partitions is in a healthy range for {total_cores} cores."
+
+    return {
+        "current": current_shuffle,
+        "recommended": recommended,
+        "recommended_min": recommended_min,
+        "recommended_max": recommended_max,
+        "status": status,
+        "message": message,
+    }
+
+
+def _count_sessions_for_cluster(cluster_id: str) -> int:
+    return sum(1 for info in _sessions.values() if info.get("cluster_id") == cluster_id)
+
+
+def _touch_cluster(cluster_id: str) -> None:
+    runtime = _cluster_runtime(cluster_id)
+    runtime["last_used"] = _now_iso()
+    runtime["active_sessions"] = _count_sessions_for_cluster(cluster_id)
+
+
+def _session_cluster_id(session_id: str) -> str:
+    session = _sessions.get(session_id) or {}
+    cluster_id = str(session.get("cluster_id") or "").strip().lower()
+    if cluster_id in _CLUSTER_PROFILES:
+        return cluster_id
+    return _DEFAULT_CLUSTER_ID
+
+
+def _cluster_master_url(cluster_id: str) -> str:
+    profile = _cluster_profile(cluster_id)
+    return str(profile.get("spark_master_url") or SPARK_MASTER_URL).strip()
+
+
+def _cluster_remote_url(cluster_id: str) -> str:
+    profile = _cluster_profile(cluster_id)
+    return str(profile.get("spark_remote_url") or "").strip()
+
+
+def _spark_master_ui_url(master_url: str, *, public: bool = False) -> Optional[str]:
+    if public and SPARK_MASTER_UI_PUBLIC_URL:
+        return SPARK_MASTER_UI_PUBLIC_URL.rstrip("/")
+    url = str(master_url or "").strip()
+    if not url or url.lower().startswith("local"):
+        return None
+    if url.startswith("spark://"):
+        host_port = url.replace("spark://", "", 1)
+        host = host_port.split(":")[0].strip()
+        if not host:
+            return None
+        return f"http://{host}:8080"
+    if url.startswith("http://") or url.startswith("https://"):
+        return url.rstrip("/")
+    return None
+
+
 def _touch_session(session_id: str) -> None:
     session = _sessions.get(session_id)
     if session:
         session["last_used"] = _now_iso()
+        cluster_id = str(session.get("cluster_id") or "").strip().lower()
+        if cluster_id in _CLUSTER_PROFILES:
+            _touch_cluster(cluster_id)
 
 
 async def _cleanup_stale_sessions() -> int:
@@ -189,7 +716,55 @@ async def _cleanup_stale_sessions() -> int:
             except Exception:
                 pass
 
+    await asyncio.to_thread(_cleanup_idle_spark_sessions)
     return len(stale_ids)
+
+
+def _cleanup_idle_spark_sessions() -> int:
+    stopped = 0
+    now = _now_utc()
+    with _spark_session_lock:
+        for cluster_id in _CLUSTER_PROFILES:
+            runtime = _cluster_runtime(cluster_id)
+            active_sessions = _count_sessions_for_cluster(cluster_id)
+            runtime["active_sessions"] = active_sessions
+            if active_sessions > 0:
+                if cluster_id in _spark_sessions:
+                    runtime["status"] = "running"
+                continue
+
+            spark_session = _spark_sessions.get(cluster_id)
+            if spark_session is None:
+                if runtime.get("status") != "auto-stopped":
+                    runtime["status"] = "idle"
+                continue
+
+            timeout_seconds = int(
+                _cluster_profile(cluster_id).get("limits", {}).get("idle_timeout_seconds", NOTEBOOK_CLUSTER_IDLE_TIMEOUT_SECONDS)
+            )
+            last_used = _parse_iso(runtime.get("last_used")) or _parse_iso(runtime.get("started_at"))
+            if last_used is None:
+                last_used = now
+            idle_seconds = max(0.0, (now - last_used).total_seconds())
+            if idle_seconds < timeout_seconds:
+                runtime["status"] = "idle"
+                continue
+
+            try:
+                spark_session.stop()
+            except Exception as exc:
+                runtime["last_error"] = str(exc)
+                logger.warning("Failed to stop Spark session for cluster '%s': %s", cluster_id, exc)
+            _spark_sessions.pop(cluster_id, None)
+            runtime["status"] = "auto-stopped"
+            runtime["last_stopped"] = _now_iso()
+            runtime["auto_stops"] = int(runtime.get("auto_stops") or 0) + 1
+            runtime["spark_ui_url"] = None
+            runtime["application_id"] = None
+            runtime["effective_resources"] = None
+            stopped += 1
+
+    return stopped
 
 
 async def _kernel_gw_available() -> bool:
@@ -410,9 +985,15 @@ def _build_spark_classpath(jars: list[str], base_dir: str) -> str:
     return ":".join(mapped)
 
 
-def _spark_session_usable(session: Any) -> bool:
+def _spark_session_usable(session: Any, *, remote: bool = False) -> bool:
     if session is None:
         return False
+    if remote:
+        try:
+            _ = session.version
+            return True
+        except Exception:
+            return False
     try:
         spark_context = session.sparkContext
         jsc = getattr(spark_context, "_jsc", None)
@@ -421,6 +1002,16 @@ def _spark_session_usable(session: Any) -> bool:
         return not bool(jsc.sc().isStopped())
     except Exception:
         return False
+
+
+def _spark_runtime_mode(cluster_id: Optional[str] = None) -> str:
+    remote_url = _cluster_remote_url(_resolve_cluster_id(cluster_id))
+    master_url = _cluster_master_url(_resolve_cluster_id(cluster_id))
+    if remote_url:
+        return "spark_connect"
+    if master_url.strip().lower().startswith("local"):
+        return "local"
+    return "standalone"
 
 
 def _reset_spark_singletons() -> None:
@@ -442,24 +1033,43 @@ def _reset_spark_singletons() -> None:
         pass
 
 
-def _get_spark_session():
-    global _spark_session
-    if _spark_session_usable(_spark_session):
-        return _spark_session
-    _spark_session = None
+def _get_spark_session(cluster_id: Optional[str] = None):
+    resolved_cluster_id = _resolve_cluster_id(cluster_id)
+    profile = _cluster_profile(resolved_cluster_id)
+    remote_url = _cluster_remote_url(resolved_cluster_id)
+    master_url = _cluster_master_url(resolved_cluster_id)
+    master_ui_internal = _spark_master_ui_url(master_url, public=False)
+    use_remote = bool(remote_url)
+
+    existing = _spark_sessions.get(resolved_cluster_id)
+    if _spark_session_usable(existing, remote=use_remote):
+        runtime = _cluster_runtime(resolved_cluster_id)
+        runtime["effective_resources"] = _effective_cluster_resources(resolved_cluster_id)
+        runtime["available_resources"] = _fetch_master_capacity_sync(master_ui_internal)
+        _touch_cluster(resolved_cluster_id)
+        return existing
 
     with _spark_session_lock:
-        if _spark_session_usable(_spark_session):
-            return _spark_session
-        _spark_session = None
-        _reset_spark_singletons()
+        existing = _spark_sessions.get(resolved_cluster_id)
+        if _spark_session_usable(existing, remote=use_remote):
+            runtime = _cluster_runtime(resolved_cluster_id)
+            runtime["effective_resources"] = _effective_cluster_resources(resolved_cluster_id)
+            runtime["available_resources"] = _fetch_master_capacity_sync(master_ui_internal)
+            _touch_cluster(resolved_cluster_id)
+            return existing
 
+        _reset_spark_singletons()
         spark_sql = importlib.import_module("pyspark.sql")
         SparkSession = spark_sql.SparkSession
+        app_name = f"{SPARK_APP_NAME}-{resolved_cluster_id}"
+        builder = SparkSession.builder.appName(app_name)
+        if use_remote:
+            builder = builder.remote(remote_url)
+        else:
+            builder = builder.master(master_url)
+
         builder = (
-            SparkSession.builder
-            .appName(SPARK_APP_NAME)
-            .master(SPARK_MASTER_URL)
+            builder
             .config("spark.sql.session.timeZone", "UTC")
             .config("spark.sql.shuffle.partitions", SPARK_SQL_SHUFFLE_PARTITIONS)
             .config("spark.ui.showConsoleProgress", "false")
@@ -471,19 +1081,63 @@ def _get_spark_session():
             .config("spark.hadoop.fs.s3a.secret.key", SPARK_S3_SECRET_KEY)
             .config("spark.hadoop.fs.s3a.connection.ssl.enabled", str(SPARK_S3_ENDPOINT.startswith("https://")).lower())
         )
+        if SPARK_ICEBERG_ENABLED and SPARK_ICEBERG_CATALOG:
+            iceberg_catalog = SPARK_ICEBERG_CATALOG
+            builder = (
+                builder
+                .config(f"spark.sql.catalog.{iceberg_catalog}", "org.apache.iceberg.spark.SparkCatalog")
+                .config(f"spark.sql.catalog.{iceberg_catalog}.type", "jdbc")
+                .config(f"spark.sql.catalog.{iceberg_catalog}.uri", SPARK_ICEBERG_CATALOG_URI)
+                .config(f"spark.sql.catalog.{iceberg_catalog}.jdbc.user", SPARK_ICEBERG_CATALOG_USER)
+                .config(f"spark.sql.catalog.{iceberg_catalog}.jdbc.password", SPARK_ICEBERG_CATALOG_PASSWORD)
+                .config(f"spark.sql.catalog.{iceberg_catalog}.warehouse", SPARK_ICEBERG_WAREHOUSE)
+            )
+        profile_conf = dict(profile.get("spark_conf") or {})
+        requested_instances = _safe_int(profile_conf.get("spark.executor.instances"), 1, min_value=1)
+        requested_cores = _safe_int(profile_conf.get("spark.executor.cores"), 1, min_value=1)
+        requested_memory_mb = _memory_to_mb(profile_conf.get("spark.executor.memory"), 1024)
+        capacity = _fetch_master_capacity_sync(master_ui_internal)
+        capped_instances = requested_instances
+        capped_cores = requested_cores
+        capped_memory_mb = requested_memory_mb
+
+        if capacity:
+            total_cores = _safe_int(capacity.get("total_cores"), 0)
+            total_memory_mb = _safe_int(capacity.get("total_memory_mb"), 0)
+            if total_cores > 0:
+                capped_cores = min(capped_cores, total_cores)
+                max_instances_by_core = max(1, total_cores // max(1, capped_cores))
+                capped_instances = min(capped_instances, max_instances_by_core)
+            if total_memory_mb > 0:
+                capped_memory_mb = min(capped_memory_mb, total_memory_mb)
+                max_instances_by_mem = max(1, total_memory_mb // max(1, capped_memory_mb))
+                capped_instances = min(capped_instances, max_instances_by_mem)
+
+        profile_conf["spark.executor.instances"] = str(max(1, capped_instances))
+        profile_conf["spark.executor.cores"] = str(max(1, capped_cores))
+        profile_conf["spark.executor.memory"] = _format_memory_mb(max(1, capped_memory_mb))
+
+        for conf_key, conf_val in profile_conf.items():
+            k = str(conf_key).strip()
+            v = str(conf_val).strip()
+            if k and v:
+                builder = builder.config(k, v)
+
         if SPARK_DRIVER_HOST:
             builder = builder.config("spark.driver.host", SPARK_DRIVER_HOST)
         if SPARK_DRIVER_BIND_ADDRESS:
             builder = builder.config("spark.driver.bindAddress", SPARK_DRIVER_BIND_ADDRESS)
-        local_jars = _discover_spark_jars()
-        if local_jars:
-            builder = builder.config("spark.jars", ",".join(local_jars))
-            driver_cp = _build_spark_classpath(local_jars, SPARK_DRIVER_JARS_DIR)
-            executor_cp = _build_spark_classpath(local_jars, SPARK_EXECUTOR_JARS_DIR)
-            if driver_cp:
-                builder = builder.config("spark.driver.extraClassPath", driver_cp)
-            if executor_cp:
-                builder = builder.config("spark.executor.extraClassPath", executor_cp)
+
+        if not use_remote:
+            local_jars = _discover_spark_jars()
+            if local_jars:
+                builder = builder.config("spark.jars", ",".join(local_jars))
+                driver_cp = _build_spark_classpath(local_jars, SPARK_DRIVER_JARS_DIR)
+                executor_cp = _build_spark_classpath(local_jars, SPARK_EXECUTOR_JARS_DIR)
+                if driver_cp:
+                    builder = builder.config("spark.driver.extraClassPath", driver_cp)
+                if executor_cp:
+                    builder = builder.config("spark.executor.extraClassPath", executor_cp)
 
         extra_packages = [pkg.strip() for pkg in SPARK_EXTRA_PACKAGES.split(",") if pkg.strip()]
         if SPARK_DELTA_ENABLED and SPARK_DELTA_PACKAGE.strip():
@@ -495,21 +1149,48 @@ def _get_spark_session():
         if SPARK_JARS_REPOSITORIES.strip():
             builder = builder.config("spark.jars.repositories", SPARK_JARS_REPOSITORIES.strip())
 
-        if extra_packages:
-            # Keep dependency resolution explicit to avoid version conflicts.
+        if extra_packages and not use_remote:
             ordered_unique_packages = list(dict.fromkeys(extra_packages))
             builder = builder.config("spark.jars.packages", ",".join(ordered_unique_packages))
 
         try:
-            _spark_session = builder.getOrCreate()
+            spark_session = builder.create() if use_remote else builder.getOrCreate()
         except Exception as exc:
             if "stopped SparkContext" not in str(exc):
                 raise
             logger.warning("Detected stopped SparkContext. Resetting and recreating Spark session.")
             _reset_spark_singletons()
-            _spark_session = builder.getOrCreate()
-        logger.info("Notebook Spark session initialized. master=%s app=%s", SPARK_MASTER_URL, SPARK_APP_NAME)
-        return _spark_session
+            spark_session = builder.create() if use_remote else builder.getOrCreate()
+
+        _spark_sessions[resolved_cluster_id] = spark_session
+        runtime = _cluster_runtime(resolved_cluster_id)
+        runtime["status"] = "running"
+        runtime["started_at"] = _now_iso()
+        runtime["last_used"] = runtime["started_at"]
+        runtime["active_sessions"] = _count_sessions_for_cluster(resolved_cluster_id)
+        runtime["last_error"] = None
+        runtime["spark_ui_url"] = _spark_master_ui_url(master_url)
+        runtime["available_resources"] = capacity
+        runtime["effective_resources"] = _profile_resource_summary({"spark_conf": profile_conf})
+
+        try:
+            if not use_remote:
+                runtime["spark_ui_url"] = spark_session.sparkContext.uiWebUrl or runtime["spark_ui_url"]
+                runtime["application_id"] = spark_session.sparkContext.applicationId
+            else:
+                runtime["application_id"] = None
+        except Exception:
+            runtime["application_id"] = None
+
+        logger.info(
+            "Notebook Spark session initialized. cluster=%s mode=%s master=%s remote=%s app=%s",
+            resolved_cluster_id,
+            _spark_runtime_mode(resolved_cluster_id),
+            master_url,
+            remote_url or "-",
+            app_name,
+        )
+        return spark_session
 
 
 def _json_safe(value: Any) -> Any:
@@ -576,6 +1257,18 @@ def _format_value_output(value: Any, execution_count: int) -> Optional[dict[str,
     except Exception:
         pass
 
+    # Spark Connect DataFrame type does not subclass pyspark.sql.DataFrame.
+    try:
+        module_name = type(value).__module__
+        if module_name.startswith("pyspark.sql.connect") and hasattr(value, "collect") and hasattr(value, "columns"):
+            sample = value.limit(NOTEBOOK_TABLE_ROW_LIMIT)
+            columns = [str(c) for c in sample.columns]
+            rows = sample.collect()
+            values = [[_json_safe(row[col]) for col in columns] for row in rows]
+            return _table_output(columns, values, execution_count)
+    except Exception:
+        pass
+
     if isinstance(value, list) and value and all(isinstance(item, dict) for item in value):
         columns: list[str] = []
         seen: set[str] = set()
@@ -603,7 +1296,9 @@ def _format_value_output(value: Any, execution_count: int) -> Optional[dict[str,
     }
 
 
-def _ensure_local_session(session_id: str) -> None:
+def _ensure_local_session(session_id: str, cluster_id: Optional[str] = None) -> None:
+    resolved_cluster_id = _resolve_cluster_id(cluster_id)
+    profile = _cluster_profile(resolved_cluster_id)
     if session_id not in _sessions:
         now = _now_iso()
         _sessions[session_id] = {
@@ -611,7 +1306,14 @@ def _ensure_local_session(session_id: str) -> None:
             "created_at": now,
             "last_used": now,
             "mode": "local",
+            "cluster_id": resolved_cluster_id,
+            "cluster_label": profile.get("label"),
         }
+    else:
+        current_cluster = str(_sessions[session_id].get("cluster_id") or "").strip().lower()
+        if current_cluster not in _CLUSTER_PROFILES:
+            _sessions[session_id]["cluster_id"] = resolved_cluster_id
+            _sessions[session_id]["cluster_label"] = profile.get("label")
     if session_id not in _execution_counts:
         _execution_counts[session_id] = 0
     if session_id not in _local_namespaces:
@@ -619,11 +1321,16 @@ def _ensure_local_session(session_id: str) -> None:
             "__name__": "__main__",
             "__builtins__": __builtins__,
         }
+    _touch_cluster(_session_cluster_id(session_id))
 
 
-def _install_local_helpers(namespace: dict[str, Any]) -> None:
-    if namespace.get("__openclaw_helpers_loaded__"):
+def _install_local_helpers(namespace: dict[str, Any], session_id: str) -> None:
+    cluster_id = _session_cluster_id(session_id)
+    if namespace.get("__openclaw_helpers_loaded__") and namespace.get("__openclaw_cluster_id__") == cluster_id:
         return
+
+    cluster_limits = _cluster_profile(cluster_id).get("limits", {})
+    default_limit = int(cluster_limits.get("max_rows", NOTEBOOK_TABLE_ROW_LIMIT))
 
     def _require_module(module_name: str, package_name: Optional[str] = None):
         try:
@@ -651,10 +1358,10 @@ def _install_local_helpers(namespace: dict[str, Any]) -> None:
     def query_spark(
         statement: str,
         database: str = SPARK_DEFAULT_DATABASE,
-        limit: Optional[int] = NOTEBOOK_TABLE_ROW_LIMIT,
+        limit: Optional[int] = default_limit,
     ):
         _require_module("pyspark.sql", "pyspark")
-        spark = _get_spark_session()
+        spark = _get_spark_session(cluster_id)
         sql_text = _sanitize_sql(statement)
         if not sql_text:
             raise RuntimeError("Spark SQL statement is empty")
@@ -698,14 +1405,14 @@ def _install_local_helpers(namespace: dict[str, Any]) -> None:
     def spark_sql(
         statement: str,
         database: str = SPARK_DEFAULT_DATABASE,
-        limit: Optional[int] = NOTEBOOK_TABLE_ROW_LIMIT,
+        limit: Optional[int] = default_limit,
     ):
         return query_spark(statement, database=database, limit=limit)
 
     spark_sql_module = _require_module("pyspark.sql", "pyspark")
     spark_functions = _require_module("pyspark.sql.functions", "pyspark")
     spark_types = _require_module("pyspark.sql.types", "pyspark")
-    spark = _get_spark_session()
+    spark = _get_spark_session(cluster_id)
 
     namespace["query_trino"] = query_trino
     namespace["query_spark"] = query_spark
@@ -716,6 +1423,7 @@ def _install_local_helpers(namespace: dict[str, Any]) -> None:
     namespace["SparkSession"] = spark_sql_module.SparkSession
     namespace["F"] = spark_functions
     namespace["T"] = spark_types
+    namespace["__openclaw_cluster_id__"] = cluster_id
     namespace["__openclaw_sql_default_engine__"] = NOTEBOOK_SQL_ENGINE
     namespace["__openclaw_helpers_loaded__"] = True
 
@@ -799,7 +1507,12 @@ def _execute_trino_sql(raw_sql: str, execution_count: int) -> dict[str, Any]:
         }
 
 
-def _execute_spark_sql(raw_sql: str, execution_count: int, database: str = SPARK_DEFAULT_DATABASE) -> dict[str, Any]:
+def _execute_spark_sql(
+    raw_sql: str,
+    execution_count: int,
+    session_id: str,
+    database: str = SPARK_DEFAULT_DATABASE,
+) -> dict[str, Any]:
     outputs: list[dict[str, Any]] = []
     sql = _sanitize_sql(raw_sql)
     if not sql:
@@ -829,7 +1542,9 @@ def _execute_spark_sql(raw_sql: str, execution_count: int, database: str = SPARK
         }
 
     try:
-        spark = _get_spark_session()
+        cluster_id = _session_cluster_id(session_id)
+        spark = _get_spark_session(cluster_id)
+        max_rows = int(_cluster_profile(cluster_id).get("limits", {}).get("max_rows", NOTEBOOK_TABLE_ROW_LIMIT))
         with _spark_query_lock:
             target_db = str(database).strip() or SPARK_DEFAULT_DATABASE
             spark.catalog.setCurrentDatabase(target_db)
@@ -837,16 +1552,16 @@ def _execute_spark_sql(raw_sql: str, execution_count: int, database: str = SPARK
             columns = [str(c) for c in df.columns]
 
             if columns:
-                rows = df.limit(NOTEBOOK_TABLE_ROW_LIMIT + 1).collect()
-                truncated = len(rows) > NOTEBOOK_TABLE_ROW_LIMIT
-                rows = rows[:NOTEBOOK_TABLE_ROW_LIMIT]
+                rows = df.limit(max_rows + 1).collect()
+                truncated = len(rows) > max_rows
+                rows = rows[:max_rows]
                 values = [[row[col] for col in columns] for row in rows]
                 outputs.append(_table_output(columns, values, execution_count))
                 if truncated:
                     outputs.append({
                         "output_type": "stream",
                         "name": "stdout",
-                        "text": f"Result truncated to {NOTEBOOK_TABLE_ROW_LIMIT} rows.\\n",
+                        "text": f"Result truncated to {max_rows} rows.\\n",
                     })
             else:
                 outputs.append({
@@ -896,7 +1611,7 @@ def _execute_local_python(code: str, session_id: str, execution_count: int) -> d
     _ensure_local_session(session_id)
     namespace = _local_namespaces[session_id]
     try:
-        _install_local_helpers(namespace)
+        _install_local_helpers(namespace, session_id)
     except Exception as exc:
         return {
             "status": "error",
@@ -988,7 +1703,7 @@ def _execute_local(code: str, session_id: str) -> dict[str, Any]:
     stripped = (code or "").strip()
     if stripped.startswith("%%spark"):
         sql_code = stripped[len("%%spark"):].strip()
-        return _execute_spark_sql(sql_code, execution_count)
+        return _execute_spark_sql(sql_code, execution_count, session_id=session_id)
 
     if stripped.startswith("%%trino"):
         sql_code = stripped[len("%%trino"):].strip()
@@ -1003,13 +1718,227 @@ def _execute_local(code: str, session_id: str) -> dict[str, Any]:
             sql_body = sql_body[len(match.group(0)):].strip()
 
         if selected_engine == "spark":
-            return _execute_spark_sql(sql_body, execution_count)
+            return _execute_spark_sql(sql_body, execution_count, session_id=session_id)
         return _execute_trino_sql(sql_body, execution_count)
 
     return _execute_local_python(code, session_id, execution_count)
 
 
+def _session_public(session_id: str, info: dict[str, Any]) -> dict[str, Any]:
+    cluster_id = str(info.get("cluster_id") or _DEFAULT_CLUSTER_ID).strip().lower()
+    if cluster_id not in _CLUSTER_PROFILES:
+        cluster_id = _DEFAULT_CLUSTER_ID
+    cluster = _cluster_profile(cluster_id)
+    return {
+        "id": session_id,
+        "name": "python3",
+        "execution_state": "idle",
+        **info,
+        "cluster_id": cluster_id,
+        "cluster_label": cluster.get("label"),
+    }
+
+
+def _cluster_payload(cluster_id: str) -> dict[str, Any]:
+    profile = _cluster_profile(cluster_id)
+    runtime = _cluster_runtime(cluster_id)
+    runtime["active_sessions"] = _count_sessions_for_cluster(cluster_id)
+    profile_resources = _profile_resource_summary(profile)
+    available_resources = runtime.get("available_resources") if isinstance(runtime.get("available_resources"), dict) else None
+    if isinstance(runtime.get("effective_resources"), dict):
+        effective_resources = _cap_profile_resources_to_available(runtime.get("effective_resources"), available_resources)
+    else:
+        effective_resources = _cap_profile_resources_to_available(profile_resources, available_resources)
+    shuffle_tuning = _shuffle_tuning_from_resources(effective_resources)
+    return {
+        "id": cluster_id,
+        "label": profile.get("label"),
+        "description": profile.get("description"),
+        "runtime_mode": _spark_runtime_mode(cluster_id),
+        "spark_master_url": _cluster_master_url(cluster_id),
+        "spark_remote_url": _cluster_remote_url(cluster_id) or None,
+        "spark_conf": dict(profile.get("spark_conf") or {}),
+        "limits": dict(profile.get("limits") or {}),
+        "resources": profile_resources,
+        "effective_resources": effective_resources,
+        "available_resources": available_resources,
+        "shuffle_tuning": shuffle_tuning,
+        "runtime": {
+            "status": runtime.get("status"),
+            "active_sessions": runtime.get("active_sessions", 0),
+            "last_used": runtime.get("last_used"),
+            "started_at": runtime.get("started_at"),
+            "last_stopped": runtime.get("last_stopped"),
+            "auto_stops": runtime.get("auto_stops", 0),
+            "spark_ui_url": runtime.get("spark_ui_url"),
+            "application_id": runtime.get("application_id"),
+            "last_error": runtime.get("last_error"),
+        },
+    }
+
+
+async def _fetch_json(url: str, timeout_seconds: float = 2.5) -> dict[str, Any]:
+    async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+        response = await client.get(url)
+        if response.status_code >= 400:
+            raise RuntimeError(f"HTTP {response.status_code}")
+        return response.json() if response.text else {}
+
+
+async def _fetch_cluster_observability(cluster_id: str) -> dict[str, Any]:
+    runtime = _cluster_runtime(cluster_id)
+    master_ui_internal = _spark_master_ui_url(_cluster_master_url(cluster_id), public=False)
+    master_ui_public = _spark_master_ui_url(_cluster_master_url(cluster_id), public=True)
+    spark_ui_url = runtime.get("spark_ui_url") or master_ui_public
+
+    workers_summary = {
+        "count": 0,
+        "cores_total": 0,
+        "cores_used": 0,
+        "memory_total_mb": 0,
+        "memory_used_mb": 0,
+    }
+    active_apps: list[dict[str, Any]] = []
+    app_logs: list[dict[str, Any]] = []
+
+    if master_ui_internal:
+        try:
+            master_json = await _fetch_json(f"{master_ui_internal.rstrip('/')}/json/")
+            workers = master_json.get("workers") if isinstance(master_json.get("workers"), list) else []
+            for worker in workers:
+                workers_summary["count"] += 1
+                workers_summary["cores_total"] += int(worker.get("cores", 0) or 0)
+                workers_summary["cores_used"] += int(worker.get("coresused", 0) or 0)
+                workers_summary["memory_total_mb"] += int(worker.get("memory", 0) or 0)
+                workers_summary["memory_used_mb"] += int(worker.get("memoryused", 0) or 0)
+
+            raw_apps = master_json.get("activeapps") if isinstance(master_json.get("activeapps"), list) else []
+            for app in raw_apps:
+                app_name = str(app.get("name") or "")
+                if f"-{cluster_id}" not in app_name and cluster_id != _DEFAULT_CLUSTER_ID:
+                    continue
+                app_id = str(app.get("id") or "")
+                app_ui = str(app.get("webuiaddress") or "").rstrip("/")
+                app_ui_public = app_ui
+                if master_ui_internal and master_ui_public and app_ui.startswith(master_ui_internal):
+                    app_ui_public = f"{master_ui_public}{app_ui[len(master_ui_internal):]}"
+                active_apps.append(
+                    {
+                        "id": app_id,
+                        "name": app_name,
+                        "cores_granted": int(app.get("coresgranted", 0) or 0),
+                        "memory_per_executor_mb": int(app.get("memoryperexecutor", 0) or 0),
+                        "executors": int(app.get("executors", 0) or 0),
+                        "spark_ui_url": app_ui_public or spark_ui_url,
+                    }
+                )
+                if app_id and app_ui:
+                    try:
+                        jobs = await _fetch_json(f"{app_ui}/api/v1/applications/{app_id}/jobs?status=running", timeout_seconds=1.5)
+                        stages = await _fetch_json(
+                            f"{app_ui}/api/v1/applications/{app_id}/stages?status=active",
+                            timeout_seconds=1.5,
+                        )
+                        running_jobs = jobs if isinstance(jobs, list) else []
+                        active_stages = stages if isinstance(stages, list) else []
+                        app_logs.append(
+                            {
+                                "application_id": app_id,
+                                "running_jobs": len(running_jobs),
+                                "active_stages": len(active_stages),
+                                "jobs": [
+                                    {
+                                        "job_id": j.get("jobId"),
+                                        "name": j.get("name"),
+                                        "status": j.get("status"),
+                                    }
+                                    for j in running_jobs[:20]
+                                    if isinstance(j, dict)
+                                ],
+                                "stages": [
+                                    {
+                                        "stage_id": s.get("stageId"),
+                                        "name": s.get("name"),
+                                        "status": s.get("status"),
+                                        "num_tasks": s.get("numTasks"),
+                                        "num_active_tasks": s.get("numActiveTasks"),
+                                    }
+                                    for s in active_stages[:20]
+                                    if isinstance(s, dict)
+                                ],
+                            }
+                        )
+                    except Exception:
+                        pass
+        except Exception as exc:
+            runtime["last_error"] = f"observability_fetch_failed: {exc}"
+
+    runtime["spark_ui_url"] = spark_ui_url
+    runtime["active_sessions"] = _count_sessions_for_cluster(cluster_id)
+    runtime["status"] = "running" if runtime["active_sessions"] > 0 else runtime.get("status", "idle")
+    runtime["available_resources"] = {
+        "workers": workers_summary.get("count", 0),
+        "total_cores": workers_summary.get("cores_total", 0),
+        "total_memory_mb": workers_summary.get("memory_total_mb", 0),
+        "total_memory": _format_memory_mb(int(workers_summary.get("memory_total_mb", 0) or 0)),
+    }
+
+    return {
+        "cluster": _cluster_payload(cluster_id),
+        "spark_ui_url": spark_ui_url,
+        "spark_master_ui_url": master_ui_public,
+        "workers": workers_summary,
+        "active_applications": active_apps,
+        "logs": app_logs,
+    }
+
+
+async def _refresh_cluster_capacities() -> None:
+    for cluster_id in _CLUSTER_PROFILES.keys():
+        runtime = _cluster_runtime(cluster_id)
+        master_internal = _spark_master_ui_url(_cluster_master_url(cluster_id), public=False)
+        runtime["available_resources"] = await _fetch_master_capacity_async(master_internal)
+
+
 # ─── Routes: Kernel Management ───
+
+@router.get("/notebook/clusters")
+async def list_notebook_clusters():
+    """List available notebook cluster profiles with runtime state."""
+    await _cleanup_stale_sessions()
+    await _refresh_cluster_capacities()
+    return {
+        "default_cluster_id": _DEFAULT_CLUSTER_ID,
+        "clusters": [_cluster_payload(cluster_id) for cluster_id in _CLUSTER_PROFILES.keys()],
+    }
+
+
+@router.get("/notebook/observability")
+async def notebook_observability(cluster_id: Optional[str] = None):
+    """Return Spark observability (workers/apps/jobs/stages + Spark UI links)."""
+    await _cleanup_stale_sessions()
+    if cluster_id:
+        resolved = _resolve_cluster_id(cluster_id)
+        return {
+            "generated_at": _now_iso(),
+            "clusters": [await _fetch_cluster_observability(resolved)],
+        }
+    clusters = []
+    for cluster_key in _CLUSTER_PROFILES.keys():
+        clusters.append(await _fetch_cluster_observability(cluster_key))
+    return {
+        "generated_at": _now_iso(),
+        "clusters": clusters,
+    }
+
+
+@router.get("/notebook/clusters/{cluster_id}/observability")
+async def notebook_cluster_observability(cluster_id: str):
+    """Return observability for one cluster profile."""
+    await _cleanup_stale_sessions()
+    resolved = _resolve_cluster_id(cluster_id)
+    return await _fetch_cluster_observability(resolved)
+
 
 @router.get("/notebook/kernels")
 async def list_kernels():
@@ -1025,18 +1954,17 @@ async def list_kernels():
             pass
 
     return {
-        "kernels": [
-            {"id": sid, "name": "python3", "execution_state": "idle", **info}
-            for sid, info in _sessions.items()
-        ],
+        "kernels": [_session_public(sid, info) for sid, info in _sessions.items()],
         "mode": "local",
     }
 
 
 @router.post("/notebook/kernels")
-async def start_kernel():
+async def start_kernel(req: Optional[StartKernelRequest] = None):
     """Start a new kernel session."""
     await _cleanup_stale_sessions()
+    requested_cluster_id = _resolve_cluster_id(req.cluster_id if req else None)
+    profile = _cluster_profile(requested_cluster_id)
     gw_available = await _kernel_gw_available()
 
     if gw_available:
@@ -1049,25 +1977,29 @@ async def start_kernel():
                 "created_at": now,
                 "last_used": now,
                 "mode": "gateway",
+                "cluster_id": requested_cluster_id,
+                "cluster_label": profile.get("label"),
             }
-            return {"id": session_id, "mode": "gateway", "status": "started"}
+            _touch_cluster(requested_cluster_id)
+            return {
+                "id": session_id,
+                "mode": "gateway",
+                "status": "started",
+                "cluster_id": requested_cluster_id,
+                "cluster_label": profile.get("label"),
+            }
         except Exception as e:
             logger.warning("Kernel Gateway unavailable, falling back to local: %s", e)
 
     session_id = str(uuid.uuid4())
-    now = _now_iso()
-    _sessions[session_id] = {
-        "kernel_id": session_id,
-        "created_at": now,
-        "last_used": now,
+    _ensure_local_session(session_id, cluster_id=requested_cluster_id)
+    return {
+        "id": session_id,
         "mode": "local",
+        "status": "started",
+        "cluster_id": requested_cluster_id,
+        "cluster_label": profile.get("label"),
     }
-    _execution_counts[session_id] = 0
-    _local_namespaces[session_id] = {
-        "__name__": "__main__",
-        "__builtins__": __builtins__,
-    }
-    return {"id": session_id, "mode": "local", "status": "started"}
 
 
 @router.delete("/notebook/kernels/{kernel_id}")
@@ -1084,7 +2016,12 @@ async def shutdown_kernel(kernel_id: str):
         except Exception:
             pass
 
-    return {"status": "shutdown", "id": kernel_id}
+    await asyncio.to_thread(_cleanup_idle_spark_sessions)
+    return {
+        "status": "shutdown",
+        "id": kernel_id,
+        "cluster_id": session.get("cluster_id") if isinstance(session, dict) else None,
+    }
 
 
 @router.post("/notebook/kernels/{kernel_id}/restart")
@@ -1095,18 +2032,27 @@ async def restart_kernel(kernel_id: str):
         try:
             await _kg_request("POST", f"/api/kernels/{session['kernel_id']}/restart")
             _touch_session(kernel_id)
-            return {"status": "restarted", "mode": "gateway"}
+            return {
+                "status": "restarted",
+                "mode": "gateway",
+                "cluster_id": session.get("cluster_id") or _DEFAULT_CLUSTER_ID,
+            }
         except Exception:
             pass
 
-    _ensure_local_session(kernel_id)
+    target_cluster = session.get("cluster_id") if isinstance(session, dict) else None
+    _ensure_local_session(kernel_id, cluster_id=target_cluster)
     _execution_counts[kernel_id] = 0
     _local_namespaces[kernel_id] = {
         "__name__": "__main__",
         "__builtins__": __builtins__,
     }
     _touch_session(kernel_id)
-    return {"status": "restarted", "mode": "local"}
+    return {
+        "status": "restarted",
+        "mode": "local",
+        "cluster_id": _session_cluster_id(kernel_id),
+    }
 
 
 @router.post("/notebook/kernels/{kernel_id}/interrupt")
@@ -1122,6 +2068,36 @@ async def interrupt_kernel(kernel_id: str):
             pass
     _touch_session(kernel_id)
     return {"status": "interrupted"}
+
+
+@router.post("/notebook/kernels/{kernel_id}/attach")
+async def attach_cluster(kernel_id: str, req: AttachClusterRequest):
+    """Attach an existing notebook kernel to a cluster profile."""
+    await _cleanup_stale_sessions()
+    target_cluster_id = _resolve_cluster_id(req.cluster_id)
+    profile = _cluster_profile(target_cluster_id)
+
+    _ensure_local_session(kernel_id, cluster_id=target_cluster_id)
+    session = _sessions[kernel_id]
+    session["cluster_id"] = target_cluster_id
+    session["cluster_label"] = profile.get("label")
+    _touch_session(kernel_id)
+
+    if req.restart:
+        _execution_counts[kernel_id] = 0
+        _local_namespaces[kernel_id] = {
+            "__name__": "__main__",
+            "__builtins__": __builtins__,
+        }
+
+    await asyncio.to_thread(_cleanup_idle_spark_sessions)
+    return {
+        "status": "attached",
+        "id": kernel_id,
+        "cluster_id": target_cluster_id,
+        "cluster_label": profile.get("label"),
+        "restarted": bool(req.restart),
+    }
 
 
 # ─── Routes: Cell Execution ───
@@ -1140,11 +2116,12 @@ async def execute_cell(kernel_id: str, req: ExecuteRequest):
         except Exception as e:
             logger.warning("Gateway execution failed, falling back to local: %s", e)
 
-    _ensure_local_session(kernel_id)
+    _ensure_local_session(kernel_id, cluster_id=session.get("cluster_id") if isinstance(session, dict) else None)
     lock = _session_locks.setdefault(kernel_id, asyncio.Lock())
     async with lock:
         result = await asyncio.to_thread(_execute_local, req.code, kernel_id)
     _touch_session(kernel_id)
+    result["cluster_id"] = _session_cluster_id(kernel_id)
     return result
 
 
@@ -1304,17 +2281,24 @@ async def delete_notebook(name: str):
 async def notebook_health():
     """Check notebook execution engine status."""
     cleaned = await _cleanup_stale_sessions()
+    await _refresh_cluster_capacities()
     gw_available = await _kernel_gw_available()
+    clusters = [_cluster_payload(cluster_id) for cluster_id in _CLUSTER_PROFILES.keys()]
     return {
         "gateway_available": gw_available,
         "gateway_enabled": NOTEBOOK_USE_GATEWAY,
         "gateway_url": KERNEL_GW_URL,
         "mode": "gateway" if gw_available else "local",
+        "spark_runtime_mode": _spark_runtime_mode(_DEFAULT_CLUSTER_ID),
         "active_sessions": len(_sessions),
         "cleaned_sessions": cleaned,
         "session_ttl_seconds": NOTEBOOK_SESSION_TTL_SECONDS,
+        "cluster_idle_timeout_seconds": NOTEBOOK_CLUSTER_IDLE_TIMEOUT_SECONDS,
+        "default_cluster_id": _DEFAULT_CLUSTER_ID,
+        "clusters": clusters,
         "sql_default_engine": NOTEBOOK_SQL_ENGINE,
         "spark_master_url": SPARK_MASTER_URL,
+        "spark_remote_url": SPARK_REMOTE_URL or None,
         "spark_default_database": SPARK_DEFAULT_DATABASE,
         "notebooks_dir": str(NOTEBOOKS_DIR),
     }

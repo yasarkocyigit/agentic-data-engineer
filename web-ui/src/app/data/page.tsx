@@ -105,11 +105,15 @@ type StatementExecution = {
 
 const TRANSACTION_CONTROL_PATTERN = /\b(BEGIN|START\s+TRANSACTION|COMMIT|ROLLBACK|SAVEPOINT|RELEASE\s+SAVEPOINT)\b/i;
 const SCHEMA_MUTATION_PATTERN = /\b(CREATE|ALTER|DROP|TRUNCATE|COMMENT\s+ON|RENAME)\b/i;
-const ENGINE_ORDER: Engine[] = ['trino', 'spark', 'postgres'];
+const ENGINE_ORDER: Engine[] = ['trino', 'postgres'];
 const ENGINE_LABELS: Record<Engine, string> = {
     trino: 'Trino',
     spark: 'Spark',
     postgres: 'PostgreSQL',
+};
+
+const normalizeEngine = (value: string | Engine | undefined | null): Engine => {
+    return value === 'postgres' ? 'postgres' : 'trino';
 };
 
 const hasExplicitTransactionControl = (sql: string) => TRANSACTION_CONTROL_PATTERN.test(sql);
@@ -453,6 +457,7 @@ export default function DataExplorer() {
     const [showSchemaExplorer, setShowSchemaExplorer] = useState(true);
     const [schemaTree, setSchemaTree] = useState<SchemaNode[]>([]);
     const [isSchemaLoading, setIsSchemaLoading] = useState(false);
+    const [schemaLoadError, setSchemaLoadError] = useState<string | null>(null);
     const [sqlLanguageKeywords, setSqlLanguageKeywords] = useState<string[]>([]);
 
     // ─── Trino Queries & Cluster Info State ───
@@ -1663,6 +1668,8 @@ export default function DataExplorer() {
     // ─── Schema Explorer Data Fetching ───
     const fetchSchemaRoot = useCallback(async () => {
         setIsSchemaLoading(true);
+        setSchemaLoadError(null);
+        setSchemaTree([]);
         try {
             if (engine === 'postgres') {
                 const res = await fetch('/api/postgres', {
@@ -1670,6 +1677,10 @@ export default function DataExplorer() {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ action: 'explore', type: 'databases' })
                 });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err?.detail || 'Failed to load PostgreSQL databases');
+                }
                 const data = await res.json();
                 if (data.data) {
                     setSchemaTree(data.data.map((d: any) => ({
@@ -1682,6 +1693,10 @@ export default function DataExplorer() {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ action: 'explore', type: 'databases' })
                 });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err?.detail || 'Failed to load Spark databases');
+                }
                 const data = await res.json();
                 if (data.data) {
                     const dbs = data.data.map((d: any) => ({
@@ -1701,6 +1716,10 @@ export default function DataExplorer() {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ query: 'SHOW CATALOGS' })
                 });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err?.detail || 'Failed to load Trino catalogs');
+                }
                 const data = await res.json();
                 if (data.data) {
                     const catalogs = data.data
@@ -1721,6 +1740,8 @@ export default function DataExplorer() {
             }
         } catch (err) {
             console.error("Failed to load schema root", err);
+            setSchemaTree([]);
+            setSchemaLoadError(err instanceof Error ? err.message : 'Schema load failed');
         } finally {
             setIsSchemaLoading(false);
         }
@@ -2011,7 +2032,7 @@ export default function DataExplorer() {
             const detail = (e as CustomEvent).detail;
             if (detail?.query) {
                 updateQuery(detail.query);
-                if (detail.engine) setEngine(detail.engine);
+                if (detail.engine) setEngine(normalizeEngine(detail.engine));
                 // Small delay to let state update, then execute
                 setTimeout(() => executeRef.current(), 100);
             }
@@ -2112,7 +2133,7 @@ export default function DataExplorer() {
 
     const loadHistoryQuery = (item: QueryHistoryItem) => {
         updateQuery(item.query);
-        setEngine(item.engine);
+        setEngine(normalizeEngine(item.engine));
         setBottomPanel('results');
     };
 
@@ -2468,6 +2489,12 @@ export default function DataExplorer() {
                         <div className="flex flex-col items-center justify-center py-12 text-white/40 gap-3">
                             <Loader2 className="w-5 h-5 animate-spin opacity-50" />
                             <span className="text-[11px] tracking-wide">Loading schemas...</span>
+                        </div>
+                    ) : schemaLoadError ? (
+                        <div className="px-3 py-3">
+                            <div className="rounded-md border border-red-400/20 bg-red-500/5 p-2 text-[11px] text-red-200/90 leading-relaxed break-words">
+                                {schemaLoadError}
+                            </div>
                         </div>
                     ) : (
                         <div className="flex flex-col pl-2 pr-2">

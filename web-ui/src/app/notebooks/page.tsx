@@ -9,7 +9,7 @@ import {
     GripVertical, MoreHorizontal, Maximize2,
     Bold, Italic, Link, Image as ImageIcon, List, Quote, Sparkles,
     RefreshCw, Search, Download, Scissors, Copy, ClipboardPaste, Keyboard,
-    StopCircle, RotateCw, EyeOff, PanelLeft, Eraser,
+    StopCircle, RotateCw, EyeOff, PanelLeft, Eraser, Activity, ExternalLink, Server,
     type TypeIcon
 } from 'lucide-react';
 import Editor, { useMonaco } from '@monaco-editor/react';
@@ -52,6 +52,123 @@ type NotebookSqlSuggestionItem = {
     detail: string;
     fqn: string;
     kind: NotebookSqlSuggestionKind;
+};
+
+type NotebookClusterRuntime = {
+    status: string;
+    active_sessions: number;
+    last_used?: string | null;
+    started_at?: string | null;
+    last_stopped?: string | null;
+    auto_stops?: number;
+    spark_ui_url?: string | null;
+    application_id?: string | null;
+    last_error?: string | null;
+};
+
+type NotebookCluster = {
+    id: string;
+    label: string;
+    description?: string;
+    runtime_mode?: string;
+    spark_master_url?: string;
+    spark_remote_url?: string | null;
+    spark_conf?: Record<string, string>;
+    limits?: {
+        max_rows?: number;
+        idle_timeout_seconds?: number;
+    };
+    resources?: {
+        executor_instances?: number;
+        executor_cores?: number;
+        executor_memory?: string;
+        total_cores?: number;
+        total_memory_mb?: number;
+        shuffle_partitions?: number;
+    };
+    effective_resources?: {
+        executor_instances?: number;
+        executor_cores?: number;
+        executor_memory?: string;
+        total_cores?: number;
+        total_memory_mb?: number;
+        shuffle_partitions?: number;
+    };
+    available_resources?: {
+        workers?: number;
+        total_cores?: number;
+        total_memory_mb?: number;
+        total_memory?: string;
+    };
+    shuffle_tuning?: {
+        current?: number;
+        recommended?: number;
+        recommended_min?: number;
+        recommended_max?: number;
+        status?: 'ok' | 'low' | 'high' | 'unknown' | string;
+        message?: string;
+    };
+    runtime?: NotebookClusterRuntime;
+};
+
+type NotebookObservabilityItem = {
+    cluster: NotebookCluster;
+    spark_ui_url?: string | null;
+    spark_master_ui_url?: string | null;
+    workers?: {
+        count: number;
+        cores_total: number;
+        cores_used: number;
+        memory_total_mb: number;
+        memory_used_mb: number;
+    };
+    active_applications?: Array<{
+        id: string;
+        name: string;
+        executors: number;
+        spark_ui_url?: string | null;
+    }>;
+    logs?: Array<{
+        application_id: string;
+        running_jobs: number;
+        active_stages: number;
+    }>;
+};
+
+const formatMemoryGbFromMb = (mb: number | undefined): string => {
+    if (!mb || mb <= 0) return '0G';
+    return `${(mb / 1024).toFixed(mb % 1024 === 0 ? 0 : 1)}G`;
+};
+
+const clusterPowerLabel = (cluster: NotebookCluster | null | undefined): string => {
+    if (!cluster) return '-';
+    const source = cluster.effective_resources || cluster.resources || {};
+    const available = cluster.available_resources || {};
+    const availCores = Number(available.total_cores || 0);
+    const availMemMb = Number(available.total_memory_mb || 0);
+    const shuffle = Number(source.shuffle_partitions || 0);
+    if (availCores > 0 || availMemMb > 0) {
+        return `Avail ${availCores} cores · ${formatMemoryGbFromMb(availMemMb)} RAM · shuffle ${shuffle}`;
+    }
+    const totalCores = Number(source.total_cores || 0);
+    const totalMemory = formatMemoryGbFromMb(Number(source.total_memory_mb || 0));
+    return `${totalCores} cores · ${totalMemory} RAM · shuffle ${shuffle}`;
+};
+
+const clusterShuffleLabel = (cluster: NotebookCluster | null | undefined): string => {
+    if (!cluster?.shuffle_tuning) return '';
+    const tuning = cluster.shuffle_tuning;
+    const current = Number(tuning.current || 0);
+    const recommended = Number(tuning.recommended || 0);
+    if (!current || !recommended) return '';
+    return `shuffle ${current} (recommended ~${recommended})`;
+};
+
+const clusterShuffleWarningLabel = (cluster: NotebookCluster | null | undefined): string => {
+    const status = cluster?.shuffle_tuning?.status;
+    if (status === 'low') return 'Shuffle Low';
+    if (status === 'high') return 'Shuffle High';
+    return '';
 };
 
 // ─── Helpers ───
@@ -921,6 +1038,14 @@ export default function NotebooksPage() {
     const [sqlSuggestionItems, setSqlSuggestionItems] = useState<NotebookSqlSuggestionItem[]>([]);
     const [sqlKeywordItems, setSqlKeywordItems] = useState<string[]>([]);
     const [pythonKeywordItems, setPythonKeywordItems] = useState<string[]>([]);
+    const [clusterProfiles, setClusterProfiles] = useState<NotebookCluster[]>([]);
+    const [defaultClusterId, setDefaultClusterId] = useState<string>('small');
+    const [selectedClusterId, setSelectedClusterId] = useState<string>('small');
+    const [attachedClusterId, setAttachedClusterId] = useState<string | null>(null);
+    const [clusterAttachBusy, setClusterAttachBusy] = useState(false);
+    const [clusterObservability, setClusterObservability] = useState<NotebookObservabilityItem | null>(null);
+    const [clustersLoaded, setClustersLoaded] = useState(false);
+    const [clusterApiAvailable, setClusterApiAvailable] = useState<boolean>(true);
     const sqlColumnCacheRef = useRef<Map<string, NotebookSqlSuggestionItem[]>>(new Map());
     const pythonSymbolItems = React.useMemo(() => collectPythonNotebookSymbols(cells), [cells]);
 
@@ -1108,31 +1233,97 @@ export default function NotebooksPage() {
     }, [fetchTrinoRows]);
 
     // ─── Kernel Management ───
-    const startKernel = useCallback(async () => {
+    const loadClusterProfiles = useCallback(async (): Promise<string> => {
+        try {
+            const data = await fetchJsonOrThrow('/api/notebook/clusters');
+            const clusters = Array.isArray(data?.clusters) ? data.clusters as NotebookCluster[] : [];
+            const defaultId = String(data?.default_cluster_id || clusters[0]?.id || 'small');
+            setClusterProfiles(clusters);
+            setDefaultClusterId(defaultId);
+            setSelectedClusterId(prev => {
+                if (prev && clusters.some(cluster => cluster.id === prev)) return prev;
+                return defaultId;
+            });
+            setClusterApiAvailable(true);
+            setClustersLoaded(true);
+            return defaultId;
+        } catch (err) {
+            console.warn('Notebook cluster API unavailable; falling back to legacy kernel mode.', err);
+            setClusterApiAvailable(false);
+            const fallbackProfile: NotebookCluster = {
+                id: 'default',
+                label: 'Default',
+                description: 'Legacy notebook backend (cluster API unavailable)',
+                runtime_mode: 'legacy',
+                limits: {},
+                runtime: { status: 'running', active_sessions: 1 },
+            };
+            setClusterProfiles([fallbackProfile]);
+            setDefaultClusterId('default');
+            setSelectedClusterId('default');
+            setClustersLoaded(true);
+            return 'default';
+        }
+    }, [fetchJsonOrThrow]);
+
+    const refreshClusterObservability = useCallback(async (targetClusterId?: string | null) => {
+        if (!clusterApiAvailable) {
+            setClusterObservability(null);
+            return;
+        }
+        const candidate = (targetClusterId || attachedClusterId || selectedClusterId || defaultClusterId || '').trim();
+        if (!candidate) return;
+        try {
+            const data = await fetchJsonOrThrow(`/api/notebook/observability?cluster_id=${encodeURIComponent(candidate)}`);
+            const item = Array.isArray(data?.clusters) ? data.clusters[0] : null;
+            setClusterObservability(item || null);
+        } catch (err) {
+            console.error('Failed to refresh cluster observability:', err);
+        }
+    }, [clusterApiAvailable, attachedClusterId, selectedClusterId, defaultClusterId, fetchJsonOrThrow]);
+
+    const startKernel = useCallback(async (clusterId: string) => {
+        const targetClusterId = (clusterId || 'small').trim();
         setKernelStatus('starting');
         try {
-            const data = await fetchJsonOrThrow('/api/notebook/kernels', { method: 'POST' });
+            const reqInit: RequestInit = clusterApiAvailable
+                ? {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ cluster_id: targetClusterId }),
+                }
+                : { method: 'POST' };
+            const data = await fetchJsonOrThrow('/api/notebook/kernels', reqInit);
             setKernelId(data.id);
             setEngineMode(data.mode);
+            setAttachedClusterId(data.cluster_id || targetClusterId || null);
+            if (data.cluster_id) {
+                setSelectedClusterId(String(data.cluster_id));
+            }
             setKernelStatus('idle');
+            await refreshClusterObservability(data.cluster_id || targetClusterId || null);
+            void loadClusterProfiles().catch(() => { });
         } catch (e) {
             console.error('Failed to start kernel:', e);
             setKernelStatus('disconnected');
         }
-    }, [fetchJsonOrThrow]);
+    }, [clusterApiAvailable, fetchJsonOrThrow, refreshClusterObservability, loadClusterProfiles]);
 
     const restartKernel = useCallback(async () => {
         if (!kernelId) return;
         setKernelStatus('starting');
         try {
-            await fetchJsonOrThrow(`/api/notebook/kernels/${encodeURIComponent(kernelId)}/restart`, { method: 'POST' });
+            const data = await fetchJsonOrThrow(`/api/notebook/kernels/${encodeURIComponent(kernelId)}/restart`, { method: 'POST' });
             setKernelStatus('idle');
+            if (data?.cluster_id) setAttachedClusterId(String(data.cluster_id));
             setCells(prev => prev.map(c => ({ ...c, outputs: [], execution_count: null })));
+            await refreshClusterObservability(data?.cluster_id || attachedClusterId);
+            void loadClusterProfiles().catch(() => { });
         } catch (e) {
             console.error('Failed to restart kernel:', e);
             setKernelStatus('disconnected');
         }
-    }, [kernelId, fetchJsonOrThrow]);
+    }, [kernelId, fetchJsonOrThrow, attachedClusterId, refreshClusterObservability, loadClusterProfiles]);
 
     const interruptKernel = useCallback(async () => {
         if (!kernelId) return;
@@ -1143,7 +1334,72 @@ export default function NotebooksPage() {
         }
     }, [kernelId, fetchJsonOrThrow]);
 
-    useEffect(() => { startKernel(); }, [startKernel]);
+    const attachCluster = useCallback(async () => {
+        if (!kernelId || !selectedClusterId) return;
+        if (!clusterApiAvailable) {
+            alert('Bu backend sürümünde cluster attach API yok. openclaw-api containerını güncel kodla yeniden build et.');
+            return;
+        }
+        setClusterAttachBusy(true);
+        setKernelStatus('starting');
+        try {
+            const data = await fetchJsonOrThrow(`/api/notebook/kernels/${encodeURIComponent(kernelId)}/attach`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    cluster_id: selectedClusterId,
+                    restart: true,
+                }),
+            });
+            setAttachedClusterId(data.cluster_id || selectedClusterId);
+            setKernelStatus('idle');
+            setCells(prev => prev.map(c => ({ ...c, outputs: [], execution_count: null })));
+            await refreshClusterObservability(data.cluster_id || selectedClusterId);
+            void loadClusterProfiles().catch(() => { });
+        } catch (err) {
+            console.error('Failed to attach cluster:', err);
+            setKernelStatus('disconnected');
+            alert(`Failed to attach cluster: ${String(err)}`);
+        } finally {
+            setClusterAttachBusy(false);
+        }
+    }, [clusterApiAvailable, kernelId, selectedClusterId, fetchJsonOrThrow, refreshClusterObservability, loadClusterProfiles]);
+
+    useEffect(() => {
+        let active = true;
+        void (async () => {
+            try {
+                const initialClusterId = await loadClusterProfiles();
+                if (!active) return;
+                await startKernel(initialClusterId);
+            } catch (err) {
+                console.error('Failed to initialize notebook clusters/kernel:', err);
+                if (active) {
+                    setKernelStatus('disconnected');
+                }
+            }
+        })();
+        return () => {
+            active = false;
+        };
+    }, [loadClusterProfiles, startKernel]);
+
+    useEffect(() => {
+        if (!clustersLoaded) return;
+        const interval = window.setInterval(() => {
+            void loadClusterProfiles().catch(() => { });
+        }, 30000);
+        return () => window.clearInterval(interval);
+    }, [clustersLoaded, loadClusterProfiles]);
+
+    useEffect(() => {
+        if (!attachedClusterId) return;
+        void refreshClusterObservability(attachedClusterId);
+        const interval = window.setInterval(() => {
+            void refreshClusterObservability(attachedClusterId);
+        }, 8000);
+        return () => window.clearInterval(interval);
+    }, [attachedClusterId, refreshClusterObservability]);
 
     useEffect(() => {
         void refreshSqlSuggestions();
@@ -1560,6 +1816,15 @@ export default function NotebooksPage() {
         return () => window.removeEventListener('keydown', handler);
     }, [saveNotebook, runAllCells]);
 
+    const selectedCluster = React.useMemo(
+        () => clusterProfiles.find(cluster => cluster.id === selectedClusterId) || null,
+        [clusterProfiles, selectedClusterId]
+    );
+    const attachedCluster = React.useMemo(
+        () => clusterProfiles.find(cluster => cluster.id === (attachedClusterId || selectedClusterId)) || null,
+        [clusterProfiles, attachedClusterId, selectedClusterId]
+    );
+
     return (
         <div className="flex h-screen bg-[#09090b] text-foreground font-sans overflow-hidden">
             <Sidebar />
@@ -1794,11 +2059,70 @@ export default function NotebooksPage() {
                             <Play className="w-3.5 h-3.5" /> Run all
                         </button>
 
-                        <div className="hidden md:flex items-center gap-1.5 px-3 py-1 rounded cursor-pointer transition-colors text-[11px]">
-                            <div className="w-1.5 h-1.5 rounded-full bg-white/40" />
-                            <span className="text-white/70 font-medium tracking-wide">Serverless</span>
-                            <ChevronDown className="w-3 h-3 text-white/40" />
+                        <div className="hidden md:flex items-center gap-2">
+                            <div className="flex items-center gap-1.5 px-2 py-1 rounded border border-white/10 bg-white/[0.03]">
+                                <Server className="w-3 h-3 text-white/50" />
+                                <select
+                                    value={selectedClusterId}
+                                    onChange={(e) => setSelectedClusterId(e.target.value)}
+                                    className="bg-transparent text-[11px] text-white/80 font-medium outline-none"
+                                    disabled={clusterAttachBusy || kernelStatus === 'busy'}
+                                >
+                                    {clusterProfiles.map(profile => (
+                                        <option key={profile.id} value={profile.id} className="bg-[#1a1a1e] text-white">
+                                            {profile.label} - {clusterPowerLabel(profile)}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                            <button
+                                onClick={attachCluster}
+                                disabled={
+                                    !kernelId
+                                    || clusterAttachBusy
+                                    || kernelStatus === 'busy'
+                                    || !selectedClusterId
+                                    || !clusterApiAvailable
+                                    || selectedClusterId === attachedClusterId
+                                }
+                                className="flex items-center gap-1.5 px-2.5 py-1 rounded border border-white/10 text-[11px] text-white/70 hover:text-white hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                                title="Attach selected cluster profile"
+                            >
+                                {clusterAttachBusy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Activity className="w-3 h-3" />}
+                                Attach
+                            </button>
+                            {(clusterObservability?.spark_ui_url || clusterObservability?.spark_master_ui_url) && (
+                                <a
+                                    href={clusterObservability?.spark_ui_url || clusterObservability?.spark_master_ui_url || '#'}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="flex items-center gap-1 px-2 py-1 rounded border border-white/10 text-[11px] text-white/60 hover:text-white hover:bg-white/10 transition-colors"
+                                    title="Open Spark UI"
+                                >
+                                    <ExternalLink className="w-3 h-3" /> Spark UI
+                                </a>
+                            )}
                         </div>
+                        {selectedCluster && (
+                            <div className="hidden xl:flex items-center gap-2 text-[10px] font-mono max-w-[640px]">
+                                <span className="text-white/45 truncate">
+                                    {selectedCluster.label}: {clusterPowerLabel(selectedCluster)}
+                                </span>
+                                {clusterShuffleLabel(selectedCluster) && (
+                                    <span className="text-white/55 whitespace-nowrap">{clusterShuffleLabel(selectedCluster)}</span>
+                                )}
+                                {selectedCluster.shuffle_tuning?.status === 'low' && (
+                                    <span className="px-1.5 py-0.5 rounded border border-amber-400/30 text-amber-300/90 whitespace-nowrap">
+                                        Shuffle Low
+                                    </span>
+                                )}
+                                {selectedCluster.shuffle_tuning?.status === 'high' && (
+                                    <span className="px-1.5 py-0.5 rounded border border-rose-400/30 text-rose-300/90 whitespace-nowrap">
+                                        Shuffle High
+                                    </span>
+                                )}
+                            </div>
+                        )}
 
                         <div className="w-px h-4 bg-obsidian-border/50 mx-1" />
 
@@ -1925,7 +2249,7 @@ export default function NotebooksPage() {
 
                 {/* ─── Status Bar (Native Style) ─── */}
                 <div className="h-8 bg-black/60 backdrop-blur-xl border-t border-white/5 flex items-center justify-between px-4 shrink-0 text-[10.5px] font-mono text-obsidian-muted/80 z-20">
-                    <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-4 overflow-hidden">
                         <div className="flex items-center gap-1.5">
                             {kernelStatus === 'idle' && <Check className="w-3 h-3 text-white/40" />}
                             {kernelStatus === 'busy' && <Loader2 className="w-3 h-3 text-white/60 animate-spin" />}
@@ -1937,6 +2261,50 @@ export default function NotebooksPage() {
                             <Terminal className="w-3 h-3" />
                             <span>Engine: <span className="text-foreground/80 uppercase">{engineMode}</span></span>
                         </div>
+                        <div className="flex items-center gap-1.5">
+                            <Server className="w-3 h-3" />
+                            <span>
+                                Cluster: <span className="text-foreground/80">{attachedClusterId || selectedClusterId || defaultClusterId}</span>
+                            </span>
+                        </div>
+                        {attachedCluster && (
+                            <div className="flex items-center gap-1.5 truncate">
+                                <span>{clusterPowerLabel(attachedCluster)}</span>
+                                {clusterShuffleLabel(attachedCluster) && (
+                                    <span className="text-white/65">{clusterShuffleLabel(attachedCluster)}</span>
+                                )}
+                                {clusterShuffleWarningLabel(attachedCluster) === 'Shuffle Low' && (
+                                    <span className="px-1 py-0.5 rounded border border-amber-400/35 text-amber-300/90 whitespace-nowrap">
+                                        Shuffle Low
+                                    </span>
+                                )}
+                                {clusterShuffleWarningLabel(attachedCluster) === 'Shuffle High' && (
+                                    <span className="px-1 py-0.5 rounded border border-rose-400/35 text-rose-300/90 whitespace-nowrap">
+                                        Shuffle High
+                                    </span>
+                                )}
+                            </div>
+                        )}
+                        {!clusterApiAvailable && (
+                            <div className="flex items-center gap-1.5 truncate">
+                                <span>Cluster API: legacy backend (attach/observability disabled)</span>
+                            </div>
+                        )}
+                        {clusterObservability?.workers && (
+                            <div className="flex items-center gap-1.5 truncate">
+                                <Activity className="w-3 h-3" />
+                                <span>
+                                    Workers {clusterObservability.workers.count} · Cores {clusterObservability.workers.cores_used}/{clusterObservability.workers.cores_total} · Mem {Math.round((clusterObservability.workers.memory_used_mb || 0) / 1024)}G/{Math.round((clusterObservability.workers.memory_total_mb || 0) / 1024)}G
+                                </span>
+                            </div>
+                        )}
+                        {clusterObservability?.logs?.[0] && (
+                            <div className="flex items-center gap-1.5 truncate">
+                                <span>
+                                    Jobs {clusterObservability.logs[0].running_jobs} · Stages {clusterObservability.logs[0].active_stages}
+                                </span>
+                            </div>
+                        )}
                         <div className="flex items-center gap-1.5">
                             <Code2 className="w-3 h-3" />
                             <span>{cells.length} cells</span>

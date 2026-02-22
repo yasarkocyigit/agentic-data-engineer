@@ -57,9 +57,9 @@ SPARK_CONF = {
     "spark.sql.catalog.lakehouse": "org.apache.iceberg.spark.SparkCatalog",
     "spark.sql.catalog.lakehouse.type": "jdbc",
     "spark.sql.catalog.lakehouse.uri": os.getenv("ICEBERG_CATALOG_URI", "jdbc:postgresql://host.docker.internal:5433/controldb"),
-    "spark.sql.catalog.lakehouse.jdbc.user": os.getenv("POSTGRES_USER", "postgres"),
-    "spark.sql.catalog.lakehouse.jdbc.password": os.getenv("POSTGRES_PASSWORD", "changeme"),
-    "spark.sql.catalog.lakehouse.warehouse": "s3a://warehouse/",
+    "spark.sql.catalog.lakehouse.jdbc.user": os.getenv("ICEBERG_CATALOG_USER", "postgres"),
+    "spark.sql.catalog.lakehouse.jdbc.password": os.getenv("ICEBERG_CATALOG_PASSWORD", "Gs+163264128"),
+    "spark.sql.catalog.lakehouse.warehouse": os.getenv("ICEBERG_WAREHOUSE", "s3a://iceberg/warehouse/"),
     # MinIO / S3A configuration
     "spark.hadoop.fs.s3a.endpoint": "http://minio:9000",
     "spark.hadoop.fs.s3a.access.key": os.getenv("MINIO_ROOT_USER", "admin"),

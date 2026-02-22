@@ -18,6 +18,10 @@ services:
       - AIRFLOW_API_URL=http://airflow-webserver:8080
       - AIRFLOW_SA_USERNAME=admin
       - AIRFLOW_SA_PASSWORD=admin
+      - GITEA_URL=${GITEA_URL:-http://gitea:3000}
+      - GITEA_TOKEN=${GITEA_TOKEN:-}
+      - GITEA_USERNAME=${GITEA_USERNAME:-admin}
+      - GITEA_PASSWORD=${GITEA_PASSWORD:-admin}
       - MARQUEZ_URL=http://marquez:5000
       - MINIO_ENDPOINT=http://minio:9000
       - MINIO_ROOT_USER=${MINIO_ROOT_USER:-admin}
@@ -26,22 +30,37 @@ services:
       - TRINO_PORT=8080
       - PG_HOST=host.docker.internal
       - PG_PORT=5433
-      - SPARK_MASTER_URL=local[*]
+      - PG_USER=${PG_USER:-postgres}
+      - PG_PASSWORD=${PG_PASSWORD:-Gs+163264128}
+      - PG_DATABASE=${PG_DATABASE:-controldb}
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_REMOTE_URL=sc://spark-connect:15002
       - SPARK_APP_NAME=openclaw-sql
       - SPARK_S3_ENDPOINT=http://minio:9000
+      - SPARK_MASTER_UI_PUBLIC_URL=http://localhost:8082
       - SPARK_EXTRA_JARS=/workspace/jars/hadoop-aws-3.4.1.jar,/workspace/jars/bundle-2.31.1.jar
       - SPARK_DELTA_PACKAGE=io.delta:delta-spark_2.13:4.0.0
+      - SPARK_EXTRA_PACKAGES=org.apache.iceberg:iceberg-spark-runtime-4.0_2.13:1.10.1,org.postgresql:postgresql:42.7.5
+      - SPARK_ICEBERG_ENABLED=true
+      - SPARK_ICEBERG_CATALOG=lakehouse
+      - ICEBERG_CATALOG_URI=${ICEBERG_CATALOG_URI:-jdbc:postgresql://host.docker.internal:5433/controldb}
+      - ICEBERG_CATALOG_USER=${ICEBERG_CATALOG_USER:-postgres}
+      - ICEBERG_CATALOG_PASSWORD=${ICEBERG_CATALOG_PASSWORD:-Gs+163264128}
+      - ICEBERG_WAREHOUSE=${ICEBERG_WAREHOUSE:-s3a://iceberg/warehouse/}
       - NOTEBOOK_SQL_ENGINE=spark
       - NOTEBOOK_USE_GATEWAY=false
       - SPARK_DEFAULT_DATABASE=default
+      - NOTEBOOK_CLUSTER_PROFILES_JSON=${NOTEBOOK_CLUSTER_PROFILES_JSON:-}
     volumes:
       - ./dags:/opt/airflow/dags
       - ./notebooks:/opt/airflow/notebooks
       - .:/workspace
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       - airflow-webserver
       - trino
       - spark-master
+      - spark-connect
       - marquez
       - minio
     restart: unless-stopped
@@ -77,8 +96,8 @@ services:
     environment:
       - SPARK_MODE=worker
       - SPARK_MASTER=spark://spark-master:7077
-      - SPARK_WORKER_MEMORY=2G
-      - SPARK_WORKER_CORES=2
+      - SPARK_WORKER_MEMORY=${SPARK_WORKER_MEMORY:-2G}
+      - SPARK_WORKER_CORES=${SPARK_WORKER_CORES:-2}
       - SPARK_WORKER_DIR=/tmp/spark-worker
     command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
     depends_on:
@@ -87,6 +106,45 @@ services:
       - ./notebooks:/opt/spark/work/notebooks
       - ./config:/opt/spark/work/config
       - ./jars:/opt/spark/extra-jars
+    networks:
+      - agentic-network
+
+  # ---------------------------------------------------------
+  # SPARK CONNECT SERVER (Remote Notebook Compute)
+  # ---------------------------------------------------------
+  spark-connect:
+    image: apache/spark:4.0.1
+    container_name: spark_connect
+    environment:
+      - SPARK_NO_DAEMONIZE=true
+      - HOME=/tmp
+      - SPARK_JARS_IVY=/tmp/.ivy2
+      - SPARK_SUBMIT_OPTS=-Divy.cache.dir=/tmp/.ivy2/cache -Divy.home=/tmp/.ivy2 -Duser.home=/tmp
+    command: >
+      /bin/bash -lc "/opt/spark/sbin/start-connect-server.sh
+      --master spark://spark-master:7077
+      --packages io.delta:delta-spark_2.13:4.0.0,org.apache.iceberg:iceberg-spark-runtime-4.0_2.13:1.10.1,org.postgresql:postgresql:42.7.5,org.apache.hadoop:hadoop-aws:3.4.1,software.amazon.awssdk:bundle:2.31.1
+      --conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension
+      --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog
+      --conf spark.sql.catalog.lakehouse=org.apache.iceberg.spark.SparkCatalog
+      --conf spark.sql.catalog.lakehouse.type=jdbc
+      --conf spark.sql.catalog.lakehouse.uri=${ICEBERG_CATALOG_URI:-jdbc:postgresql://host.docker.internal:5433/controldb}
+      --conf spark.sql.catalog.lakehouse.jdbc.user=${ICEBERG_CATALOG_USER:-postgres}
+      --conf spark.sql.catalog.lakehouse.jdbc.password=${ICEBERG_CATALOG_PASSWORD:-Gs+163264128}
+      --conf spark.sql.catalog.lakehouse.warehouse=${ICEBERG_WAREHOUSE:-s3a://iceberg/warehouse/}
+      --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem
+      --conf spark.hadoop.fs.s3a.endpoint=http://minio:9000
+      --conf spark.hadoop.fs.s3a.path.style.access=true
+      --conf spark.hadoop.fs.s3a.access.key=${MINIO_ROOT_USER:-admin}
+      --conf spark.hadoop.fs.s3a.secret.key=${MINIO_ROOT_PASSWORD:-admin123}
+      --conf spark.hadoop.fs.s3a.connection.ssl.enabled=false
+      --conf spark.hadoop.fs.s3a.aws.credentials.provider=org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider"
+    ports:
+      - "15002:15002"
+    depends_on:
+      - spark-master
+      - spark-worker
+      - minio
     networks:
       - agentic-network
 
@@ -121,7 +179,7 @@ services:
       minio:
         condition: service_healthy
     entrypoint: >
-      /bin/sh -c " /usr/bin/mc alias set myminio http://minio:9000 $${MINIO_ROOT_USER:-admin} $${MINIO_ROOT_PASSWORD:-admin123}; /usr/bin/mc mb myminio/bronze --ignore-existing; /usr/bin/mc mb myminio/silver --ignore-existing; /usr/bin/mc mb myminio/gold --ignore-existing; /usr/bin/mc mb myminio/warehouse --ignore-existing; /usr/bin/mc mb myminio/checkpoints --ignore-existing; echo 'Buckets created successfully!'; exit 0; "
+      /bin/sh -c " /usr/bin/mc alias set myminio http://minio:9000 $${MINIO_ROOT_USER:-admin} $${MINIO_ROOT_PASSWORD:-admin123}; /usr/bin/mc mb myminio/bronze --ignore-existing; /usr/bin/mc mb myminio/silver --ignore-existing; /usr/bin/mc mb myminio/gold --ignore-existing; /usr/bin/mc mb myminio/warehouse --ignore-existing; /usr/bin/mc mb myminio/checkpoints --ignore-existing; /usr/bin/mc mb myminio/deltalake --ignore-existing; /usr/bin/mc mb myminio/iceberg --ignore-existing; echo 'Buckets created successfully!'; exit 0; "
     networks:
       - agentic-network
 
@@ -265,6 +323,10 @@ services:
       - AIRFLOW__API_AUTH__JWT_SECRET=${AIRFLOW_JWT_SECRET:-CHANGE_ME_IN_ENV_FILE}
       - AIRFLOW__OPENLINEAGE__TRANSPORT={"type":"http","url":"http://marquez:5000","endpoint":"api/v1/lineage"}
       - AIRFLOW__OPENLINEAGE__NAMESPACE=agentic-pipeline
+      - ICEBERG_CATALOG_URI=${ICEBERG_CATALOG_URI:-jdbc:postgresql://host.docker.internal:5433/controldb}
+      - ICEBERG_CATALOG_USER=${ICEBERG_CATALOG_USER:-postgres}
+      - ICEBERG_CATALOG_PASSWORD=${ICEBERG_CATALOG_PASSWORD:-Gs+163264128}
+      - ICEBERG_WAREHOUSE=${ICEBERG_WAREHOUSE:-s3a://iceberg/warehouse/}
     command: scheduler
     volumes:
       - ./dags:/opt/airflow/dags

@@ -55,9 +55,7 @@ def _normalize_database_name(database: Optional[str]) -> str:
 def _connection_host_candidates() -> list[str]:
     host = (PG_HOST or "").strip() or "localhost"
     candidates = [host]
-    if host == "host.docker.internal":
-        candidates.append("localhost")
-    elif host == "localhost":
+    if host == "localhost":
         candidates.append("host.docker.internal")
     return list(dict.fromkeys(candidates))
 
@@ -260,7 +258,12 @@ async def postgres_handler(request: PostgresRequest):
 
                 sql_query, applied_limit = _apply_row_limit(request.query, request.limit)
                 if query_tag:
-                    cursor.execute("SET application_name = %s", (f"openclaw:{query_tag}",))
+                    # SET does not support bind params reliably in extended protocol.
+                    # Use set_config so query_tag can still be passed as a parameter.
+                    cursor.execute(
+                        "SELECT set_config('application_name', %s, false)",
+                        (f"openclaw:{query_tag}",),
+                    )
                 start_time = time.time()
                 cursor.execute(sql_query)
                 end_time = time.time()

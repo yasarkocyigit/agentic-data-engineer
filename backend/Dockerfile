@@ -9,6 +9,11 @@ COPY --from=spark-runtime /opt/java/openjdk /opt/java/openjdk
 ENV JAVA_HOME=/opt/java/openjdk
 ENV PATH="${JAVA_HOME}/bin:${PATH}"
 
+# Docker CLI and shell tools are required for infrastructure terminal commands.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends docker-cli curl bash ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install dependencies first (cached layer)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

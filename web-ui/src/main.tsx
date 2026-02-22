@@ -14,6 +14,7 @@ import CicdPage from './app/cicd/page';
 import AgentPage from './app/agent/page';
 import VisualizePage from './app/visualize/page';
 import NotebooksPage from './app/notebooks/page';
+import DockerCliPage from './app/docker-cli/page';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
     <React.StrictMode>
@@ -29,6 +30,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
                 <Route path="/agent" element={<AgentPage />} />
                 <Route path="/visualize" element={<VisualizePage />} />
                 <Route path="/notebooks" element={<NotebooksPage />} />
+                <Route path="/docker-cli" element={<DockerCliPage />} />
             </Routes>
         </BrowserRouter>
     </React.StrictMode>

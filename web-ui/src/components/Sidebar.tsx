@@ -30,6 +30,7 @@ const navItems = [
     { name: 'CI/CD', icon: GitPullRequest, path: '/cicd' },
     { name: 'Agent', icon: Terminal, path: '/agent' },
     { name: 'Compute', icon: Server, path: '/compute' },
+    { name: 'Docker CLI', icon: Terminal, path: '/docker-cli' },
 ];
 
 const Sidebar = () => {
