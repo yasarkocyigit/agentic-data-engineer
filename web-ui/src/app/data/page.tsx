@@ -1,14 +1,16 @@
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { Sidebar } from '@/components/Sidebar';
 import clsx from 'clsx';
 import Editor, { useMonaco, type OnMount } from '@monaco-editor/react';
+import { format as formatSqlText } from 'sql-formatter';
 import {
     Play, Square, Save, Download, RefreshCw, Filter, Columns, ChevronDown, ChevronUp, X, ChevronRight,
     Database, FileCode, XCircle, Plus, Loader2, Clock, Zap, Hash, Terminal, LayoutPanelLeft,
     ArrowUpDown, ArrowUp, ArrowDown, Copy, ClipboardList, FileJson, FileSpreadsheet,
     Code2, Timer, History, Trash2, Search, MoreVertical, SlidersHorizontal, Layers, Layout, Table as TableIcon,
-    Eye, BarChart3, Shield, Wrench, GitBranch, Activity, Key, Puzzle, ListTree, Info
+    Eye, BarChart3, Shield, Wrench, GitBranch, Activity, Key, Puzzle, ListTree, Info, Check, RotateCcw, AlertTriangle
 } from 'lucide-react';
 
 // ─── Types ───
@@ -45,6 +47,14 @@ type QueryTab = {
         data: any[];
         stats?: any;
     } | null;
+    resultSets?: {
+        name: string;
+        columns: string[];
+        data: any[];
+        stats?: any;
+    }[];
+    activeResultSetIndex?: number;
+    pgSessionId: string;
     error?: string | null;
     executionTime?: number;
 };
@@ -58,6 +68,175 @@ type SchemaNode = {
     isOpen?: boolean;
     isLoading?: boolean;
     dataType?: string; // For columns
+    sqlName?: string;
+    routineOid?: number;
+    routineSignature?: string;
+};
+
+type QueryApiResponse = {
+    columns?: string[];
+    data?: any[];
+    stats?: any;
+    message?: string;
+    detail?: string;
+    error?: string;
+    notices?: string[];
+    warnings?: string[];
+};
+
+type TrinoQueryStage = {
+    stageId: string;
+    state: string;
+    depth: number;
+    taskCount: number;
+    completedTaskCount: number;
+    raw: any;
+};
+
+type StatementExecution = {
+    statement: string;
+    columns: string[];
+    data: any[];
+    stats?: any;
+    message?: string | null;
+    label: string;
+};
+
+const TRANSACTION_CONTROL_PATTERN = /\b(BEGIN|START\s+TRANSACTION|COMMIT|ROLLBACK|SAVEPOINT|RELEASE\s+SAVEPOINT)\b/i;
+const SCHEMA_MUTATION_PATTERN = /\b(CREATE|ALTER|DROP|TRUNCATE|COMMENT\s+ON|RENAME)\b/i;
+
+const hasExplicitTransactionControl = (sql: string) => TRANSACTION_CONTROL_PATTERN.test(sql);
+const isSchemaMutationStatement = (sql: string) => SCHEMA_MUTATION_PATTERN.test(sql);
+
+const escapeSqlLiteral = (value: string) => value.replace(/'/g, "''");
+const quoteTrinoIdentifier = (value: string) => `"${String(value).replace(/"/g, '""')}"`;
+
+const makeStableId = (prefix: string): string => {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+        return `${prefix}_${crypto.randomUUID()}`;
+    }
+    return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+};
+
+const readDollarTag = (sql: string, index: number): string | null => {
+    if (sql[index] !== '$') return null;
+    let end = index + 1;
+    while (end < sql.length && /[A-Za-z0-9_]/.test(sql[end])) end += 1;
+    if (end < sql.length && sql[end] === '$') return sql.slice(index, end + 1);
+    return null;
+};
+
+const splitSqlStatements = (sql: string): string[] => {
+    const statements: string[] = [];
+    let current = '';
+    let inSingleQuote = false;
+    let inDoubleQuote = false;
+    let inLineComment = false;
+    let inBlockComment = false;
+    let dollarTag: string | null = null;
+
+    for (let i = 0; i < sql.length; i += 1) {
+        const ch = sql[i];
+        const next = sql[i + 1];
+
+        if (inLineComment) {
+            current += ch;
+            if (ch === '\n') inLineComment = false;
+            continue;
+        }
+
+        if (inBlockComment) {
+            current += ch;
+            if (ch === '*' && next === '/') {
+                current += '/';
+                i += 1;
+                inBlockComment = false;
+            }
+            continue;
+        }
+
+        if (dollarTag) {
+            if (sql.startsWith(dollarTag, i)) {
+                current += dollarTag;
+                i += dollarTag.length - 1;
+                dollarTag = null;
+                continue;
+            }
+            current += ch;
+            continue;
+        }
+
+        if (inSingleQuote) {
+            current += ch;
+            if (ch === '\'' && next === '\'') {
+                current += '\'';
+                i += 1;
+                continue;
+            }
+            if (ch === '\'') inSingleQuote = false;
+            continue;
+        }
+
+        if (inDoubleQuote) {
+            current += ch;
+            if (ch === '"' && next === '"') {
+                current += '"';
+                i += 1;
+                continue;
+            }
+            if (ch === '"') inDoubleQuote = false;
+            continue;
+        }
+
+        if (ch === '-' && next === '-') {
+            current += '--';
+            i += 1;
+            inLineComment = true;
+            continue;
+        }
+
+        if (ch === '/' && next === '*') {
+            current += '/*';
+            i += 1;
+            inBlockComment = true;
+            continue;
+        }
+
+        if (ch === '\'') {
+            inSingleQuote = true;
+            current += ch;
+            continue;
+        }
+
+        if (ch === '"') {
+            inDoubleQuote = true;
+            current += ch;
+            continue;
+        }
+
+        if (ch === '$') {
+            const tag = readDollarTag(sql, i);
+            if (tag) {
+                dollarTag = tag;
+                current += tag;
+                i += tag.length - 1;
+                continue;
+            }
+        }
+
+        if (ch === ';') {
+            const trimmed = current.trim();
+            if (trimmed) statements.push(trimmed);
+            current = '';
+            continue;
+        }
+
+        current += ch;
+    }
+
+    const tail = current.trim();
+    if (tail) statements.push(tail);
+    return statements;
 };
 
 // ─── Schema Tree Node Component ───
@@ -112,8 +291,8 @@ const SchemaTreeNode = ({
                 }}
                 onDoubleClick={(e) => {
                     e.stopPropagation();
-                    if (['table', 'view', 'materialized_view', 'column', 'sequence', 'function'].includes(node.type)) {
-                        onDoubleClick(node.name);
+                    if (['table', 'view', 'materialized_view', 'column', 'sequence', 'function', 'procedure'].includes(node.type)) {
+                        onDoubleClick(node.sqlName || node.name);
                     }
                 }}
                 onContextMenu={(e) => {
@@ -173,17 +352,24 @@ const SchemaTreeNode = ({
 // ─── Main Component ───
 export default function DataExplorer() {
     const [tabs, setTabs] = useState<QueryTab[]>([
-        { id: '1', name: 'console.sql', query: 'SELECT * FROM iceberg.silver.clean_customer LIMIT 100', active: true, results: null },
-        { id: '2', name: 'analysis_v2.sql', query: '-- Analyzing customer churn\nSELECT count(*) FROM iceberg.silver.clean_orders;', active: false }
+        { id: '1', name: 'console.sql', query: 'SELECT * FROM iceberg.silver.clean_customer LIMIT 100', active: true, results: null, pgSessionId: makeStableId('pg') },
+        { id: '2', name: 'analysis_v2.sql', query: '-- Analyzing customer churn\nSELECT count(*) FROM iceberg.silver.clean_orders;', active: false, pgSessionId: makeStableId('pg') }
     ]);
     const activeTab = tabs.find(t => t.active) || tabs[0];
     const [isExecuting, setIsExecuting] = useState(false);
     const [engine, setEngine] = useState<'trino' | 'postgres'>('trino');
     const [pgDatabase, setPgDatabase] = useState<string>('controldb');
+    const [trinoCatalog, setTrinoCatalog] = useState<string>('iceberg');
+    const [trinoSchema, setTrinoSchema] = useState<string>('');
+    const [showTrinoSettings, setShowTrinoSettings] = useState(false);
+    const [trinoRole, setTrinoRole] = useState('');
+    const [trinoClientTagsInput, setTrinoClientTagsInput] = useState('');
+    const [trinoSessionPropsText, setTrinoSessionPropsText] = useState('');
     const monaco = useMonaco();
     const abortRef = useRef<AbortController | null>(null);
     const executeRef = useRef<() => void>(() => { });
     const editorRef = useRef<any>(null);
+    const tabsRef = useRef<QueryTab[]>([]);
 
     // ─── Enhanced State ───
     const [sortConfig, setSortConfig] = useState<SortConfig>({ column: '', direction: null });
@@ -198,9 +384,13 @@ export default function DataExplorer() {
     const liveTimerRef = useRef<NodeJS.Timeout | null>(null);
     const [showExportMenu, setShowExportMenu] = useState(false);
     const [copiedCell, setCopiedCell] = useState(false);
+    const [resultFilter, setResultFilter] = useState('');
+    const [showFilterMenu, setShowFilterMenu] = useState(false);
     const [rowLimit, setRowLimit] = useState<number | null>(500);
     const [showLimitMenu, setShowLimitMenu] = useState(false);
     const [limitMenuPos, setLimitMenuPos] = useState({ top: 0, right: 0 });
+    const [showDbMenu, setShowDbMenu] = useState(false);
+    const [dbMenuPos, setDbMenuPos] = useState({ top: 0, left: 0 });
 
     // ─── Context Menu State ───
     const [contextMenu, setContextMenu] = useState<{
@@ -239,6 +429,10 @@ export default function DataExplorer() {
     const [trinoQueries, setTrinoQueries] = useState<any[]>([]);
     const [trinoQueriesLoading, setTrinoQueriesLoading] = useState(false);
     const [trinoInfo, setTrinoInfo] = useState<{ version?: string; uptime?: string; state?: string } | null>(null);
+    const [selectedTrinoQueryId, setSelectedTrinoQueryId] = useState<string | null>(null);
+    const [trinoQueryDetail, setTrinoQueryDetail] = useState<any | null>(null);
+    const [trinoQueryDetailLoading, setTrinoQueryDetailLoading] = useState(false);
+    const [selectedTrinoStageId, setSelectedTrinoStageId] = useState<string | null>(null);
 
     // ─── PostgreSQL Queries & Cluster Info State ───
     const [pgQueries, setPgQueries] = useState<any[]>([]);
@@ -249,6 +443,11 @@ export default function DataExplorer() {
     const [savedQueries, setSavedQueries] = useState<SavedQuery[]>([]);
     const [showSaveDialog, setShowSaveDialog] = useState(false);
     const [saveQueryName, setSaveQueryName] = useState('');
+    const [currentExecution, setCurrentExecution] = useState<{
+        engine: 'trino' | 'postgres';
+        queryTag: string;
+        sessionId?: string;
+    } | null>(null);
 
     // ─── Load query history from localStorage ───
     useEffect(() => {
@@ -267,6 +466,30 @@ export default function DataExplorer() {
         }
     }, [queryHistory]);
 
+    useEffect(() => {
+        tabsRef.current = tabs;
+    }, [tabs]);
+
+    useEffect(() => {
+        return () => {
+            for (const tab of tabsRef.current) {
+                fetch(`/api/postgres/sessions/${encodeURIComponent(tab.pgSessionId)}`, { method: 'DELETE', keepalive: true }).catch(() => { });
+            }
+        };
+    }, []);
+
+    // Monaco/provider cleanup can emit benign object rejections; suppress them for UI stability.
+    useEffect(() => {
+        const onUnhandled = (event: PromiseRejectionEvent) => {
+            const reason = event.reason as { type?: string; msg?: string } | null;
+            if (reason?.type === 'cancelation' && reason?.msg === 'operation is manually canceled') {
+                event.preventDefault();
+            }
+        };
+        window.addEventListener('unhandledrejection', onUnhandled);
+        return () => window.removeEventListener('unhandledrejection', onUnhandled);
+    }, []);
+
     // ─── Load saved queries from localStorage ───
     useEffect(() => {
         try {
@@ -281,6 +504,27 @@ export default function DataExplorer() {
             localStorage.setItem('openclaw-saved-queries', JSON.stringify(savedQueries));
         } catch { }
     }, [savedQueries]);
+
+    useEffect(() => {
+        try {
+            const raw = localStorage.getItem('openclaw-trino-settings');
+            if (!raw) return;
+            const parsed = JSON.parse(raw);
+            if (typeof parsed.role === 'string') setTrinoRole(parsed.role);
+            if (typeof parsed.clientTags === 'string') setTrinoClientTagsInput(parsed.clientTags);
+            if (typeof parsed.sessionProps === 'string') setTrinoSessionPropsText(parsed.sessionProps);
+        } catch { }
+    }, []);
+
+    useEffect(() => {
+        try {
+            localStorage.setItem('openclaw-trino-settings', JSON.stringify({
+                role: trinoRole,
+                clientTags: trinoClientTagsInput,
+                sessionProps: trinoSessionPropsText,
+            }));
+        } catch { }
+    }, [trinoRole, trinoClientTagsInput, trinoSessionPropsText]);
 
     const saveCurrentQuery = useCallback(() => {
         if (!activeTab.query.trim() || !saveQueryName.trim()) return;
@@ -318,12 +562,23 @@ export default function DataExplorer() {
         };
     }, [isExecuting]);
 
+    const filteredData = useMemo(() => {
+        const rows = activeTab.results?.data || [];
+        const needle = resultFilter.trim().toLowerCase();
+        if (!needle) return rows;
+        return rows.filter((row: any) =>
+            Object.values(row || {}).some(value =>
+                value !== null && value !== undefined && String(value).toLowerCase().includes(needle)
+            )
+        );
+    }, [activeTab.results?.data, resultFilter]);
+
     // ─── Sorted Data ───
     const sortedData = useMemo(() => {
-        if (!activeTab.results?.data || !sortConfig.column || !sortConfig.direction) {
-            return activeTab.results?.data || [];
+        if (!sortConfig.column || !sortConfig.direction) {
+            return filteredData;
         }
-        const sorted = [...activeTab.results.data].sort((a, b) => {
+        const sorted = [...filteredData].sort((a, b) => {
             const aVal = a[sortConfig.column];
             const bVal = b[sortConfig.column];
             if (aVal === null || aVal === undefined) return 1;
@@ -337,7 +592,93 @@ export default function DataExplorer() {
             return strB.localeCompare(strA);
         });
         return sorted;
-    }, [activeTab.results?.data, sortConfig]);
+    }, [filteredData, sortConfig]);
+
+    const parsedTrinoClientTags = useMemo(() => {
+        const tags = trinoClientTagsInput
+            .split(',')
+            .map(tag => tag.trim())
+            .filter(Boolean);
+        return tags.length > 0 ? tags : undefined;
+    }, [trinoClientTagsInput]);
+
+    const parsedTrinoSessionProperties = useMemo(() => {
+        const lines = trinoSessionPropsText
+            .split('\n')
+            .map(line => line.trim())
+            .filter(Boolean);
+        if (lines.length === 0) return undefined;
+
+        const props: Record<string, string> = {};
+        for (const line of lines) {
+            const eqIdx = line.indexOf('=');
+            if (eqIdx <= 0 || eqIdx >= line.length - 1) continue;
+            const key = line.slice(0, eqIdx).trim();
+            const value = line.slice(eqIdx + 1).trim();
+            if (!key || !value) continue;
+            props[key] = value;
+        }
+
+        return Object.keys(props).length > 0 ? props : undefined;
+    }, [trinoSessionPropsText]);
+
+    const trinoDetailStages = useMemo<TrinoQueryStage[]>(() => {
+        if (!trinoQueryDetail) return [];
+        const rootStage = trinoQueryDetail.outputStage || trinoQueryDetail.stageInfo || trinoQueryDetail?.queryStats?.rootStage;
+        if (!rootStage) return [];
+
+        const rows: TrinoQueryStage[] = [];
+        const stack: Array<{ stage: any; depth: number }> = [{ stage: rootStage, depth: 0 }];
+        while (stack.length > 0) {
+            const item = stack.pop();
+            if (!item) continue;
+            const stage = item.stage;
+            const depth = item.depth;
+            const stageId = String(stage?.stageId ?? stage?.stage_id ?? stage?.id ?? `stage_${rows.length + 1}`);
+            const tasks = Array.isArray(stage?.tasks) ? stage.tasks : [];
+            const completedTaskCount = tasks.filter((task: any) => {
+                const st = String(task?.taskStatus?.state ?? task?.state ?? '').toUpperCase();
+                return st === 'FINISHED';
+            }).length;
+
+            rows.push({
+                stageId,
+                state: String(stage?.state ?? stage?.stageState ?? 'UNKNOWN'),
+                depth,
+                taskCount: tasks.length,
+                completedTaskCount,
+                raw: stage,
+            });
+
+            const subStages = Array.isArray(stage?.subStages) ? stage.subStages : [];
+            for (let i = subStages.length - 1; i >= 0; i -= 1) {
+                stack.push({ stage: subStages[i], depth: depth + 1 });
+            }
+        }
+        return rows;
+    }, [trinoQueryDetail]);
+
+    const selectedTrinoStage = useMemo(() => {
+        if (!selectedTrinoStageId) return trinoDetailStages[0] || null;
+        return trinoDetailStages.find(stage => stage.stageId === selectedTrinoStageId) || trinoDetailStages[0] || null;
+    }, [selectedTrinoStageId, trinoDetailStages]);
+
+    const selectedTrinoStageTasks = useMemo(() => {
+        if (!selectedTrinoStage) return [];
+        const tasks = Array.isArray(selectedTrinoStage.raw?.tasks) ? selectedTrinoStage.raw.tasks : [];
+        return tasks;
+    }, [selectedTrinoStage]);
+
+    const selectedTrinoStageOperators = useMemo(() => {
+        if (!selectedTrinoStage) return [];
+        const stageStats = selectedTrinoStage.raw?.stageStats || selectedTrinoStage.raw?.stats || {};
+        const operators = Array.isArray(stageStats?.operatorSummaries)
+            ? stageStats.operatorSummaries
+            : Array.isArray(selectedTrinoStage.raw?.operatorSummaries)
+                ? selectedTrinoStage.raw.operatorSummaries
+                : [];
+        return operators;
+    }, [selectedTrinoStage]);
 
     // ─── Resize Logic (Editor / Results) ───
     useEffect(() => {
@@ -439,11 +780,21 @@ export default function DataExplorer() {
         setTabs(tabs.map(t => ({ ...t, active: t.id === id })));
         setSortConfig({ column: '', direction: null });
         setSelectedCell(null);
+        setResultFilter('');
     };
+
+    const closePgSession = useCallback(async (sessionId: string) => {
+        try {
+            await fetch(`/api/postgres/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
+        } catch { }
+    }, []);
 
     const closeTab = (e: React.MouseEvent, id: string) => {
         e.stopPropagation();
         if (tabs.length > 1) {
+            const tabToClose = tabs.find(t => t.id === id);
+            if (tabToClose) closePgSession(tabToClose.pgSessionId);
+
             const newTabs = tabs.filter(t => t.id !== id);
             setTabs(newTabs);
             if (activeTab.id === id) {
@@ -458,18 +809,60 @@ export default function DataExplorer() {
             id: newId,
             name: `query_${newId}.sql`,
             query: '-- New Query\nSELECT * FROM iceberg.silver.clean_orders LIMIT 10;',
-            active: true
+            active: true,
+            pgSessionId: makeStableId('pg')
         };
         setTabs([...tabs.map(t => ({ ...t, active: false })), newTab]);
     };
 
-    const cancelQuery = () => {
+    const cancelQuery = async () => {
         if (abortRef.current) {
             abortRef.current.abort();
             abortRef.current = null;
         }
+
+        const executing = currentExecution;
+        if (executing) {
+            try {
+                if (executing.engine === 'trino') {
+                    const res = await fetch('/api/trino/queries');
+                    const data = await res.json();
+                    const matched = (data.queries || []).find((q: any) => q?.source === `openclaw:${executing.queryTag}`);
+                    if (matched?.queryId) {
+                        await fetch(`/api/trino/queries/${matched.queryId}`, { method: 'DELETE' });
+                    }
+                } else {
+                    const res = await fetch(`/api/postgres/queries?database=${encodeURIComponent(pgDatabase)}`);
+                    const data = await res.json();
+                    const matched = (data.queries || []).find((q: any) => q?.queryTag === executing.queryTag);
+                    if (matched?.pid) {
+                        await fetch(`/api/postgres/queries/${matched.pid}?database=${encodeURIComponent(pgDatabase)}`, { method: 'DELETE' });
+                    }
+                }
+            } catch { }
+        }
+
+        setCurrentExecution(null);
         setIsExecuting(false);
     };
+
+    const setActiveResultSet = useCallback((index: number) => {
+        setTabs(prev => prev.map(t => {
+            if (!t.active || !t.resultSets || !t.resultSets[index]) return t;
+            return {
+                ...t,
+                activeResultSetIndex: index,
+                results: {
+                    columns: t.resultSets[index].columns,
+                    data: t.resultSets[index].data,
+                    stats: t.resultSets[index].stats,
+                }
+            };
+        }));
+        setSortConfig({ column: '', direction: null });
+        setSelectedCell(null);
+        setResultFilter('');
+    }, []);
 
     const updateQuery = useCallback((val: string | undefined) => {
         setTabs(prev => prev.map(t => t.active ? { ...t, query: val || '' } : t));
@@ -531,6 +924,17 @@ export default function DataExplorer() {
         return () => window.removeEventListener('click', handler);
     }, [contextMenu]);
 
+    useEffect(() => {
+        if (!showFilterMenu) return;
+        const handler = () => setShowFilterMenu(false);
+        window.addEventListener('click', handler);
+        return () => window.removeEventListener('click', handler);
+    }, [showFilterMenu]);
+
+    useEffect(() => {
+        if (bottomPanel !== 'results') setShowFilterMenu(false);
+    }, [bottomPanel]);
+
     const contextMenuActions = useMemo(() => {
         if (!contextMenu) return [];
         const { node, parentNames } = contextMenu;
@@ -546,7 +950,8 @@ export default function DataExplorer() {
             // For Postgres, hierarchy is [database, schema, folder, object]
             const pgDb = parentNames[0] || 'controldb';
             const pgSchema = parentNames.length > 1 ? parentNames[1] : 'public';
-            const pgObject = parentNames[parentNames.length - 1];
+            const pgObject = node.sqlName || parentNames[parentNames.length - 1];
+            const pgRoutineOid = typeof node.routineOid === 'number' ? node.routineOid : undefined;
             const pgFQN = `${pgSchema}.${pgObject}`;
 
             if (isPostgres) {
@@ -556,7 +961,14 @@ export default function DataExplorer() {
                             const res = await fetch('/api/postgres', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ action: 'explore', type: 'ddl', schema: pgSchema, table: pgObject, database: pgDb })
+                                body: JSON.stringify({
+                                    action: 'explore',
+                                    type: 'ddl',
+                                    schema: pgSchema,
+                                    table: pgObject,
+                                    database: pgDb,
+                                    ...(isRoutine && pgRoutineOid ? { routine_oid: pgRoutineOid } : {})
+                                })
                             });
                             const data = await res.json();
                             if (data.data?.definition) {
@@ -580,7 +992,9 @@ export default function DataExplorer() {
                     ];
                 } else {
                     actions = [
-                        { label: 'Execute Function', icon: <Play className="w-3.5 h-3.5" />, action: () => { updateQuery(`SELECT * FROM ${pgFQN}()`); } },
+                        node.type === 'procedure'
+                            ? { label: 'Execute Procedure', icon: <Play className="w-3.5 h-3.5" />, action: () => { updateQuery(`CALL ${pgFQN}()`); } }
+                            : { label: 'Execute Function', icon: <Play className="w-3.5 h-3.5" />, action: () => { updateQuery(`SELECT * FROM ${pgFQN}()`); } },
                         ...actions
                     ];
                 }
@@ -594,6 +1008,13 @@ export default function DataExplorer() {
             } else {
                 // Trino
                 const trinoType = node.type.toUpperCase().replace('_', ' ');
+                const trinoCatalogName = parentNames[0] || trinoCatalog;
+                const trinoSchemaName = parentNames[1] || trinoSchema;
+                const trinoObjectName = parentNames[parentNames.length - 1];
+                const quotedCatalog = quoteTrinoIdentifier(trinoCatalogName);
+                const quotedSchema = quoteTrinoIdentifier(trinoSchemaName);
+                const trinoMetadataFqn = (suffix: string) =>
+                    `${quotedCatalog}.${quotedSchema}.${quoteTrinoIdentifier(`${trinoObjectName}${suffix}`)}`;
                 let actions: any[] = [
                     { label: 'Script as CREATE', icon: <FileCode className="w-3.5 h-3.5" />, action: () => { updateQuery(`SHOW CREATE ${trinoType} ${fqn}`); setTimeout(() => executeRef.current(), 100); } },
                 ];
@@ -605,6 +1026,13 @@ export default function DataExplorer() {
                         { label: 'Show Stats', icon: <BarChart3 className="w-3.5 h-3.5" />, action: () => { updateQuery(`SHOW STATS FROM ${fqn}`); setTimeout(() => executeRef.current(), 100); } },
                         { label: 'Row Count', icon: <Columns className="w-3.5 h-3.5" />, action: () => { updateQuery(`SELECT count(*) AS total_rows FROM ${fqn}`); setTimeout(() => executeRef.current(), 100); } },
                         { label: 'Show Grants', icon: <Shield className="w-3.5 h-3.5" />, action: () => { updateQuery(`SHOW GRANTS ON ${trinoType} ${fqn}`); setTimeout(() => executeRef.current(), 100); } },
+                        { label: 'Show Privileges (IS)', icon: <Shield className="w-3.5 h-3.5" />, action: () => { updateQuery(`SELECT *\nFROM ${quotedCatalog}.information_schema.table_privileges\nWHERE table_schema = '${escapeSqlLiteral(trinoSchemaName)}'\n  AND table_name = '${escapeSqlLiteral(trinoObjectName)}'\nORDER BY grantee`); setTimeout(() => executeRef.current(), 100); } },
+                        ...(node.type === 'table' ? [
+                            { label: 'Show Partitions (Iceberg)', icon: <ListTree className="w-3.5 h-3.5" />, action: () => { updateQuery(`SELECT * FROM ${trinoMetadataFqn('$partitions')} LIMIT 200`); setTimeout(() => executeRef.current(), 100); } },
+                            { label: 'Show Files (Iceberg)', icon: <FileSpreadsheet className="w-3.5 h-3.5" />, action: () => { updateQuery(`SELECT * FROM ${trinoMetadataFqn('$files')} LIMIT 200`); setTimeout(() => executeRef.current(), 100); } },
+                            { label: 'Show Snapshots (Iceberg)', icon: <Clock className="w-3.5 h-3.5" />, action: () => { updateQuery(`SELECT * FROM ${trinoMetadataFqn('$snapshots')} ORDER BY committed_at DESC LIMIT 200`); setTimeout(() => executeRef.current(), 100); } },
+                            { label: 'Show Manifests (Iceberg)', icon: <Layers className="w-3.5 h-3.5" />, action: () => { updateQuery(`SELECT * FROM ${trinoMetadataFqn('$manifests')} LIMIT 200`); setTimeout(() => executeRef.current(), 100); } },
+                        ] : []),
                         { divider: true },
                         { label: 'Analyze Table', icon: <Zap className="w-3.5 h-3.5" />, action: () => { updateQuery(`ANALYZE ${fqn}`); setTimeout(() => executeRef.current(), 100); } }
                     ];
@@ -684,7 +1112,7 @@ export default function DataExplorer() {
         }
 
         return [];
-    }, [contextMenu, engine, updateQuery, insertIntoEditor]);
+    }, [contextMenu, engine, updateQuery, insertIntoEditor, trinoCatalog, trinoSchema]);
 
     // ─── Properties Panel Fetch ───
     const fetchProperties = useCallback(async (obj: { schema: string; name: string; database: string; type: string }, tab: string) => {
@@ -723,6 +1151,28 @@ export default function DataExplorer() {
         setTrinoQueriesLoading(false);
     }, [engine]);
 
+    const fetchTrinoQueryDetail = useCallback(async (queryId: string) => {
+        if (!queryId) return;
+        setSelectedTrinoQueryId(queryId);
+        setTrinoQueryDetailLoading(true);
+        try {
+            const res = await fetch(`/api/trino/queries/${encodeURIComponent(queryId)}`);
+            const data = await res.json();
+            if (!res.ok) {
+                throw new Error(data?.detail || `Failed to load detail (${res.status})`);
+            }
+            setTrinoQueryDetail(data);
+            const stageId = String(data?.outputStage?.stageId ?? data?.stageInfo?.stageId ?? '');
+            setSelectedTrinoStageId(stageId || null);
+        } catch (err) {
+            console.error('Failed to fetch Trino query detail', err);
+            setTrinoQueryDetail(null);
+            setSelectedTrinoStageId(null);
+        } finally {
+            setTrinoQueryDetailLoading(false);
+        }
+    }, []);
+
     const killTrinoQuery = useCallback(async (queryId: string) => {
         try {
             await fetch(`/api/trino/queries/${queryId}`, { method: 'DELETE' });
@@ -735,19 +1185,19 @@ export default function DataExplorer() {
         if (engine !== 'postgres') return;
         setPgQueriesLoading(true);
         try {
-            const res = await fetch('/api/postgres/queries');
+            const res = await fetch(`/api/postgres/queries?database=${encodeURIComponent(pgDatabase)}`);
             const data = await res.json();
             setPgQueries(data.queries || []);
         } catch { }
         setPgQueriesLoading(false);
-    }, [engine]);
+    }, [engine, pgDatabase]);
 
     const killPgQuery = useCallback(async (pid: number) => {
         try {
-            await fetch(`/api/postgres/queries/${pid}`, { method: 'DELETE' });
+            await fetch(`/api/postgres/queries/${pid}?database=${encodeURIComponent(pgDatabase)}`, { method: 'DELETE' });
             fetchPgQueries();
         } catch { }
-    }, [fetchPgQueries]);
+    }, [fetchPgQueries, pgDatabase]);
 
     // Fetch cluster info on mount (engine-aware)
     useEffect(() => {
@@ -784,6 +1234,15 @@ export default function DataExplorer() {
         }
     }, [bottomPanel, engine, fetchTrinoQueries, fetchPgQueries]);
 
+    useEffect(() => {
+        if (engine !== 'trino') {
+            setShowTrinoSettings(false);
+            setSelectedTrinoQueryId(null);
+            setTrinoQueryDetail(null);
+            setSelectedTrinoStageId(null);
+        }
+    }, [engine]);
+
     const executeQuery = useCallback(async () => {
         let queryToRun = activeTab.query.trim();
 
@@ -803,6 +1262,10 @@ export default function DataExplorer() {
 
         if (!queryToRun || isExecuting) return;
 
+        const runAsSingleScript = engine === 'postgres' && hasExplicitTransactionControl(queryToRun);
+        const statements = runAsSingleScript ? [queryToRun] : splitSqlStatements(queryToRun);
+        if (statements.length === 0) return;
+
         if (abortRef.current) abortRef.current.abort();
         const controller = new AbortController();
         abortRef.current = controller;
@@ -811,54 +1274,152 @@ export default function DataExplorer() {
         setBottomPanel('results');
         setSortConfig({ column: '', direction: null });
         setSelectedCell(null);
+        setResultFilter('');
         const startTime = performance.now();
-        setTabs(prev => prev.map(t => t.active ? { ...t, results: null, error: null } : t));
+        setTabs(prev => prev.map(t => t.active ? { ...t, results: null, resultSets: undefined, activeResultSetIndex: undefined, error: null } : t));
 
         try {
             const apiUrl = engine === 'postgres' ? '/api/postgres' : '/api/trino';
-            const bodyPayload = engine === 'postgres'
-                ? { action: 'query', query: queryToRun, database: pgDatabase, ...(rowLimit ? { limit: rowLimit } : {}) }
-                : { query: queryToRun, ...(rowLimit ? { limit: rowLimit } : {}) };
-
-            const response = await fetch(apiUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(bodyPayload),
-                signal: controller.signal
+            const executionResults: StatementExecution[] = [];
+            const queryTag = makeStableId('q');
+            setCurrentExecution({
+                engine,
+                queryTag,
+                sessionId: engine === 'postgres' ? activeTab.pgSessionId : undefined,
             });
 
-            const data = await response.json();
-            const endTime = performance.now();
-            const duration = Math.round(endTime - startTime);
+            for (let i = 0; i < statements.length; i += 1) {
+                const statement = statements[i];
+                const bodyPayload = engine === 'postgres'
+                    ? {
+                        action: 'query',
+                        query: statement,
+                        database: pgDatabase,
+                        session_id: activeTab.pgSessionId,
+                        query_tag: queryTag,
+                        ...(rowLimit ? { limit: rowLimit } : {})
+                    }
+                    : {
+                        query: statement,
+                        catalog: trinoCatalog,
+                        ...(trinoSchema ? { schema: trinoSchema } : {}),
+                        ...(trinoRole.trim() ? { role: trinoRole.trim() } : {}),
+                        ...(parsedTrinoSessionProperties ? { session_properties: parsedTrinoSessionProperties } : {}),
+                        ...(parsedTrinoClientTags ? { client_tags: parsedTrinoClientTags } : {}),
+                        query_tag: queryTag,
+                        ...(rowLimit ? { limit: rowLimit } : {})
+                    };
 
-            if (!response.ok) {
-                throw new Error(data.detail || data.error || 'Query execution failed');
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(bodyPayload),
+                    signal: controller.signal
+                });
+                const data = await response.json().catch(() => ({} as QueryApiResponse)) as QueryApiResponse;
+
+                if (!response.ok) {
+                    const rawError = data.detail || data.error || `HTTP ${response.status}`;
+                    const prefix = statements.length > 1 ? `Statement ${i + 1} failed` : 'Query execution failed';
+                    throw new Error(`${prefix}: ${rawError}`);
+                }
+
+                const columns = Array.isArray(data.columns) ? data.columns : [];
+                const rows = Array.isArray(data.data) ? data.data : [];
+                const infoMessages = [
+                    ...(Array.isArray(data.notices) ? data.notices : []),
+                    ...(Array.isArray(data.warnings) ? data.warnings : []),
+                ];
+                const noticeText = infoMessages.length > 0
+                    ? `\n${infoMessages.join('\n')}`
+                    : '';
+                const successMessage = columns.length === 0
+                    ? `${data.stats?.command || data.message || 'Query executed successfully'}${noticeText}`
+                    : null;
+
+                executionResults.push({
+                    statement,
+                    columns,
+                    data: rows,
+                    stats: data.stats,
+                    message: successMessage,
+                    label: statements.length > 1 ? `Result ${i + 1}` : 'Result'
+                });
             }
 
-            // Handle DDL/DML success (no columns returned)
-            const successMessage = (!data.columns || data.columns.length === 0)
-                ? data.stats?.command || data.message || 'Query executed successfully'
-                : null;
+            const endTime = performance.now();
+            const duration = Math.round(endTime - startTime);
+            const resultSets = executionResults.filter(item => item.columns.length > 0);
+            const latestStats = resultSets.length > 0
+                ? resultSets[resultSets.length - 1].stats
+                : executionResults[executionResults.length - 1]?.stats;
+            const statsWithMeta = {
+                ...(latestStats || {}),
+                statementCount: executionResults.length,
+                resultSetCount: resultSets.length,
+            };
+            const resultSetPayloads = resultSets.map((set, index) => ({
+                name: set.label || `Result ${index + 1}`,
+                columns: set.columns,
+                data: set.data,
+                stats: { ...(set.stats || {}), statement: set.statement }
+            }));
+            const activeResultSetIndex = resultSetPayloads.length > 0 ? resultSetPayloads.length - 1 : undefined;
+
+            const finalResults = (() => {
+                if (resultSetPayloads.length > 0) {
+                    const lastResultSet = resultSetPayloads[resultSetPayloads.length - 1];
+                    return {
+                        columns: lastResultSet.columns,
+                        data: lastResultSet.data,
+                        stats: statsWithMeta
+                    };
+                }
+
+                const messages = executionResults.map((item, index) => ({
+                    Statement: String(index + 1),
+                    Result: item.message || 'Query executed successfully'
+                }));
+
+                if (messages.length === 1) {
+                    return {
+                        columns: ['Result'],
+                        data: [{ Result: messages[0].Result }],
+                        stats: statsWithMeta
+                    };
+                }
+
+                return {
+                    columns: ['Statement', 'Result'],
+                    data: messages,
+                    stats: statsWithMeta
+                };
+            })();
 
             setTabs(prev => prev.map(t => t.active ? {
                 ...t,
-                results: successMessage
-                    ? { columns: ['Result'], data: [{ Result: successMessage }], stats: data.stats || {} }
-                    : { columns: data.columns, data: data.data, stats: data.stats },
+                results: finalResults,
+                resultSets: resultSetPayloads.length > 0 ? resultSetPayloads : undefined,
+                activeResultSetIndex,
                 executionTime: duration,
                 error: null
             } : t));
 
             // Add to history
+            const historyRowCount = resultSets.length > 0 ? resultSets[resultSets.length - 1].data.length : 0;
             setQueryHistory(prev => [{
                 id: Date.now().toString(),
                 query: queryToRun,
                 engine,
                 timestamp: Date.now(),
                 duration,
-                rowCount: data.data?.length || 0,
+                rowCount: historyRowCount,
                 status: 'success' as const
             }, ...prev].slice(0, 50));
+
+            if (executionResults.some(item => isSchemaMutationStatement(item.statement))) {
+                window.dispatchEvent(new CustomEvent('openclaw:refresh-schema'));
+            }
 
         } catch (err: any) {
             if (err.name === 'AbortError') return;
@@ -882,9 +1443,22 @@ export default function DataExplorer() {
             }, ...prev].slice(0, 50));
         } finally {
             setIsExecuting(false);
+            setCurrentExecution(null);
             abortRef.current = null;
         }
-    }, [activeTab.query, isExecuting, engine, rowLimit, pgDatabase]);
+    }, [
+        activeTab.query,
+        activeTab.pgSessionId,
+        isExecuting,
+        engine,
+        rowLimit,
+        pgDatabase,
+        trinoCatalog,
+        trinoSchema,
+        trinoRole,
+        parsedTrinoSessionProperties,
+        parsedTrinoClientTags,
+    ]);
 
     const executeExplain = useCallback(async () => {
         if (!activeTab.query.trim() || isExecuting) return;
@@ -897,6 +1471,81 @@ export default function DataExplorer() {
             executeRef.current();
         }, 50);
     }, [activeTab.query, isExecuting, engine]);
+
+    const executePgTransactionCommand = useCallback(async (command: 'BEGIN' | 'COMMIT' | 'ROLLBACK') => {
+        if (engine !== 'postgres' || isExecuting) return;
+
+        if (abortRef.current) abortRef.current.abort();
+        const controller = new AbortController();
+        abortRef.current = controller;
+
+        setIsExecuting(true);
+        setBottomPanel('results');
+        setSortConfig({ column: '', direction: null });
+        setSelectedCell(null);
+        setResultFilter('');
+        const startTime = performance.now();
+
+        try {
+            const queryTag = makeStableId('q');
+            setCurrentExecution({ engine: 'postgres', queryTag, sessionId: activeTab.pgSessionId });
+
+            const response = await fetch('/api/postgres', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    action: 'query',
+                    query: command,
+                    database: pgDatabase,
+                    session_id: activeTab.pgSessionId,
+                    query_tag: queryTag
+                }),
+                signal: controller.signal
+            });
+            const data = await response.json().catch(() => ({} as QueryApiResponse)) as QueryApiResponse;
+            if (!response.ok) {
+                const rawError = data.detail || data.error || `HTTP ${response.status}`;
+                throw new Error(`${command} failed: ${rawError}`);
+            }
+
+            const duration = Math.round(performance.now() - startTime);
+            const statusText = data.stats?.command || `${command} executed`;
+            setTabs(prev => prev.map(t => t.active ? {
+                ...t,
+                results: {
+                    columns: ['Result'],
+                    data: [{ Result: statusText }],
+                    stats: data.stats
+                },
+                resultSets: undefined,
+                activeResultSetIndex: undefined,
+                executionTime: duration,
+                error: null
+            } : t));
+
+            setQueryHistory(prev => [{
+                id: Date.now().toString(),
+                query: command,
+                engine: 'postgres' as const,
+                timestamp: Date.now(),
+                duration,
+                rowCount: 1,
+                status: 'success' as const
+            }, ...prev].slice(0, 50));
+        } catch (err: any) {
+            if (err.name === 'AbortError') return;
+            const errorMsg = typeof err.message === 'string' ? err.message : JSON.stringify(err);
+            setTabs(prev => prev.map(t => t.active ? {
+                ...t,
+                results: null,
+                error: errorMsg
+            } : t));
+        } finally {
+            setIsExecuting(false);
+            setCurrentExecution(null);
+            abortRef.current = null;
+        }
+    }, [engine, isExecuting, activeTab.pgSessionId, pgDatabase]);
 
     useEffect(() => {
         executeRef.current = executeQuery;
@@ -927,9 +1576,14 @@ export default function DataExplorer() {
                 });
                 const data = await res.json();
                 if (data.data) {
-                    setSchemaTree(data.data.map((c: any) => ({
+                    const catalogs = data.data.map((c: any) => ({
                         id: `trino_${c.Catalog}`, name: c.Catalog, type: 'catalog', isOpen: false, children: []
-                    })));
+                    }));
+                    setSchemaTree(catalogs);
+                    if (catalogs.length > 0) {
+                        setTrinoCatalog(prev => catalogs.some((c: any) => c.name === prev) ? prev : catalogs[0].name);
+                        setTrinoSchema('');
+                    }
                 }
             }
         } catch (err) {
@@ -941,6 +1595,12 @@ export default function DataExplorer() {
 
     useEffect(() => {
         fetchSchemaRoot();
+    }, [fetchSchemaRoot]);
+
+    useEffect(() => {
+        const handleRefreshSchema = () => { fetchSchemaRoot(); };
+        window.addEventListener('openclaw:refresh-schema', handleRefreshSchema);
+        return () => window.removeEventListener('openclaw:refresh-schema', handleRefreshSchema);
     }, [fetchSchemaRoot]);
 
     const toggleSchemaNode = async (nodeId: string, nodeType: string, parentNames: string[]) => {
@@ -1029,7 +1689,14 @@ export default function DataExplorer() {
                     if (data.data) {
                         const defaultType = nodeTypeMap[folderName] || 'table';
                         newChildren = data.data.map((item: any) => ({
-                            id: `${nodeId}_${item.name}`, name: item.name, type: item.object_type || defaultType, isOpen: false, children: []
+                            id: `${nodeId}_${item.oid || item.name}_${item.identity_arguments || ''}`,
+                            name: item.display_name || item.name,
+                            sqlName: item.name,
+                            routineOid: typeof item.oid === 'number' ? item.oid : undefined,
+                            routineSignature: item.identity_arguments || undefined,
+                            type: item.object_type || defaultType,
+                            isOpen: false,
+                            children: []
                         }));
                     }
                 } else if (['table', 'view', 'materialized_view'].includes(nodeType)) {
@@ -1058,9 +1725,10 @@ export default function DataExplorer() {
                 // Trino
                 if (nodeType === 'catalog') {
                     const catalogName = parentNames[0];
+                    setTrinoSchema('');
                     const res = await fetch('/api/trino', {
                         method: 'POST', headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ query: `SHOW SCHEMAS FROM ${catalogName}` })
+                        body: JSON.stringify({ query: `SHOW SCHEMAS FROM ${catalogName}`, catalog: catalogName })
                     });
                     const data = await res.json();
                     if (data.data) {
@@ -1071,23 +1739,78 @@ export default function DataExplorer() {
                 } else if (nodeType === 'schema') {
                     const catalogName = parentNames[0];
                     const schemaName = parentNames[1];
-                    const res = await fetch('/api/trino', {
-                        method: 'POST', headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ query: `SHOW TABLES FROM ${catalogName}.${schemaName}` })
+                    setTrinoSchema(schemaName);
+                    const escapedSchemaName = escapeSqlLiteral(schemaName);
+                    let res = await fetch('/api/trino', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            query: `SELECT table_name AS name, table_type FROM ${catalogName}.information_schema.tables WHERE table_schema = '${escapedSchemaName}' ORDER BY table_name`,
+                            catalog: catalogName
+                        })
                     });
-                    const data = await res.json();
-                    if (data.data) {
-                        newChildren = data.data.map((t: any) => ({
-                            id: `${nodeId}_${t.Table}`, name: t.Table, type: 'table', isOpen: false, children: []
-                        }));
+                    let data = await res.json();
+                    if (!res.ok || !data.data) {
+                        // Fallback for catalogs/connectors where information_schema.tables is restricted.
+                        res = await fetch('/api/trino', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ query: `SHOW TABLES FROM ${catalogName}.${schemaName}`, catalog: catalogName })
+                        });
+                        data = await res.json();
                     }
-                } else if (nodeType === 'table') {
+                    if (data.data) {
+                        newChildren = data.data.map((t: any) => {
+                            const objectName = t.name || t.table_name || t.Table || t.TABLE_NAME;
+                            const rawType = String(t.table_type || t.TABLE_TYPE || t.tableType || 'BASE TABLE').toUpperCase();
+                            let objectType: SchemaNode['type'] = 'table';
+                            if (rawType.includes('MATERIALIZED VIEW')) objectType = 'materialized_view';
+                            else if (rawType.includes('VIEW')) objectType = 'view';
+
+                            return {
+                                id: `${nodeId}_${objectName}`,
+                                name: objectName,
+                                type: objectType,
+                                isOpen: false,
+                                children: []
+                            };
+                        }).filter((node: SchemaNode) => Boolean(node.name));
+                    }
+                    try {
+                        const fnRes = await fetch('/api/trino', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ query: `SHOW FUNCTIONS FROM ${catalogName}.${schemaName}`, catalog: catalogName })
+                        });
+                        const fnData = await fnRes.json();
+                        if (fnRes.ok && fnData.data) {
+                            const seen = new Set(newChildren.map(node => node.name.toLowerCase()));
+                            const fnNodes = fnData.data
+                                .map((f: any) => f.Function || f.function || f.name || f.Name)
+                                .filter((name: string) => typeof name === 'string' && name.trim().length > 0)
+                                .map((name: string) => name.trim())
+                                .filter((name: string) => {
+                                    const key = name.toLowerCase();
+                                    if (seen.has(key)) return false;
+                                    seen.add(key);
+                                    return true;
+                                })
+                                .map((name: string) => ({
+                                    id: `${nodeId}_fn_${name}`,
+                                    name,
+                                    type: 'function' as const,
+                                }));
+                            newChildren = [...newChildren, ...fnNodes];
+                        }
+                    } catch { }
+                } else if (['table', 'view', 'materialized_view'].includes(nodeType)) {
                     const catalogName = parentNames[0];
                     const schemaName = parentNames[1];
                     const tableName = parentNames[2];
+                    setTrinoSchema(schemaName);
                     const res = await fetch('/api/trino', {
                         method: 'POST', headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ query: `SHOW COLUMNS FROM ${catalogName}.${schemaName}.${tableName}` })
+                        body: JSON.stringify({ query: `SHOW COLUMNS FROM ${catalogName}.${schemaName}.${tableName}`, catalog: catalogName })
                     });
                     const data = await res.json();
                     if (data.data) {
@@ -1132,6 +1855,15 @@ export default function DataExplorer() {
     }, []);
 
     // ─── Export Functions ───
+    const inferExportTableName = useCallback(() => {
+        if (selectedObject?.schema && selectedObject?.name) {
+            return `${selectedObject.schema}.${selectedObject.name}`;
+        }
+        const fromMatch = activeTab.query.match(/\bFROM\s+([A-Za-z0-9_."`]+)/i);
+        if (fromMatch?.[1]) return fromMatch[1].replace(/`/g, '"');
+        return 'export_table';
+    }, [activeTab.query, selectedObject]);
+
     const downloadCSV = () => {
         if (!activeTab.results) return;
         const headers = activeTab.results.columns.join(',');
@@ -1152,7 +1884,7 @@ export default function DataExplorer() {
 
     const downloadSQLInsert = () => {
         if (!activeTab.results) return;
-        const tableName = 'your_table';
+        const tableName = inferExportTableName();
         const cols = activeTab.results.columns.join(', ');
         const inserts = activeTab.results.data.map((row: any) => {
             const values = activeTab.results!.columns.map(col => {
@@ -1189,19 +1921,17 @@ export default function DataExplorer() {
     };
 
     const formatSQL = () => {
-        const q = activeTab.query
-            .replace(/\s+/g, ' ')
-            .replace(/SELECT/gi, '\nSELECT')
-            .replace(/FROM/gi, '\nFROM')
-            .replace(/WHERE/gi, '\nWHERE')
-            .replace(/GROUP BY/gi, '\nGROUP BY')
-            .replace(/ORDER BY/gi, '\nORDER BY')
-            .replace(/LIMIT/gi, '\nLIMIT')
-            .replace(/LEFT JOIN/gi, '\nLEFT JOIN')
-            .replace(/INNER JOIN/gi, '\nINNER JOIN')
-            .replace(/,/g, ',\n    ')
-            .trim();
-        updateQuery(q);
+        try {
+            const q = formatSqlText(activeTab.query, {
+                language: engine === 'postgres' ? 'postgresql' : 'trino',
+                keywordCase: 'upper',
+                linesBetweenQueries: 1,
+                tabWidth: 4,
+            });
+            updateQuery(q);
+        } catch {
+            updateQuery(activeTab.query);
+        }
     };
 
     const loadHistoryQuery = (item: QueryHistoryItem) => {
@@ -1500,6 +2230,73 @@ export default function DataExplorer() {
         return String(val);
     }, [selectedCell, sortedData, activeTab.results]);
 
+    const explainPlanTree = useMemo(() => {
+        if (!activeTab.results || activeTab.results.data.length === 0 || activeTab.results.columns.length === 0) return null;
+        const trimmed = activeTab.query.trim().toUpperCase();
+        if (!trimmed.startsWith('EXPLAIN')) return null;
+
+        const firstColumn = activeTab.results.columns[0];
+        const firstValue = activeTab.results.data[0]?.[firstColumn];
+        let parsed: any = null;
+        if (typeof firstValue === 'string') {
+            const t = firstValue.trim();
+            if (t.startsWith('{') || t.startsWith('[')) {
+                try {
+                    parsed = JSON.parse(t);
+                } catch {
+                    parsed = null;
+                }
+            }
+        } else if (firstValue && typeof firstValue === 'object') {
+            parsed = firstValue;
+        }
+
+        if (Array.isArray(parsed) && parsed[0]?.Plan) return parsed[0].Plan;
+        if (parsed?.Plan) return parsed.Plan;
+        return null;
+    }, [activeTab.query, activeTab.results]);
+
+    const explainPlanText = useMemo(() => {
+        if (!activeTab.results || activeTab.results.data.length === 0 || activeTab.results.columns.length === 0) return null;
+        const trimmed = activeTab.query.trim().toUpperCase();
+        if (!trimmed.startsWith('EXPLAIN')) return null;
+        if (explainPlanTree) return null;
+
+        const firstColumn = activeTab.results.columns[0];
+        const firstValue = activeTab.results.data[0]?.[firstColumn];
+        if (typeof firstValue === 'string' && firstValue.trim().length > 0) {
+            return firstValue;
+        }
+        return null;
+    }, [activeTab.query, activeTab.results, explainPlanTree]);
+
+    const renderExplainNode = (node: any, depth = 0): React.ReactNode => {
+        if (!node || typeof node !== 'object') return null;
+        const children = Array.isArray(node.Plans) ? node.Plans : [];
+        return (
+            <div key={`${node['Node Type'] || 'node'}_${depth}_${node['Relation Name'] || ''}`} className="py-1">
+                <div className="flex items-center gap-2" style={{ paddingLeft: depth * 18 }}>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-sky-500/10 border border-sky-400/20 text-sky-300 font-mono">
+                        {node['Node Type'] || 'Plan'}
+                    </span>
+                    {node['Relation Name'] && <span className="text-[10px] text-white/60 font-mono">{node['Relation Name']}</span>}
+                    {node['Index Name'] && <span className="text-[10px] text-amber-300/80 font-mono">{node['Index Name']}</span>}
+                    {node['Total Cost'] !== undefined && <span className="text-[10px] text-white/40">cost {node['Total Cost']}</span>}
+                    {node['Actual Total Time'] !== undefined && <span className="text-[10px] text-emerald-300/70">{node['Actual Total Time']} ms</span>}
+                </div>
+                {children.length > 0 && (
+                    <div className="mt-1">
+                        {children.map((child: any, idx: number) => (
+                            <React.Fragment key={`${depth}_${idx}`}>
+                                {renderExplainNode(child, depth + 1)}
+                            </React.Fragment>
+                        ))}
+                    </div>
+                )}
+            </div>
+        );
+    };
+
     // ─── Cell value renderer (Premium Monochrome typed coloring) ───
     const renderCellValue = (val: any) => {
         if (val === null || val === undefined) {
@@ -1614,47 +2411,128 @@ export default function DataExplorer() {
                         <div className="w-[1px] h-4 bg-obsidian-border/50 mx-1"></div>
 
                         {/* Breadcrumb / Database Selector */}
-                        <div className="relative group">
-                            <button className="flex items-center gap-2 text-xs text-obsidian-muted font-mono hover:bg-white/5 py-1 px-2 rounded transition-colors active:scale-95">
-                                <Database className="w-3 h-3 opacity-50" />
-                                <span className="text-white/60 font-medium group-hover:text-white transition-colors">{engine === 'trino' ? 'iceberg' : pgDatabase}</span>
-                                <ChevronDown className="w-3.5 h-3.5 opacity-50 group-hover:opacity-100 transition-opacity" />
+                        <div className="relative">
+                            <button
+                                className="flex items-center gap-2 text-xs font-mono hover:bg-white/5 py-1 px-2 rounded transition-colors active:scale-95"
+                                onClick={(e) => {
+                                    const rect = e.currentTarget.getBoundingClientRect();
+                                    setDbMenuPos({ top: rect.bottom + 4, left: rect.left });
+                                    setShowDbMenu(!showDbMenu);
+                                }}
+                            >
+                                <Database className="w-3 h-3 text-obsidian-info" />
+                                <span className="text-foreground/80 font-medium">
+                                    {engine === 'trino'
+                                        ? (trinoSchema ? `${trinoCatalog}.${trinoSchema}` : trinoCatalog)
+                                        : pgDatabase}
+                                </span>
+                                <ChevronDown className="w-3.5 h-3.5 text-obsidian-muted" />
                             </button>
 
-                            {/* Dropdown Menu (Hover based for simple UX) */}
-                            <div className="absolute top-full left-0 mt-1 w-48 bg-[#18181b] border border-white/10 rounded-md shadow-2xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 overflow-hidden transform origin-top scale-95 group-hover:scale-100">
-                                <div className="p-1.5 flex flex-col gap-0.5">
-                                    <div className="px-2 py-1.5 text-[10px] items-center text-obsidian-muted font-bold uppercase tracking-wider mb-1 border-b border-white/5">
-                                        Select Database
+                            {/* Dropdown Menu (Click based, portal to body) */}
+                            {showDbMenu && createPortal(
+                                <>
+                                    <div className="fixed inset-0 z-[9998]" onClick={() => setShowDbMenu(false)} />
+                                    <div
+                                        className="fixed w-48 bg-[#09090b] border border-white/10 rounded shadow-2xl z-[9999] overflow-hidden"
+                                        style={{ top: dbMenuPos.top, left: dbMenuPos.left }}
+                                    >
+                                        <div className="p-1.5 flex flex-col gap-0.5">
+                                            <div className="px-2 py-1.5 text-[10px] items-center text-obsidian-muted font-bold uppercase tracking-wider mb-1 border-b border-white/5">
+                                                Select Database
+                                            </div>
+                                            {engine === 'trino' ? (
+                                                <>
+                                                    {(schemaTree.length > 0 ? schemaTree : [{ name: 'iceberg' }, { name: 'system' }, { name: 'mysql' }]).map((catalog: any) => (
+                                                        <button
+                                                            key={catalog.name}
+                                                            onClick={() => { setTrinoCatalog(catalog.name); setTrinoSchema(''); setShowDbMenu(false); }}
+                                                            className={`flex items-center gap-2 px-2 py-1.5 text-xs text-left rounded transition-colors ${trinoCatalog === catalog.name ? 'bg-white/[0.04] text-white font-medium' : 'hover:bg-white/[0.02] text-obsidian-muted'}`}
+                                                        >
+                                                            <Database className={`w-3 h-3 ${trinoCatalog === catalog.name ? 'text-obsidian-info' : 'opacity-50'}`} /> {catalog.name}
+                                                        </button>
+                                                    ))}
+                                                </>
+                                            ) : (
+                                                <>
+                                                    {schemaTree.map(db => (
+                                                        <button key={db.name} onClick={() => { setPgDatabase(db.name); setShowDbMenu(false); }} className={`flex items-center gap-2 px-2 py-1.5 text-xs text-left rounded transition-colors ${pgDatabase === db.name ? 'bg-white/[0.04] text-white font-medium' : 'hover:bg-white/[0.02] text-obsidian-muted'}`}>
+                                                            <Database className={`w-3 h-3 ${pgDatabase === db.name ? 'text-obsidian-info' : 'opacity-50'}`} /> {db.name}
+                                                        </button>
+                                                    ))}
+                                                </>
+                                            )}
+                                        </div>
                                     </div>
-                                    {engine === 'trino' ? (
-                                        <>
-                                            <button onClick={() => { }} className="flex items-center gap-2 px-2 py-1.5 text-xs text-left rounded bg-white/10 text-white font-medium">
-                                                <Database className="w-3 h-3 text-sky-400" /> iceberg
-                                            </button>
-                                            <button onClick={() => { }} className="flex items-center gap-2 px-2 py-1.5 text-xs text-left rounded hover:bg-white/5 text-white/50 transition-colors">
-                                                <Database className="w-3 h-3 opacity-50" /> system
-                                            </button>
-                                            <button onClick={() => { }} className="flex items-center gap-2 px-2 py-1.5 text-xs text-left rounded hover:bg-white/5 text-white/50 transition-colors">
-                                                <Database className="w-3 h-3 opacity-50" /> mysql
-                                            </button>
-                                        </>
-                                    ) : (
-                                        <>
-                                            {schemaTree.map(db => (
-                                                <button key={db.name} onClick={() => setPgDatabase(db.name)} className={`flex items-center gap-2 px-2 py-1.5 text-xs text-left rounded transition-colors ${pgDatabase === db.name ? 'bg-white/10 text-white font-medium' : 'hover:bg-white/5 text-white/50'}`}>
-                                                    <Database className={`w-3 h-3 ${pgDatabase === db.name ? 'text-sky-400' : 'opacity-50'}`} /> {db.name}
-                                                </button>
-                                            ))}
-                                        </>
-                                    )}
-                                </div>
-                            </div>
+                                </>,
+                                document.body
+                            )}
                         </div>
                     </div>
 
                     {/* Right side */}
                     <div className="flex items-center gap-3 text-xs">
+                        {engine === 'trino' && (
+                            <div className="relative">
+                                <button
+                                    onClick={() => setShowTrinoSettings(prev => !prev)}
+                                    className={clsx(
+                                        "flex items-center gap-1.5 px-2 py-1 rounded-md border transition-colors",
+                                        showTrinoSettings
+                                            ? "bg-sky-500/15 text-sky-300 border-sky-400/40"
+                                            : "bg-white/[0.02] text-white/60 border-white/10 hover:text-white hover:bg-white/[0.05]"
+                                    )}
+                                    title="Trino session settings"
+                                >
+                                    <SlidersHorizontal className="w-3.5 h-3.5" />
+                                    <span>Trino Session</span>
+                                </button>
+                                {showTrinoSettings && (
+                                    <>
+                                        <div className="fixed inset-0 z-[9998]" onClick={() => setShowTrinoSettings(false)} />
+                                        <div className="absolute right-0 top-full mt-1 z-[9999] w-[360px] rounded-xl border border-white/10 bg-[#09090b] shadow-2xl p-3 space-y-2.5">
+                                            <div className="text-[10px] uppercase tracking-wider text-white/50 font-semibold">Role / Session Properties / Client Tags</div>
+                                            <div className="space-y-1">
+                                                <label className="text-[10px] text-white/50 uppercase tracking-wide">Role</label>
+                                                <input
+                                                    value={trinoRole}
+                                                    onChange={(e) => setTrinoRole(e.target.value)}
+                                                    placeholder="e.g. system, role_name"
+                                                    className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1.5 text-[11px] text-white placeholder-white/30 focus:outline-none focus:border-sky-400/40"
+                                                />
+                                            </div>
+                                            <div className="space-y-1">
+                                                <label className="text-[10px] text-white/50 uppercase tracking-wide">Client Tags (comma separated)</label>
+                                                <input
+                                                    value={trinoClientTagsInput}
+                                                    onChange={(e) => setTrinoClientTagsInput(e.target.value)}
+                                                    placeholder="adhoc,finance,priority_high"
+                                                    className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1.5 text-[11px] text-white placeholder-white/30 focus:outline-none focus:border-sky-400/40"
+                                                />
+                                            </div>
+                                            <div className="space-y-1">
+                                                <label className="text-[10px] text-white/50 uppercase tracking-wide">Session Properties (one per line: key=value)</label>
+                                                <textarea
+                                                    value={trinoSessionPropsText}
+                                                    onChange={(e) => setTrinoSessionPropsText(e.target.value)}
+                                                    placeholder={`query_max_run_time=5m\njoin_distribution_type=AUTOMATIC`}
+                                                    className="w-full h-24 resize-y bg-white/5 border border-white/10 rounded-md px-2.5 py-1.5 text-[11px] text-white placeholder-white/30 focus:outline-none focus:border-sky-400/40 font-mono"
+                                                />
+                                            </div>
+                                            <div className="flex items-center justify-between text-[10px] text-white/40">
+                                                <span>{parsedTrinoClientTags?.length || 0} tags, {parsedTrinoSessionProperties ? Object.keys(parsedTrinoSessionProperties).length : 0} session props</span>
+                                                <button
+                                                    onClick={() => { setTrinoRole(''); setTrinoClientTagsInput(''); setTrinoSessionPropsText(''); }}
+                                                    className="px-2 py-1 rounded hover:bg-white/5 text-white/60 hover:text-white"
+                                                >
+                                                    Clear
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </>
+                                )}
+                            </div>
+                        )}
                         {isExecuting && (
                             <div className="flex items-center gap-2 rounded-md px-2 py-1 bg-white/5 border border-white/10 text-white/60">
                                 <div className="w-1.5 h-1.5 rounded-full bg-white/60 animate-ping shadow-[0_0_8px_rgba(255,255,255,0.4)]" />
@@ -1686,7 +2564,7 @@ export default function DataExplorer() {
                             }}
                         >
                             <div className="flex items-center gap-2.5 truncate">
-                                <FileCode className={clsx("w-3.5 h-3.5 flex-shrink-0 transition-colors duration-300", tab.active ? 'text-sky-400 drop-shadow-[0_0_8px_rgba(56,189,248,0.5)]' : 'opacity-50')} />
+                                <FileCode className={clsx("w-3.5 h-3.5 flex-shrink-0 transition-colors duration-300", tab.active ? 'text-obsidian-info' : 'opacity-50')} />
                                 <span className={clsx("truncate tracking-wide", tab.active ? "font-medium" : "")}>{tab.name}</span>
                             </div>
 
@@ -1731,28 +2609,22 @@ export default function DataExplorer() {
                         {/* Editor Toolbar */}
                         <div className="shrink-0 flex items-center px-4 py-2.5 gap-3 border-b border-white/5 bg-black/20 backdrop-blur-md z-10">
 
-                            {/* Run Button — Emerald Glass */}
+                            {/* Run Button — Clean Obsidian Style */}
                             <button
                                 onClick={executeQuery}
                                 disabled={isExecuting}
-                                className="flex items-center gap-2 rounded-full transition-all relative overflow-hidden active:scale-95 group font-medium"
-                                style={{
-                                    padding: '4px 14px',
-                                    height: '28px',
-                                    fontSize: 11,
-                                    letterSpacing: '0.03em',
-                                    background: isExecuting ? 'rgba(255,255,255,0.02)' : 'rgba(16, 185, 129, 0.1)',
-                                    color: isExecuting ? 'rgba(255,255,255,0.3)' : '#34d399', // emerald-400
-                                    border: isExecuting ? '1px solid rgba(255,255,255,0.05)' : '1px solid rgba(16, 185, 129, 0.2)',
-                                    cursor: isExecuting ? 'not-allowed' : 'pointer',
-                                    boxShadow: isExecuting ? 'none' : '0 0 15px rgba(16, 185, 129, 0.15)',
-                                }}
+                                className={clsx(
+                                    "flex items-center gap-1.5 rounded transition-all px-2.5 py-1 text-[11px] font-medium active:scale-95",
+                                    isExecuting
+                                        ? "bg-white/[0.02] text-obsidian-muted cursor-not-allowed border border-transparent"
+                                        : "bg-white/[0.02] border border-white/5 text-obsidian-muted hover:text-white hover:bg-white/[0.05]"
+                                )}
                                 title="Execute (⌘+Enter)"
                             >
                                 {isExecuting ? (
                                     <Loader2 className="w-3.5 h-3.5 animate-spin" />
                                 ) : (
-                                    <Play className="w-3.5 h-3.5 fill-current opacity-90 group-hover:opacity-100 transition-opacity" />
+                                    <Play className="w-3.5 h-3.5 fill-current" />
                                 )}
                                 <span>RUN</span>
                             </button>
@@ -1762,13 +2634,55 @@ export default function DataExplorer() {
                                 onClick={cancelQuery}
                                 disabled={!isExecuting}
                                 className={clsx(
-                                    "flex items-center justify-center rounded-full transition-all w-7 h-7",
-                                    isExecuting ? "bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 active:scale-95 cursor-pointer shadow-[0_0_12px_rgba(239,68,68,0.2)]" : "text-white/20 cursor-not-allowed border border-transparent"
+                                    "flex items-center justify-center rounded transition-all w-7 h-7 active:scale-95",
+                                    isExecuting ? "bg-obsidian-danger/10 text-obsidian-danger border border-obsidian-danger/20 hover:bg-obsidian-danger/20 cursor-pointer" : "text-white/20 cursor-not-allowed border border-transparent"
                                 )}
                                 title="Cancel"
                             >
                                 <Square className="w-3 h-3 fill-current" />
                             </button>
+
+                            {engine === 'postgres' && (
+                                <>
+                                    <div className="w-[1px] h-4 bg-white/10 mx-1" />
+                                    <button
+                                        onClick={() => executePgTransactionCommand('BEGIN')}
+                                        disabled={isExecuting}
+                                        className={clsx(
+                                            "flex items-center gap-1.5 rounded transition-all px-2 py-1 text-[10px] font-medium active:scale-95",
+                                            isExecuting ? "opacity-30 cursor-not-allowed text-obsidian-muted bg-transparent border border-transparent" : "text-amber-300/80 hover:text-amber-200 hover:bg-amber-500/10 bg-amber-500/5 border border-amber-400/20"
+                                        )}
+                                        title="BEGIN transaction"
+                                    >
+                                        <Activity className="w-3 h-3" />
+                                        <span>BEGIN</span>
+                                    </button>
+                                    <button
+                                        onClick={() => executePgTransactionCommand('COMMIT')}
+                                        disabled={isExecuting}
+                                        className={clsx(
+                                            "flex items-center gap-1.5 rounded transition-all px-2 py-1 text-[10px] font-medium active:scale-95",
+                                            isExecuting ? "opacity-30 cursor-not-allowed text-obsidian-muted bg-transparent border border-transparent" : "text-emerald-300/80 hover:text-emerald-200 hover:bg-emerald-500/10 bg-emerald-500/5 border border-emerald-400/20"
+                                        )}
+                                        title="COMMIT transaction"
+                                    >
+                                        <Check className="w-3 h-3" />
+                                        <span>COMMIT</span>
+                                    </button>
+                                    <button
+                                        onClick={() => executePgTransactionCommand('ROLLBACK')}
+                                        disabled={isExecuting}
+                                        className={clsx(
+                                            "flex items-center gap-1.5 rounded transition-all px-2 py-1 text-[10px] font-medium active:scale-95",
+                                            isExecuting ? "opacity-30 cursor-not-allowed text-obsidian-muted bg-transparent border border-transparent" : "text-red-300/80 hover:text-red-200 hover:bg-red-500/10 bg-red-500/5 border border-red-400/20"
+                                        )}
+                                        title="ROLLBACK transaction"
+                                    >
+                                        <RotateCcw className="w-3 h-3" />
+                                        <span>ROLLBACK</span>
+                                    </button>
+                                </>
+                            )}
 
                             {/* Divider */}
                             <div className="w-[1px] h-4 bg-white/10 mx-1" />
@@ -1778,8 +2692,8 @@ export default function DataExplorer() {
                                 onClick={formatSQL}
                                 disabled={isExecuting}
                                 className={clsx(
-                                    "flex items-center gap-1.5 rounded-full transition-all px-3 py-1 text-[11px] font-medium active:scale-95 border border-white/5",
-                                    isExecuting ? "opacity-30 cursor-not-allowed text-white/30 bg-transparent" : "text-white/50 hover:text-white/90 hover:bg-white/5 bg-white/5"
+                                    "flex items-center gap-1.5 rounded transition-all px-2.5 py-1 text-[11px] font-medium active:scale-95",
+                                    isExecuting ? "opacity-30 cursor-not-allowed text-obsidian-muted bg-transparent border border-transparent" : "text-obsidian-muted hover:text-white hover:bg-white/[0.05] bg-white/[0.02] border border-white/5"
                                 )}
                                 title="Format"
                             >
@@ -1790,8 +2704,8 @@ export default function DataExplorer() {
                                 onClick={executeExplain}
                                 disabled={isExecuting}
                                 className={clsx(
-                                    "flex items-center gap-1.5 rounded-full transition-all px-3 py-1 text-[11px] font-medium active:scale-95 border border-white/5",
-                                    isExecuting ? "opacity-30 cursor-not-allowed text-white/30 bg-transparent" : "text-white/50 hover:text-white/90 hover:bg-white/5 bg-white/5"
+                                    "flex items-center gap-1.5 rounded transition-all px-2.5 py-1 text-[11px] font-medium active:scale-95",
+                                    isExecuting ? "opacity-30 cursor-not-allowed text-obsidian-muted bg-transparent border border-transparent" : "text-obsidian-muted hover:text-white hover:bg-white/[0.05] bg-white/[0.02] border border-white/5"
                                 )}
                                 title="Explain"
                             >
@@ -1802,8 +2716,8 @@ export default function DataExplorer() {
                                 onClick={() => { setSaveQueryName(activeTab.name); setShowSaveDialog(true); }}
                                 disabled={isExecuting}
                                 className={clsx(
-                                    "flex items-center gap-1.5 rounded-full transition-all px-3 py-1 text-[11px] font-medium active:scale-95 border border-white/5",
-                                    isExecuting ? "opacity-30 cursor-not-allowed text-white/30 bg-transparent" : "text-white/50 hover:text-white/90 hover:bg-white/5 bg-white/5"
+                                    "flex items-center gap-1.5 rounded transition-all px-2.5 py-1 text-[11px] font-medium active:scale-95",
+                                    isExecuting ? "opacity-30 cursor-not-allowed text-obsidian-muted bg-transparent border border-transparent" : "text-obsidian-muted hover:text-white hover:bg-white/[0.05] bg-white/[0.02] border border-white/5"
                                 )}
                                 title="Save"
                             >
@@ -1835,7 +2749,7 @@ export default function DataExplorer() {
                                 <div className="w-[1px] h-4 bg-obsidian-border/50" />
                                 <div className="relative">
                                     <button
-                                        className="flex items-center gap-1.5 rounded-md bg-obsidian-panel border border-obsidian-border/50 hover:border-obsidian-border text-xs px-2.5 py-1.5 transition-colors active:scale-95 text-obsidian-muted hover:text-white"
+                                        className="flex items-center gap-1.5 rounded-md bg-white/[0.02] border border-white/5 hover:border-white/10 text-xs px-2.5 py-1.5 transition-colors active:scale-95 text-foreground/80 hover:text-white"
                                         onClick={(e) => {
                                             const rect = e.currentTarget.getBoundingClientRect();
                                             setLimitMenuPos({ top: rect.bottom + 4, right: window.innerWidth - rect.right });
@@ -1846,26 +2760,27 @@ export default function DataExplorer() {
                                         <span className="text-obsidian-purple font-semibold">{rowLimit ?? '∞'}</span>
                                         <ChevronDown className="w-3 h-3 opacity-70" />
                                     </button>
-                                    {showLimitMenu && (
+                                    {showLimitMenu && createPortal(
                                         <>
                                             <div className="fixed inset-0 z-[9998]" onClick={() => setShowLimitMenu(false)} />
-                                            <div className="fixed rounded-xl shadow-2xl z-[9999] py-1.5 min-w-[140px] overflow-hidden bg-obsidian-panel/90 backdrop-blur-xl border border-obsidian-border/80"
+                                            <div className="fixed rounded shadow-2xl z-[9999] py-1 min-w-[140px] overflow-hidden bg-[#09090b] border border-white/10"
                                                 style={{ top: limitMenuPos.top, right: limitMenuPos.right }}>
                                                 {[100, 500, 1000, 5000, null].map((val) => (
                                                     <button
                                                         key={val ?? 'none'}
                                                         className={clsx(
                                                             "w-full text-left flex items-center justify-between transition-colors px-3.5 py-1.5 text-xs font-medium",
-                                                            rowLimit === val ? "text-white bg-obsidian-purple/20 border-l-2 border-obsidian-purple" : "text-obsidian-muted hover:text-white hover:bg-white/5 border-l-2 border-transparent"
+                                                            rowLimit === val ? "text-white bg-white/[0.04] border-l-2 border-obsidian-info" : "text-obsidian-muted hover:text-white hover:bg-white/[0.02] border-l-2 border-transparent"
                                                         )}
                                                         onClick={() => { setRowLimit(val); setShowLimitMenu(false); }}
                                                     >
                                                         <span>{val ?? 'No Limit'}</span>
-                                                        {rowLimit === val && <span className="text-obsidian-purple text-[10px]">✓</span>}
+                                                        {rowLimit === val && <span className="text-obsidian-info text-[10px]">✓</span>}
                                                     </button>
                                                 ))}
                                             </div>
-                                        </>
+                                        </>,
+                                        document.body
                                     )}
                                 </div>
                             </div>
@@ -1960,38 +2875,40 @@ export default function DataExplorer() {
                             {/* Results Tab */}
                             {[{ id: 'results' as const, label: 'Results', icon: Terminal, count: activeTab.results?.data.length, isError: !!activeTab.error },
                             { id: 'history' as const, label: 'History', icon: History, count: queryHistory.length || undefined, isError: false },
-                            { id: 'queries' as const, label: 'Queries', icon: Search, count: trinoQueries.filter(q => q.state === 'RUNNING').length || undefined, isError: false },
+                            {
+                                id: 'queries' as const,
+                                label: 'Queries',
+                                icon: Search,
+                                count: (
+                                    engine === 'trino'
+                                        ? trinoQueries.filter(q => ['RUNNING', 'QUEUED', 'PLANNING', 'STARTING'].includes(String(q.state).toUpperCase())).length
+                                        : pgQueries.filter(q => String(q.state).toUpperCase() === 'ACTIVE').length
+                                ) || undefined,
+                                isError: false
+                            },
                             { id: 'saved' as const, label: 'Saved', icon: Save, count: savedQueries.length || undefined, isError: false },
                             { id: 'properties' as const, label: 'Properties', icon: Info, count: undefined, isError: false }].map(tab => {
                                 const Icon = tab.icon;
                                 const isActive = bottomPanel === tab.id;
-                                const activeColor = tab.id === 'results' && activeTab.error ? '#f87171' : 'rgba(255,255,255,0.8)';
+                                const isError = tab.id === 'results' && activeTab.error;
                                 return (
                                     <button
                                         key={tab.id}
                                         onClick={() => setBottomPanel(tab.id)}
-                                        className="flex items-center gap-1.5 transition-all relative"
-                                        style={{
-                                            padding: '0 10px',
-                                            height: 31,
-                                            fontSize: 11,
-                                            color: isActive ? activeColor : 'rgba(255,255,255,0.4)',
-                                            background: 'transparent',
-                                            border: 'none',
-                                            borderTop: isActive ? `1px solid ${activeColor}` : '1px solid transparent',
-                                            cursor: 'pointer',
-                                            fontWeight: isActive ? 500 : 400,
-                                        }}
+                                        className={clsx(
+                                            "flex items-center gap-1.5 transition-colors relative px-2.5 h-full text-[11px]",
+                                            isActive
+                                                ? isError ? "text-obsidian-danger border-t-2 border-obsidian-danger font-medium" : "text-foreground/80 border-t-2 border-obsidian-info font-medium"
+                                                : "text-obsidian-muted hover:text-white/70 border-t-2 border-transparent"
+                                        )}
                                     >
                                         <Icon className="w-3.5 h-3.5" />
                                         <span>{tab.label}</span>
                                         {tab.count !== undefined && tab.count > 0 && (
-                                            <span style={{
-                                                fontSize: 9, background: isActive ? (tab.id === 'results' && activeTab.error ? 'rgba(248,113,113,0.15)' : 'rgba(255,255,255,0.1)') : 'rgba(255,255,255,0.05)',
-                                                color: isActive ? activeColor : 'rgba(255,255,255,0.4)',
-                                                padding: '1px 5px', borderRadius: 4, fontFamily: 'monospace', marginLeft: 4,
-                                                border: `1px solid ${isActive ? (tab.id === 'results' && activeTab.error ? '#f8717140' : 'rgba(255,255,255,0.2)') : 'rgba(255,255,255,0.08)'}`,
-                                            }}>
+                                            <span className={clsx(
+                                                "text-[10px] font-mono px-2 py-0.5 rounded-full bg-white/[0.02] border border-white/5 ml-1",
+                                                isActive ? (isError ? "text-obsidian-danger" : "text-obsidian-muted") : "text-obsidian-muted"
+                                            )}>
                                                 {tab.count}
                                             </span>
                                         )}
@@ -2002,7 +2919,41 @@ export default function DataExplorer() {
                             <div className="ml-auto flex gap-1">
                                 {bottomPanel === 'results' && (
                                     <>
-                                        <button className="p-1.5 hover:bg-white/5 rounded-md text-obsidian-muted hover:text-white transition-colors" title="Filter"><Filter className="w-3.5 h-3.5" /></button>
+                                        <div className="relative">
+                                            <button
+                                                onClick={(e) => { e.stopPropagation(); setShowFilterMenu(prev => !prev); }}
+                                                className={clsx(
+                                                    "p-1.5 rounded-md transition-colors",
+                                                    showFilterMenu || resultFilter
+                                                        ? "bg-sky-500/15 text-sky-300"
+                                                        : "hover:bg-white/5 text-obsidian-muted hover:text-white"
+                                                )}
+                                                title="Filter rows"
+                                            >
+                                                <Filter className="w-3.5 h-3.5" />
+                                            </button>
+                                            {showFilterMenu && (
+                                                <div onClick={(e) => e.stopPropagation()} className="absolute right-0 top-full mt-1 w-64 rounded-xl shadow-2xl z-50 p-2.5" style={{ background: 'rgba(13,13,18,0.98)', border: '1px solid rgba(255,255,255,0.1)', backdropFilter: 'blur(20px)' }}>
+                                                    <input
+                                                        type="text"
+                                                        value={resultFilter}
+                                                        onChange={(e) => setResultFilter(e.target.value)}
+                                                        placeholder="Filter all columns..."
+                                                        className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1.5 text-[11px] text-white placeholder-obsidian-muted focus:outline-none focus:border-obsidian-info/50"
+                                                        autoFocus
+                                                    />
+                                                    <div className="flex items-center justify-between mt-2 text-[10px] text-white/40">
+                                                        <span>{sortedData.length} rows</span>
+                                                        <button
+                                                            onClick={() => { setResultFilter(''); setShowFilterMenu(false); }}
+                                                            className="px-2 py-1 rounded hover:bg-white/5 text-white/60 hover:text-white"
+                                                        >
+                                                            Clear
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
                                         <button onClick={executeQuery} className="p-1.5 hover:bg-white/5 rounded-md text-obsidian-muted hover:text-white transition-colors" title="Refresh"><RefreshCw className="w-3.5 h-3.5" /></button>
 
                                         {/* Export Dropdown */}
@@ -2056,10 +3007,35 @@ export default function DataExplorer() {
                             {/* ... (Existing table implementation details, keeping virtual scroll logic) */}
                             {bottomPanel === 'results' && (
                                 <>
+                                    {activeTab.resultSets && activeTab.resultSets.length > 1 && (
+                                        <div className="sticky top-0 z-40 flex items-center gap-1 px-2 py-1.5 bg-black/60 border-b border-white/5 backdrop-blur">
+                                            {activeTab.resultSets.map((set, idx) => (
+                                                <button
+                                                    key={`${set.name}_${idx}`}
+                                                    onClick={() => setActiveResultSet(idx)}
+                                                    className={clsx(
+                                                        "px-2.5 py-1 rounded-md text-[10px] font-medium transition-colors",
+                                                        activeTab.activeResultSetIndex === idx
+                                                            ? "bg-sky-500/20 text-sky-300 border border-sky-400/30"
+                                                            : "text-white/50 hover:text-white hover:bg-white/5 border border-transparent"
+                                                    )}
+                                                >
+                                                    {set.name}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    )}
                                     {activeTab.error ? (
-                                        <div className="absolute inset-0 flex flex-col items-center justify-center text-red-400 p-6 bg-red-500/5">
-                                            <XCircle className="w-8 h-8 mb-3 opacity-80" />
-                                            <div className="font-mono text-sm max-w-2xl text-center whitespace-pre-wrap">{activeTab.error}</div>
+                                        <div className="p-4">
+                                            <div className="rounded-lg border border-red-400/25 bg-red-500/10 p-3">
+                                                <div className="flex items-start gap-2.5">
+                                                    <XCircle className="w-4 h-4 mt-0.5 text-red-300 shrink-0" />
+                                                    <div className="min-w-0">
+                                                        <div className="text-[11px] font-semibold tracking-wide uppercase text-red-200/90">Query Error</div>
+                                                        <pre className="mt-1 text-[12px] font-mono text-red-100/90 whitespace-pre-wrap break-words">{activeTab.error}</pre>
+                                                    </div>
+                                                </div>
+                                            </div>
                                         </div>
                                     ) : !activeTab.results ? (
                                         <div className="flex items-center justify-center h-full text-obsidian-muted text-[11px] select-none">
@@ -2067,6 +3043,20 @@ export default function DataExplorer() {
                                                 <Terminal className="w-6 h-6" />
                                                 <span>No query results yet. Press <kbd className="bg-white/10 px-1 py-0.5 rounded ml-1 font-mono text-[9px] border border-white/20 shadow-sm">⌘↵</kbd> to execute.</span>
                                             </div>
+                                        </div>
+                                    ) : explainPlanTree ? (
+                                        <div className="p-4 overflow-auto">
+                                            <div className="text-[11px] text-white/70 mb-3 font-medium">Execution Plan</div>
+                                            <div className="rounded-lg border border-white/10 bg-white/[0.02] p-3">
+                                                {renderExplainNode(explainPlanTree)}
+                                            </div>
+                                        </div>
+                                    ) : explainPlanText ? (
+                                        <div className="p-4 overflow-auto">
+                                            <div className="text-[11px] text-white/70 mb-3 font-medium">Execution Plan (Text)</div>
+                                            <pre className="rounded-lg border border-white/10 bg-white/[0.02] p-3 text-[11px] leading-5 font-mono text-white/70 whitespace-pre-wrap break-words">
+                                                {explainPlanText}
+                                            </pre>
                                         </div>
                                     ) : (
                                         (() => {
@@ -2078,18 +3068,18 @@ export default function DataExplorer() {
                                             const bottomPad = (totalRows - endIdx) * ROW_HEIGHT;
 
                                             return (
-                                                <div className="min-w-max h-full">
+                                                <div className="inline-block min-w-full">
                                                     <table className="w-full border-collapse" style={{ tableLayout: 'fixed' }}>
-                                                        <thead className="sticky top-0 z-30 bg-black/20 backdrop-blur-md border-b border-white/5 text-left shadow-sm">
+                                                        <thead className="sticky top-0 z-30 bg-black/20 backdrop-blur-md border-b border-white/5 text-left">
                                                             <tr>
-                                                                <th className="w-10 px-1 py-1 text-center text-[9px] text-white/30 font-mono select-none bg-transparent sticky left-0 z-40 border-r border-white/5">#</th>
+                                                                <th className="w-10 px-1 py-2 text-center text-[10px] text-obsidian-muted/50 font-mono select-none bg-transparent sticky left-0 z-40 border-r border-white/5">#</th>
                                                                 {activeTab.results.columns.map((col: string, idx: number) => {
                                                                     const width = columnWidths[col] || 150;
                                                                     const isSorted = sortConfig.column === col;
                                                                     return (
                                                                         <th
                                                                             key={col}
-                                                                            className="relative px-3 py-2 text-[11px] font-semibold text-white/70 group select-none hover:text-white transition-colors"
+                                                                            className="relative p-2 px-3 text-[10px] text-obsidian-muted/70 font-medium uppercase tracking-wider group select-none hover:text-white transition-colors border-b border-white/5"
                                                                             style={{ width, minWidth: 60, maxWidth: 800 }}
                                                                             onClick={() => toggleSort(col)}
                                                                         >
@@ -2132,8 +3122,8 @@ export default function DataExplorer() {
                                                                     <tr
                                                                         key={i}
                                                                         className={clsx(
-                                                                            isSelected ? "bg-sky-500/10" : i % 2 === 0 ? 'bg-transparent' : 'bg-white/5',
-                                                                            "hover:bg-white/5 transition-colors group cursor-default border-b border-white/5"
+                                                                            isSelected ? "bg-white/[0.04]" : i % 2 === 0 ? 'bg-transparent' : 'bg-white/[0.015]',
+                                                                            "hover:bg-white/[0.02] transition-colors group cursor-default border-b border-white/5"
                                                                         )}
                                                                         style={{ height: ROW_HEIGHT }}
                                                                     >
@@ -2147,7 +3137,7 @@ export default function DataExplorer() {
                                                                                     key={col}
                                                                                     className={clsx(
                                                                                         "px-3 whitespace-nowrap overflow-hidden text-ellipsis cursor-text transition-colors",
-                                                                                        isCellSelected && "ring-1 ring-inset ring-sky-500/50 bg-sky-500/10 text-white font-medium"
+                                                                                        isCellSelected && "ring-1 ring-inset ring-white/20 bg-white/[0.04] text-white font-medium"
                                                                                     )}
                                                                                     style={{ maxWidth: columnWidths[col] || 150 }}
                                                                                     onClick={() => handleCellClick(i, col)}
@@ -2263,64 +3253,189 @@ export default function DataExplorer() {
                                             trinoQueries.length === 0 ? (
                                                 <div className="flex items-center justify-center p-8 text-obsidian-muted text-[11px]">No queries found.</div>
                                             ) : (
-                                                <table className="w-full text-left border-collapse">
-                                                    <thead className="sticky top-0 bg-black/80 backdrop-blur z-20 shadow-sm border-b border-obsidian-border/30 text-[10px] text-obsidian-muted tracking-wider uppercase font-semibold">
-                                                        <tr>
-                                                            <th className="px-3 py-2 w-10">St</th>
-                                                            <th className="px-3 py-2 w-24">State</th>
-                                                            <th className="px-3 py-2">SQL</th>
-                                                            <th className="px-3 py-2 w-20">Elapsed</th>
-                                                            <th className="px-3 py-2 w-20">Memory</th>
-                                                            <th className="px-3 py-2 w-20">Rows</th>
-                                                            <th className="px-3 py-2 w-12"></th>
-                                                        </tr>
-                                                    </thead>
-                                                    <tbody className="text-[11px]">
-                                                        {trinoQueries.map((q, idx) => (
-                                                            <tr
-                                                                key={q.queryId}
-                                                                className={clsx(
-                                                                    "border-b border-obsidian-border/30 transition-colors group",
-                                                                    idx % 2 === 0 ? "bg-obsidian-bg" : "bg-obsidian-panel/30",
-                                                                    "hover:bg-white/5"
-                                                                )}
-                                                            >
-                                                                <td className="px-3 py-2">
-                                                                    <div className={clsx(
-                                                                        "w-2 h-2 rounded-full mx-auto",
-                                                                        q.state === 'RUNNING' && "bg-blue-400 shadow-[0_0_6px_rgba(96,165,250,0.6)] animate-pulse",
-                                                                        q.state === 'FINISHED' && "bg-white/30",
-                                                                        q.state === 'FAILED' && "bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.6)]",
-                                                                        q.state === 'QUEUED' && "bg-yellow-400",
-                                                                    )} />
-                                                                </td>
-                                                                <td className="px-3 py-2">
-                                                                    <span className={clsx(
-                                                                        "px-1.5 py-0.5 rounded text-[9px] font-mono",
-                                                                        q.state === 'RUNNING' && "bg-blue-500/15 text-blue-300 border border-blue-500/20",
-                                                                        q.state === 'FINISHED' && "bg-white/5 text-white/40 border border-white/10",
-                                                                        q.state === 'FAILED' && "bg-red-500/15 text-red-300 border border-red-500/20",
-                                                                    )}>{q.state}</span>
-                                                                </td>
-                                                                <td className="px-3 py-2 font-mono truncate max-w-[300px] text-white/70 cursor-pointer" onClick={() => { updateQuery(q.query); setBottomPanel('results'); }} title={q.query}>{q.query}</td>
-                                                                <td className="px-3 py-2 text-obsidian-muted tabular-nums font-mono">{q.elapsedTime || '-'}</td>
-                                                                <td className="px-3 py-2 text-obsidian-muted tabular-nums font-mono">{q.peakMemory || '-'}</td>
-                                                                <td className="px-3 py-2 text-obsidian-muted tabular-nums font-mono">{q.processedRows?.toLocaleString() || '-'}</td>
-                                                                <td className="px-3 py-2">
-                                                                    {(q.state === 'RUNNING' || q.state === 'QUEUED' || q.state === 'PLANNING') && (
-                                                                        <button
-                                                                            onClick={() => killTrinoQuery(q.queryId)}
-                                                                            className="p-1 rounded hover:bg-red-500/20 text-red-400 transition-colors opacity-0 group-hover:opacity-100"
-                                                                            title="Kill query"
-                                                                        >
-                                                                            <Square className="w-3 h-3" />
-                                                                        </button>
-                                                                    )}
-                                                                </td>
-                                                            </tr>
-                                                        ))}
-                                                    </tbody>
-                                                </table>
+                                                <div className="h-full flex flex-col">
+                                                    <div className="overflow-auto custom-scrollbar">
+                                                        <table className="w-full text-left border-collapse">
+                                                            <thead className="sticky top-0 bg-black/80 backdrop-blur z-20 shadow-sm border-b border-obsidian-border/30 text-[10px] text-obsidian-muted tracking-wider uppercase font-semibold">
+                                                                <tr>
+                                                                    <th className="px-3 py-2 w-10">St</th>
+                                                                    <th className="px-3 py-2 w-24">State</th>
+                                                                    <th className="px-3 py-2">SQL</th>
+                                                                    <th className="px-3 py-2 w-20">Elapsed</th>
+                                                                    <th className="px-3 py-2 w-20">Memory</th>
+                                                                    <th className="px-3 py-2 w-20">Rows</th>
+                                                                    <th className="px-3 py-2 w-20">Ops</th>
+                                                                </tr>
+                                                            </thead>
+                                                            <tbody className="text-[11px]">
+                                                                {trinoQueries.map((q, idx) => (
+                                                                    <tr
+                                                                        key={q.queryId}
+                                                                        className={clsx(
+                                                                            "border-b border-obsidian-border/30 transition-colors group",
+                                                                            q.queryId === selectedTrinoQueryId ? "bg-sky-500/10" : idx % 2 === 0 ? "bg-obsidian-bg" : "bg-obsidian-panel/30",
+                                                                            "hover:bg-white/5"
+                                                                        )}
+                                                                    >
+                                                                        <td className="px-3 py-2">
+                                                                            <div className={clsx(
+                                                                                "w-2 h-2 rounded-full mx-auto",
+                                                                                (q.state === 'RUNNING' || q.state === 'PLANNING' || q.state === 'STARTING') && "bg-blue-400 shadow-[0_0_6px_rgba(96,165,250,0.6)] animate-pulse",
+                                                                                q.state === 'FINISHED' && "bg-white/30",
+                                                                                q.state === 'FAILED' && "bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.6)]",
+                                                                                q.state === 'QUEUED' && "bg-yellow-400",
+                                                                            )} />
+                                                                        </td>
+                                                                        <td className="px-3 py-2">
+                                                                            <span className={clsx(
+                                                                                "px-1.5 py-0.5 rounded text-[9px] font-mono",
+                                                                                (q.state === 'RUNNING' || q.state === 'PLANNING' || q.state === 'STARTING') && "bg-blue-500/15 text-blue-300 border border-blue-500/20",
+                                                                                q.state === 'FINISHED' && "bg-white/5 text-white/40 border border-white/10",
+                                                                                q.state === 'FAILED' && "bg-red-500/15 text-red-300 border border-red-500/20",
+                                                                                q.state === 'QUEUED' && "bg-yellow-500/15 text-yellow-300 border border-yellow-500/20",
+                                                                            )}>{q.state}</span>
+                                                                        </td>
+                                                                        <td className="px-3 py-2 font-mono truncate max-w-[300px] text-white/70 cursor-pointer" onClick={() => { updateQuery(q.query); setBottomPanel('results'); }} title={q.query}>{q.queryShort || q.query}</td>
+                                                                        <td className="px-3 py-2 text-obsidian-muted tabular-nums font-mono">{q.elapsedTime || '-'}</td>
+                                                                        <td className="px-3 py-2 text-obsidian-muted tabular-nums font-mono">{q.peakMemory || '-'}</td>
+                                                                        <td className="px-3 py-2 text-obsidian-muted tabular-nums font-mono">{q.processedRows?.toLocaleString() || '-'}</td>
+                                                                        <td className="px-3 py-2">
+                                                                            <div className="flex items-center gap-1">
+                                                                                <button
+                                                                                    onClick={() => fetchTrinoQueryDetail(q.queryId)}
+                                                                                    className="p-1 rounded hover:bg-sky-500/20 text-sky-300/80 hover:text-sky-200 transition-colors opacity-60 group-hover:opacity-100"
+                                                                                    title="Show stage/task/operator details"
+                                                                                >
+                                                                                    <ListTree className="w-3 h-3" />
+                                                                                </button>
+                                                                                {(q.state === 'RUNNING' || q.state === 'QUEUED' || q.state === 'PLANNING' || q.state === 'STARTING') && (
+                                                                                    <button
+                                                                                        onClick={() => killTrinoQuery(q.queryId)}
+                                                                                        className="p-1 rounded hover:bg-red-500/20 text-red-400 transition-colors opacity-60 group-hover:opacity-100"
+                                                                                        title="Kill query"
+                                                                                    >
+                                                                                        <Square className="w-3 h-3" />
+                                                                                    </button>
+                                                                                )}
+                                                                            </div>
+                                                                        </td>
+                                                                    </tr>
+                                                                ))}
+                                                            </tbody>
+                                                        </table>
+                                                    </div>
+
+                                                    {selectedTrinoQueryId && (
+                                                        <div className="border-t border-white/10 bg-black/30 p-3 space-y-2">
+                                                            <div className="flex items-center justify-between">
+                                                                <div className="text-[11px] font-semibold text-white/70">Query Detail: {selectedTrinoQueryId}</div>
+                                                                <div className="flex items-center gap-2">
+                                                                    <button
+                                                                        onClick={() => fetchTrinoQueryDetail(selectedTrinoQueryId)}
+                                                                        className="text-[10px] px-2 py-1 rounded hover:bg-white/5 text-white/60 hover:text-white"
+                                                                    >
+                                                                        Reload Detail
+                                                                    </button>
+                                                                    <button
+                                                                        onClick={() => { setSelectedTrinoQueryId(null); setTrinoQueryDetail(null); setSelectedTrinoStageId(null); }}
+                                                                        className="text-[10px] px-2 py-1 rounded hover:bg-white/5 text-white/60 hover:text-white"
+                                                                    >
+                                                                        Close
+                                                                    </button>
+                                                                </div>
+                                                            </div>
+
+                                                            {trinoQueryDetailLoading ? (
+                                                                <div className="text-[11px] text-white/40 flex items-center gap-2"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading query detail...</div>
+                                                            ) : !trinoQueryDetail ? (
+                                                                <div className="text-[11px] text-white/40">No detail loaded.</div>
+                                                            ) : (
+                                                                <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                                                                    <div className="rounded-lg border border-white/10 bg-white/[0.02] p-2.5">
+                                                                        <div className="text-[10px] uppercase tracking-wider text-white/40 mb-2">Stages</div>
+                                                                        <div className="space-y-1 max-h-52 overflow-auto custom-scrollbar">
+                                                                            {trinoDetailStages.map(stage => (
+                                                                                <button
+                                                                                    key={stage.stageId}
+                                                                                    onClick={() => setSelectedTrinoStageId(stage.stageId)}
+                                                                                    className={clsx(
+                                                                                        "w-full text-left px-2 py-1.5 rounded border transition-colors text-[10px] font-mono",
+                                                                                        selectedTrinoStage?.stageId === stage.stageId
+                                                                                            ? "bg-sky-500/15 border-sky-400/30 text-sky-200"
+                                                                                            : "bg-white/[0.02] border-white/10 text-white/60 hover:text-white hover:bg-white/[0.05]"
+                                                                                    )}
+                                                                                    style={{ paddingLeft: 8 + stage.depth * 14 }}
+                                                                                >
+                                                                                    <div className="flex items-center justify-between gap-2">
+                                                                                        <span>Stage {stage.stageId}</span>
+                                                                                        <span>{stage.completedTaskCount}/{stage.taskCount} tasks</span>
+                                                                                    </div>
+                                                                                    <div className="text-[9px] opacity-70">{stage.state}</div>
+                                                                                </button>
+                                                                            ))}
+                                                                        </div>
+                                                                    </div>
+
+                                                                    <div className="rounded-lg border border-white/10 bg-white/[0.02] p-2.5">
+                                                                        <div className="text-[10px] uppercase tracking-wider text-white/40 mb-2">Tasks ({selectedTrinoStageTasks.length})</div>
+                                                                        <div className="max-h-52 overflow-auto custom-scrollbar">
+                                                                            {selectedTrinoStageTasks.length === 0 ? (
+                                                                                <div className="text-[10px] text-white/40">No task details available for this stage.</div>
+                                                                            ) : (
+                                                                                <table className="w-full text-[10px]">
+                                                                                    <thead className="text-white/40">
+                                                                                        <tr>
+                                                                                            <th className="text-left py-1 pr-2">Task</th>
+                                                                                            <th className="text-left py-1 pr-2">State</th>
+                                                                                            <th className="text-left py-1">Node</th>
+                                                                                        </tr>
+                                                                                    </thead>
+                                                                                    <tbody>
+                                                                                        {selectedTrinoStageTasks.slice(0, 200).map((task: any, idx: number) => (
+                                                                                            <tr key={`${task?.taskStatus?.taskId || task?.taskId || idx}`} className="border-t border-white/5">
+                                                                                                <td className="py-1 pr-2 text-white/70 font-mono truncate max-w-[180px]">{task?.taskStatus?.taskId || task?.taskId || `task_${idx + 1}`}</td>
+                                                                                                <td className="py-1 pr-2 text-white/60">{task?.taskStatus?.state || task?.state || '-'}</td>
+                                                                                                <td className="py-1 text-white/40">{task?.taskStatus?.self || task?.nodeId || '-'}</td>
+                                                                                            </tr>
+                                                                                        ))}
+                                                                                    </tbody>
+                                                                                </table>
+                                                                            )}
+                                                                        </div>
+                                                                    </div>
+
+                                                                    <div className="rounded-lg border border-white/10 bg-white/[0.02] p-2.5 lg:col-span-2">
+                                                                        <div className="text-[10px] uppercase tracking-wider text-white/40 mb-2">Operators ({selectedTrinoStageOperators.length})</div>
+                                                                        <div className="max-h-44 overflow-auto custom-scrollbar">
+                                                                            {selectedTrinoStageOperators.length === 0 ? (
+                                                                                <div className="text-[10px] text-white/40">No operator summaries available for this stage.</div>
+                                                                            ) : (
+                                                                                <table className="w-full text-[10px]">
+                                                                                    <thead className="text-white/40">
+                                                                                        <tr>
+                                                                                            <th className="text-left py-1 pr-2">Operator</th>
+                                                                                            <th className="text-left py-1 pr-2">Input Rows</th>
+                                                                                            <th className="text-left py-1">CPU</th>
+                                                                                        </tr>
+                                                                                    </thead>
+                                                                                    <tbody>
+                                                                                        {selectedTrinoStageOperators.slice(0, 300).map((op: any, idx: number) => (
+                                                                                            <tr key={`${op.operatorId || op.planNodeId || idx}`} className="border-t border-white/5">
+                                                                                                <td className="py-1 pr-2 text-white/70">{op.operatorType || op.operator || op.planNodeId || `operator_${idx + 1}`}</td>
+                                                                                                <td className="py-1 pr-2 text-white/60">{(op.inputPositions ?? op.addInputCalls ?? op.inputRows ?? '-').toString()}</td>
+                                                                                                <td className="py-1 text-white/40">{op.totalCpuTime || op.cpuTime || '-'}</td>
+                                                                                            </tr>
+                                                                                        ))}
+                                                                                    </tbody>
+                                                                                </table>
+                                                                            )}
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    )}
+                                                </div>
                                             )
                                         ) : (
                                             /* ── PostgreSQL Queries ── */
@@ -2374,7 +3489,7 @@ export default function DataExplorer() {
                                                                         <button
                                                                             onClick={() => killPgQuery(q.pid)}
                                                                             className="p-1 rounded hover:bg-red-500/20 text-red-400 transition-colors opacity-0 group-hover:opacity-100"
-                                                                            title="Terminate backend (kill query)"
+                                                                            title="Cancel query (terminate fallback)"
                                                                         >
                                                                             <Square className="w-3 h-3" />
                                                                         </button>
@@ -2554,13 +3669,30 @@ export default function DataExplorer() {
                         )}
                     </div>
                     <div className="flex items-center gap-4">
+                        {engine === 'postgres' && activeTab.results?.stats?.inTransaction && (
+                            <span className="flex items-center gap-1.5 text-amber-300/90 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-400/20">
+                                <Activity className="w-3 h-3" /> TX OPEN
+                            </span>
+                        )}
                         {activeTab.results?.stats && (
                             <span className="flex items-center gap-1.5 text-sky-400/80 bg-sky-400/10 px-2 py-0.5 rounded border border-sky-400/20 shadow-inner">
                                 <Zap className="w-3 h-3 fill-current brightness-150" />
                                 {activeTab.results.stats.processedBytes ? (activeTab.results.stats.processedBytes / 1024 / 1024).toFixed(2) + ' MB' : 'Cached'}
                             </span>
                         )}
-                        <span className="text-white/60">{activeTab.results ? `${activeTab.results.data.length} rows` : ''}</span>
+                        {activeTab.results?.stats?.truncated && (
+                            <span className="flex items-center gap-1.5 text-amber-300/90 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-400/20">
+                                <AlertTriangle className="w-3 h-3" />
+                                capped at {activeTab.results.stats.maxRows} rows
+                            </span>
+                        )}
+                        <span className="text-white/60">
+                            {activeTab.results
+                                ? resultFilter
+                                    ? `${sortedData.length}/${activeTab.results.data.length} rows`
+                                    : `${activeTab.results.data.length} rows`
+                                : ''}
+                        </span>
                         <div className="w-[1px] h-3 bg-white/10" />
                         <span className="text-white/60">UTF-8</span>
                     </div>
