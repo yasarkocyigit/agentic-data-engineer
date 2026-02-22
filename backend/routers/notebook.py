@@ -2,23 +2,30 @@
 Notebook Router — Interactive code execution via Jupyter Kernel Gateway.
 Provides kernel session management and cell execution for the Notebook UI.
 
-Falls back to local subprocess execution when Kernel Gateway is unavailable.
+Falls back to a local in-memory execution engine when Kernel Gateway is unavailable.
 """
+
 import asyncio
+import ast
+import contextlib
+import glob
+import importlib
+import io
 import json
 import logging
 import os
+import re
+import threading
+import traceback
 import uuid
-import subprocess
-import sys
-import tempfile
-import time
-from datetime import datetime
+from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
+from urllib.parse import urlparse
 
 import httpx
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -27,6 +34,62 @@ router = APIRouter()
 
 KERNEL_GW_URL = os.getenv("JUPYTER_KERNEL_GW_URL", "http://localhost:8888")
 NOTEBOOKS_DIR = os.getenv("NOTEBOOKS_DIR", os.path.join(os.path.dirname(__file__), "..", "..", "notebooks"))
+
+TRINO_HOST = os.getenv("TRINO_HOST", "localhost")
+TRINO_PORT = int(os.getenv("TRINO_PORT", "8083"))
+TRINO_USER = os.getenv("TRINO_USER", "admin")
+TRINO_CATALOG = os.getenv("TRINO_CATALOG", "iceberg")
+TRINO_SCHEMA = os.getenv("TRINO_SCHEMA", "default")
+
+SPARK_MASTER_URL = os.getenv("SPARK_MASTER_URL", "spark://spark-master:7077")
+SPARK_APP_NAME = os.getenv("SPARK_APP_NAME", "openclaw-notebook")
+SPARK_DRIVER_HOST = os.getenv("SPARK_DRIVER_HOST")
+SPARK_DRIVER_BIND_ADDRESS = os.getenv("SPARK_DRIVER_BIND_ADDRESS")
+SPARK_SQL_SHUFFLE_PARTITIONS = os.getenv("SPARK_SQL_SHUFFLE_PARTITIONS", "8")
+SPARK_DEFAULT_DATABASE = os.getenv("SPARK_DEFAULT_DATABASE", "default")
+SPARK_S3_ENDPOINT = os.getenv("SPARK_S3_ENDPOINT", os.getenv("MINIO_ENDPOINT", "http://minio:9000"))
+SPARK_S3_ACCESS_KEY = os.getenv("SPARK_S3_ACCESS_KEY", os.getenv("MINIO_ROOT_USER", "admin"))
+SPARK_S3_SECRET_KEY = os.getenv("SPARK_S3_SECRET_KEY", os.getenv("MINIO_ROOT_PASSWORD", "admin123"))
+SPARK_S3_PATH_STYLE_ACCESS = (os.getenv("SPARK_S3_PATH_STYLE_ACCESS", "true") or "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+SPARK_EXTRA_JARS = os.getenv(
+    "SPARK_EXTRA_JARS",
+    "/workspace/jars/hadoop-aws-3.4.1.jar,/workspace/jars/bundle-2.31.1.jar",
+)
+SPARK_DRIVER_JARS_DIR = os.getenv("SPARK_DRIVER_JARS_DIR", "/workspace/jars")
+SPARK_EXECUTOR_JARS_DIR = os.getenv("SPARK_EXECUTOR_JARS_DIR", "/opt/spark/extra-jars")
+SPARK_DELTA_ENABLED = (os.getenv("SPARK_DELTA_ENABLED", "true") or "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+SPARK_DELTA_PACKAGE = os.getenv("SPARK_DELTA_PACKAGE", "io.delta:delta-spark_2.13:4.0.1")
+SPARK_EXTRA_PACKAGES = os.getenv("SPARK_EXTRA_PACKAGES", "")
+SPARK_JARS_REPOSITORIES = os.getenv("SPARK_JARS_REPOSITORIES", "")
+NOTEBOOK_SQL_ENGINE = (os.getenv("NOTEBOOK_SQL_ENGINE", "spark") or "spark").strip().lower()
+if NOTEBOOK_SQL_ENGINE not in {"spark", "trino"}:
+    NOTEBOOK_SQL_ENGINE = "spark"
+NOTEBOOK_USE_GATEWAY = (os.getenv("NOTEBOOK_USE_GATEWAY", "false") or "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+
+try:
+    NOTEBOOK_SESSION_TTL_SECONDS = max(300, int(os.getenv("NOTEBOOK_SESSION_TTL_SECONDS", "7200")))
+except ValueError:
+    NOTEBOOK_SESSION_TTL_SECONDS = 7200
+
+try:
+    NOTEBOOK_TABLE_ROW_LIMIT = max(50, int(os.getenv("NOTEBOOK_TABLE_ROW_LIMIT", "500")))
+except ValueError:
+    NOTEBOOK_TABLE_ROW_LIMIT = 500
 
 # Ensure notebooks directory exists
 Path(NOTEBOOKS_DIR).mkdir(parents=True, exist_ok=True)
@@ -39,30 +102,100 @@ class ExecuteRequest(BaseModel):
     kernel_id: Optional[str] = None
 
 
-class NotebookCell(BaseModel):
-    id: str
-    cell_type: str = "code"  # "code" or "markdown"
-    source: str = ""
-    language: str = "python"  # "python" or "sql"
-    outputs: list = []
-    execution_count: Optional[int] = None
-
-
 class SaveNotebookRequest(BaseModel):
     name: str
     cells: list[dict]
 
 
+class RenameNotebookRequest(BaseModel):
+    old_name: str
+    new_name: str
+
+
 # ─── In-Memory Session Store ───
-# Maps session_id -> { kernel_id, created_at, last_used }
-_sessions: dict[str, dict] = {}
+# session_id -> { kernel_id, created_at, last_used, mode }
+_sessions: dict[str, dict[str, Any]] = {}
 _execution_counts: dict[str, int] = {}
+_local_namespaces: dict[str, dict[str, Any]] = {}
+_session_locks: dict[str, asyncio.Lock] = {}
+_spark_session: Any = None
+_spark_session_lock = threading.Lock()
+_spark_query_lock = threading.Lock()
 
 
 # ─── Helpers ───
 
+
+def _now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _now_iso() -> str:
+    return _now_utc().isoformat()
+
+
+def _parse_iso(value: Any) -> Optional[datetime]:
+    if not isinstance(value, str):
+        return None
+    try:
+        dt = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _sanitize_notebook_name(value: str) -> str:
+    return "".join(c for c in str(value) if c.isalnum() or c in "-_ ").strip()
+
+
+def _require_valid_notebook_name(name: str) -> str:
+    original = str(name).strip()
+    safe = _sanitize_notebook_name(original)
+    if not safe or safe != original:
+        raise HTTPException(status_code=400, detail="Invalid notebook name")
+    return safe
+
+
+def _touch_session(session_id: str) -> None:
+    session = _sessions.get(session_id)
+    if session:
+        session["last_used"] = _now_iso()
+
+
+async def _cleanup_stale_sessions() -> int:
+    """Remove stale local/gateway sessions to avoid kernel leaks."""
+    now = _now_utc()
+    stale_ids: list[str] = []
+
+    for sid, info in list(_sessions.items()):
+        last_seen = _parse_iso(info.get("last_used")) or _parse_iso(info.get("created_at"))
+        if last_seen is None:
+            stale_ids.append(sid)
+            continue
+        age = (now - last_seen).total_seconds()
+        if age > NOTEBOOK_SESSION_TTL_SECONDS:
+            stale_ids.append(sid)
+
+    for sid in stale_ids:
+        info = _sessions.pop(sid, None)
+        _execution_counts.pop(sid, None)
+        _local_namespaces.pop(sid, None)
+        _session_locks.pop(sid, None)
+        if info and info.get("mode") == "gateway" and info.get("kernel_id"):
+            try:
+                await _kg_request("DELETE", f"/api/kernels/{info['kernel_id']}")
+            except Exception:
+                pass
+
+    return len(stale_ids)
+
+
 async def _kernel_gw_available() -> bool:
     """Check if Jupyter Kernel Gateway is reachable."""
+    if not NOTEBOOK_USE_GATEWAY:
+        return False
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
             resp = await client.get(f"{KERNEL_GW_URL}/api")
@@ -80,11 +213,19 @@ async def _kg_request(method: str, path: str, **kwargs) -> dict:
         return resp.json() if resp.text else {}
 
 
+def _kernel_ws_url(kernel_id: str) -> str:
+    parsed = urlparse(KERNEL_GW_URL)
+    if not parsed.netloc:
+        parsed = urlparse(f"http://{KERNEL_GW_URL}")
+    scheme = "wss" if parsed.scheme == "https" else "ws"
+    return f"{scheme}://{parsed.netloc}/api/kernels/{kernel_id}/channels"
+
+
 async def _execute_via_gateway(kernel_id: str, code: str) -> dict:
     """Execute code via Kernel Gateway WebSocket protocol."""
     import websockets  # type: ignore
 
-    ws_url = f"ws://{KERNEL_GW_URL.replace('http://', '')}/api/kernels/{kernel_id}/channels"
+    ws_url = _kernel_ws_url(kernel_id)
 
     msg_id = str(uuid.uuid4())
     execute_msg = {
@@ -93,7 +234,7 @@ async def _execute_via_gateway(kernel_id: str, code: str) -> dict:
             "msg_type": "execute_request",
             "username": "openclaw",
             "session": str(uuid.uuid4()),
-            "date": datetime.utcnow().isoformat() + "Z",
+            "date": _now_iso(),
             "version": "5.3",
         },
         "parent_header": {},
@@ -110,7 +251,7 @@ async def _execute_via_gateway(kernel_id: str, code: str) -> dict:
         "channel": "shell",
     }
 
-    outputs = []
+    outputs: list[dict[str, Any]] = []
     status = "ok"
     execution_count = None
 
@@ -118,9 +259,8 @@ async def _execute_via_gateway(kernel_id: str, code: str) -> dict:
         async with websockets.connect(ws_url) as ws:
             await ws.send(json.dumps(execute_msg))
 
-            # Collect responses until we get execute_reply
-            deadline = time.time() + 60  # 60s timeout
-            while time.time() < deadline:
+            deadline = _now_utc().timestamp() + 60
+            while _now_utc().timestamp() < deadline:
                 try:
                     raw = await asyncio.wait_for(ws.recv(), timeout=30.0)
                     msg = json.loads(raw)
@@ -166,7 +306,7 @@ async def _execute_via_gateway(kernel_id: str, code: str) -> dict:
                     break
 
     except Exception as e:
-        logger.error(f"WebSocket execution error: {e}")
+        logger.error("WebSocket execution error: %s", e)
         status = "error"
         outputs.append({
             "output_type": "error",
@@ -182,339 +322,691 @@ async def _execute_via_gateway(kernel_id: str, code: str) -> dict:
     }
 
 
+def _strip_sql_line_comment(line: str) -> str:
+    """Remove -- comments while preserving quoted strings."""
+    result: list[str] = []
+    i = 0
+    in_single = False
+    in_double = False
+
+    while i < len(line):
+        ch = line[i]
+        nxt = line[i + 1] if i + 1 < len(line) else ""
+
+        if in_single:
+            result.append(ch)
+            if ch == "'":
+                if nxt == "'":
+                    result.append(nxt)
+                    i += 2
+                    continue
+                in_single = False
+            i += 1
+            continue
+
+        if in_double:
+            result.append(ch)
+            if ch == '"':
+                in_double = False
+            i += 1
+            continue
+
+        if ch == "'":
+            in_single = True
+            result.append(ch)
+            i += 1
+            continue
+
+        if ch == '"':
+            in_double = True
+            result.append(ch)
+            i += 1
+            continue
+
+        if ch == "-" and nxt == "-":
+            break
+
+        result.append(ch)
+        i += 1
+
+    return "".join(result)
+
+
 def _sanitize_sql(raw_sql: str) -> str:
-    """Clean SQL for Trino: strip comments, trailing semicolons, and extra whitespace."""
-    lines = raw_sql.split('\n')
-    cleaned_lines = []
-    for line in lines:
-        # Remove single-line comments (-- ...)
-        comment_idx = line.find('--')
-        if comment_idx >= 0:
-            line = line[:comment_idx]
-        line = line.rstrip()
-        if line:
-            cleaned_lines.append(line)
-    sql = ' '.join(cleaned_lines).strip()
-    # Remove trailing semicolons (Trino doesn't accept them)
-    while sql.endswith(';'):
-        sql = sql[:-1].strip()
+    """Clean SQL for Trino: strip comments, trailing semicolons, and empty lines."""
+    cleaned_lines: list[str] = []
+    for line in raw_sql.split("\n"):
+        no_comment = _strip_sql_line_comment(line).rstrip()
+        if no_comment:
+            cleaned_lines.append(no_comment)
+
+    sql = "\n".join(cleaned_lines).strip()
+    while sql.endswith(";"):
+        sql = sql[:-1].rstrip()
     return sql
 
 
-def _execute_local(code: str, session_id: str) -> dict:
-    """Fallback: Execute Python code via local subprocess."""
-    _execution_counts.setdefault(session_id, 0)
-    _execution_counts[session_id] += 1
-    exec_count = _execution_counts[session_id]
+def _discover_spark_jars() -> list[str]:
+    if not SPARK_EXTRA_JARS:
+        return []
 
-    trino_host = os.getenv("TRINO_HOST", "localhost")
-    trino_port = os.getenv("TRINO_PORT", "8083")
-    minio_endpoint = os.getenv("MINIO_ENDPOINT", "http://localhost:9000")
-    minio_access = os.getenv("MINIO_ACCESS_KEY", os.getenv("AWS_ACCESS_KEY_ID", "admin"))
-    minio_secret = os.getenv("MINIO_SECRET_KEY", os.getenv("AWS_SECRET_ACCESS_KEY", "admin123"))
+    seen: set[str] = set()
+    discovered: list[str] = []
 
-    # Detect SQL magic
-    stripped = code.strip()
-    if stripped.startswith("%%sql"):
-        raw_sql = stripped[len("%%sql"):].strip()
-        sql = _sanitize_sql(raw_sql)
-        # Escape single quotes for Python string embedding
-        sql_escaped = sql.replace("'", "\\'")
-        code = f"""
-import trino.dbapi as trino_db
-import json
-from decimal import Decimal
-from datetime import datetime, date
+    for token in [item.strip() for item in SPARK_EXTRA_JARS.split(",") if item.strip()]:
+        candidates = glob.glob(token) if any(ch in token for ch in "*?[]") else [token]
+        for path in candidates:
+            if os.path.isfile(path) and path not in seen:
+                seen.add(path)
+                discovered.append(path)
 
-class _TrinoEncoder(json.JSONEncoder):
-    def default(self, obj):
-        if isinstance(obj, Decimal):
-            return float(obj)
-        if isinstance(obj, (datetime, date)):
-            return obj.isoformat()
-        if isinstance(obj, bytes):
-            return obj.decode('utf-8', errors='replace')
-        return super().default(obj)
+    return sorted(discovered)
 
-conn = trino_db.connect(host='{trino_host}', port={trino_port}, user='admin', catalog='iceberg', schema='default')
-cur = conn.cursor()
-cur.execute('{sql_escaped}')
-rows = cur.fetchall()
-cols = [d[0] for d in cur.description] if cur.description else []
-print("__TABLE_START__")
-print(json.dumps({{"columns": cols, "rows": [list(r) for r in rows[:500]]}}, cls=_TrinoEncoder))
-print("__TABLE_END__")
-conn.close()
-"""
-    else:
-        # For Python cells — comprehensive Databricks-like preamble
-        preamble = f"""
-import os as _os, json as _json, sys as _sys
-_os.environ.setdefault('MINIO_ENDPOINT', '{minio_endpoint}')
-_os.environ.setdefault('AWS_ACCESS_KEY_ID', '{minio_access}')
-_os.environ.setdefault('AWS_SECRET_ACCESS_KEY', '{minio_secret}')
 
-import pandas as pd
-import numpy as np
-import pyarrow as pa
-import pyarrow.parquet as pq
-import s3fs as _s3fs
-import trino.dbapi as _trino_db
+def _build_spark_classpath(jars: list[str], base_dir: str) -> str:
+    if not jars:
+        return ""
+    mapped = [os.path.join(base_dir, os.path.basename(jar)) for jar in jars]
+    return ":".join(mapped)
 
-# ─── Storage FileSystem ───
-_fs = _s3fs.S3FileSystem(
-    key='{minio_access}', secret='{minio_secret}',
-    endpoint_url='{minio_endpoint}', use_ssl=False,
-)
 
-# ─── Trino Connection ───
-def _get_trino_conn():
-    return _trino_db.connect(host='{trino_host}', port={trino_port}, user='admin', catalog='iceberg', schema='default')
-
-def query_trino(sql):
-    \"\"\"Execute SQL via Trino, return (columns, rows).\"\"\"
-    c = _get_trino_conn(); cur = c.cursor(); cur.execute(sql)
-    rows = cur.fetchall(); cols = [d[0] for d in cur.description] if cur.description else []
-    c.close(); return cols, rows
-
-def query(sql):
-    \"\"\"Execute SQL via Trino → pandas DataFrame.\"\"\"
-    cols, rows = query_trino(sql)
-    return pd.DataFrame(rows, columns=cols)
-
-def sql(statement):
-    \"\"\"Execute a Trino DDL/DML statement (CREATE TABLE, INSERT, DROP, etc).\"\"\"
-    c = _get_trino_conn(); cur = c.cursor(); cur.execute(statement)
+def _spark_session_usable(session: Any) -> bool:
+    if session is None:
+        return False
     try:
-        rows = cur.fetchall(); cols = [d[0] for d in cur.description] if cur.description else []
-        c.close(); return pd.DataFrame(rows, columns=cols) if cols else None
+        spark_context = session.sparkContext
+        jsc = getattr(spark_context, "_jsc", None)
+        if jsc is None:
+            return False
+        return not bool(jsc.sc().isStopped())
     except Exception:
-        c.close(); return None
+        return False
 
-# ─── Read Helpers ───
-def read_parquet(path, **kw):
-    \"\"\"Read parquet from MinIO → DataFrame. Example: read_parquet('silver/clean_orders')\"\"\"
-    return pq.read_table(path, filesystem=_fs, **kw).to_pandas()
 
-def read_csv(path, **kw):
-    \"\"\"Read CSV from MinIO → DataFrame. Example: read_csv('bronze/data.csv')\"\"\"
-    with _fs.open(path, 'r') as f: return pd.read_csv(f, **kw)
-
-def read_json(path, **kw):
-    \"\"\"Read JSON/JSONL from MinIO → DataFrame.\"\"\"
-    with _fs.open(path, 'r') as f: return pd.read_json(f, **kw)
-
-def read_delta(path):
-    \"\"\"Read a Delta table from MinIO → DataFrame. Example: read_delta('silver/orders_delta')\"\"\"
-    from deltalake import DeltaTable as _DT
-    dt = _DT(path, storage_options={{
-        'AWS_ACCESS_KEY_ID': '{minio_access}', 'AWS_SECRET_ACCESS_KEY': '{minio_secret}',
-        'AWS_ENDPOINT_URL': '{minio_endpoint}', 'AWS_ALLOW_HTTP': 'true',
-        'AWS_S3_ALLOW_UNSAFE_RENAME': 'true', 'AWS_REGION': 'us-east-1',
-    }})
-    return dt.to_pandas()
-
-def read_iceberg(table_name, limit=None):
-    \"\"\"Read an Iceberg table via Trino → DataFrame. Example: read_iceberg('silver.clean_orders')\"\"\"
-    q = f'SELECT * FROM iceberg.{{table_name}}'
-    if limit: q += f' LIMIT {{limit}}'
-    return query(q)
-
-# ─── Write Helpers ───
-def write_parquet(df, path, **kw):
-    \"\"\"Write DataFrame as parquet to MinIO. Example: write_parquet(df, 'silver/my_table/')\"\"\"
-    table = pa.Table.from_pandas(df)
-    pq.write_to_dataset(table, root_path=path, filesystem=_fs, **kw)
-    print(f"✅ Written {{len(df)}} rows as parquet → {{path}}")
-
-def write_csv(df, path, **kw):
-    \"\"\"Write DataFrame as CSV to MinIO.\"\"\"
-    with _fs.open(path, 'w') as f: df.to_csv(f, index=False, **kw)
-    print(f"✅ Written {{len(df)}} rows as CSV → {{path}}")
-
-def write_delta(df, path, mode='overwrite', **kw):
-    \"\"\"Write DataFrame as Delta table to MinIO.
-    mode: 'overwrite', 'append', 'error', 'ignore'
-    Example: write_delta(df, 's3a://silver/orders_delta/')
-    \"\"\"
-    from deltalake import write_deltalake as _wd
-    _storage = {{
-        'AWS_ACCESS_KEY_ID': '{minio_access}', 'AWS_SECRET_ACCESS_KEY': '{minio_secret}',
-        'AWS_ENDPOINT_URL': '{minio_endpoint}', 'AWS_ALLOW_HTTP': 'true',
-        'AWS_S3_ALLOW_UNSAFE_RENAME': 'true', 'AWS_REGION': 'us-east-1',
-    }}
-    _wd(path, df, mode=mode, storage_options=_storage, **kw)
-    print(f"✅ Written {{len(df)}} rows as Delta ({{mode}}) → {{path}}")
-
-def write_iceberg(df, table_name, mode='overwrite'):
-    \"\"\"Write DataFrame to Iceberg table via Trino.
-    Creates the table if it doesn't exist (CTAS), or INSERT INTO for append.
-    table_name: e.g. 'silver.my_table' (resolved under iceberg catalog)
-    mode: 'overwrite' or 'append'
-
-    Example: write_iceberg(df, 'silver.my_analysis')
-    \"\"\"
-    full = f'iceberg.{{table_name}}'
-    # Write to temp parquet, then use Trino CTAS/INSERT
-    tmp_path = f'warehouse/_tmp_{{table_name.replace(".", "_")}}'
-    write_parquet(df, tmp_path)
-
-    if mode == 'overwrite':
-        sql(f'DROP TABLE IF EXISTS {{full}}')
-        # Build column defs from DataFrame
-        _type_map = {{'int64': 'BIGINT', 'float64': 'DOUBLE', 'object': 'VARCHAR', 'bool': 'BOOLEAN',
-                      'datetime64[ns]': 'TIMESTAMP', 'int32': 'INTEGER', 'float32': 'REAL'}}
-        col_defs = ', '.join(f'\"{{c}}\" {{_type_map.get(str(df[c].dtype), "VARCHAR")}}' for c in df.columns)
-        sql(f'CREATE TABLE {{full}} ({{col_defs}})')
-        # Insert via VALUES (batch of 1000)
-        for i in range(0, len(df), 1000):
-            batch = df.iloc[i:i+1000]
-            vals = ', '.join('(' + ', '.join(
-                'NULL' if pd.isna(v) else f"'{{str(v).replace(chr(39), chr(39)+chr(39))}}'" if isinstance(v, str) else str(v)
-                for v in row) + ')' for _, row in batch.iterrows())
-            sql(f'INSERT INTO {{full}} VALUES {{vals}}')
-        # Cleanup temp
-        try: _fs.rm(tmp_path, recursive=True)
-        except: pass
-        print(f"✅ Written {{len(df)}} rows to Iceberg table {{full}} (overwrite)")
-    else:
-        # Append mode
-        for i in range(0, len(df), 1000):
-            batch = df.iloc[i:i+1000]
-            vals = ', '.join('(' + ', '.join(
-                'NULL' if pd.isna(v) else f"'{{str(v).replace(chr(39), chr(39)+chr(39))}}'" if isinstance(v, str) else str(v)
-                for v in row) + ')' for _, row in batch.iterrows())
-            sql(f'INSERT INTO {{full}} VALUES {{vals}}')
-        try: _fs.rm(tmp_path, recursive=True)
-        except: pass
-        print(f"✅ Appended {{len(df)}} rows to Iceberg table {{full}}")
-
-# ─── Utility Helpers ───
-def list_files(path='', detail=False):
-    \"\"\"List files/dirs in MinIO. Example: list_files('silver/')\"\"\"
-    return _fs.ls(path, detail=detail)
-
-def list_tables(schema='silver'):
-    \"\"\"List Iceberg tables in a schema.\"\"\"
-    return query(f'SHOW TABLES FROM iceberg.{{schema}}')
-
-def describe(table_name):
-    \"\"\"Describe an Iceberg table. Example: describe('silver.clean_orders')\"\"\"
-    return query(f'DESCRIBE iceberg.{{table_name}}')
-
-class _DfEncoder(_json.JSONEncoder):
-    def default(self, obj):
-        import pandas as pd
-        if pd.isna(obj): return None
-        if hasattr(obj, 'isoformat'): return obj.isoformat()
-        try:
-            from decimal import Decimal
-            if isinstance(obj, Decimal): return float(obj)
-            import numpy as np
-            if isinstance(obj, (np.integer, np.floating)): return obj.item()
-        except: pass
-        return str(obj)
-
-def display(df, n=20):
-    \"\"\"Pretty-print a DataFrame (Databricks-style).\"\"\"
-    if isinstance(df, pd.DataFrame):
-        _cols = list(df.columns)
-        _df_head = df.head(n)
-        _rows = _df_head.where(pd.notnull(_df_head), None).values.tolist()
-        print("__TABLE_START__")
-        print(_json.dumps({{"columns": _cols, "rows": _rows}}, cls=_DfEncoder))
-        print("__TABLE_END__")
-        if len(df) > n:
-            print(f"\\n[Showing {{n}} of {{len(df)}} rows x {{len(df.columns)}} columns]")
-        else:
-            print(f"\\n[{{len(df)}} rows x {{len(df.columns)}} columns]")
-    else:
-        print(df)
-
-def show_schemas():
-    \"\"\"List all schemas in the Iceberg catalog.\"\"\"
-    return query('SHOW SCHEMAS FROM iceberg')
-
-def create_schema(name):
-    \"\"\"Create a new schema in Iceberg. Example: create_schema('gold')\"\"\"
-    sql(f'CREATE SCHEMA IF NOT EXISTS iceberg.{{name}}')
-    print(f"✅ Schema iceberg.{{name}} ready")
-"""
-        code = preamble + "\n" + code
-
-    outputs = []
+def _reset_spark_singletons() -> None:
     try:
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
-            f.write(code)
-            f.flush()
-            result = subprocess.run(
-                [sys.executable, f.name],
-                capture_output=True,
-                text=True,
-                timeout=120,
-                cwd=NOTEBOOKS_DIR,
+        spark_context_mod = importlib.import_module("pyspark")
+        if hasattr(spark_context_mod, "SparkContext"):
+            spark_context_mod.SparkContext._active_spark_context = None
+    except Exception:
+        pass
+
+    try:
+        spark_sql_mod = importlib.import_module("pyspark.sql")
+        spark_session_cls = spark_sql_mod.SparkSession
+        if hasattr(spark_session_cls, "_instantiatedSession"):
+            spark_session_cls._instantiatedSession = None
+        if hasattr(spark_session_cls, "_activeSession"):
+            spark_session_cls._activeSession = None
+    except Exception:
+        pass
+
+
+def _get_spark_session():
+    global _spark_session
+    if _spark_session_usable(_spark_session):
+        return _spark_session
+    _spark_session = None
+
+    with _spark_session_lock:
+        if _spark_session_usable(_spark_session):
+            return _spark_session
+        _spark_session = None
+        _reset_spark_singletons()
+
+        spark_sql = importlib.import_module("pyspark.sql")
+        SparkSession = spark_sql.SparkSession
+        builder = (
+            SparkSession.builder
+            .appName(SPARK_APP_NAME)
+            .master(SPARK_MASTER_URL)
+            .config("spark.sql.session.timeZone", "UTC")
+            .config("spark.sql.shuffle.partitions", SPARK_SQL_SHUFFLE_PARTITIONS)
+            .config("spark.ui.showConsoleProgress", "false")
+            .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
+            .config("spark.hadoop.fs.s3a.endpoint", SPARK_S3_ENDPOINT)
+            .config("spark.hadoop.fs.s3a.path.style.access", str(SPARK_S3_PATH_STYLE_ACCESS).lower())
+            .config("spark.hadoop.fs.s3a.aws.credentials.provider", "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider")
+            .config("spark.hadoop.fs.s3a.access.key", SPARK_S3_ACCESS_KEY)
+            .config("spark.hadoop.fs.s3a.secret.key", SPARK_S3_SECRET_KEY)
+            .config("spark.hadoop.fs.s3a.connection.ssl.enabled", str(SPARK_S3_ENDPOINT.startswith("https://")).lower())
+        )
+        if SPARK_DRIVER_HOST:
+            builder = builder.config("spark.driver.host", SPARK_DRIVER_HOST)
+        if SPARK_DRIVER_BIND_ADDRESS:
+            builder = builder.config("spark.driver.bindAddress", SPARK_DRIVER_BIND_ADDRESS)
+        local_jars = _discover_spark_jars()
+        if local_jars:
+            builder = builder.config("spark.jars", ",".join(local_jars))
+            driver_cp = _build_spark_classpath(local_jars, SPARK_DRIVER_JARS_DIR)
+            executor_cp = _build_spark_classpath(local_jars, SPARK_EXECUTOR_JARS_DIR)
+            if driver_cp:
+                builder = builder.config("spark.driver.extraClassPath", driver_cp)
+            if executor_cp:
+                builder = builder.config("spark.executor.extraClassPath", executor_cp)
+
+        extra_packages = [pkg.strip() for pkg in SPARK_EXTRA_PACKAGES.split(",") if pkg.strip()]
+        if SPARK_DELTA_ENABLED and SPARK_DELTA_PACKAGE.strip():
+            extra_packages.insert(0, SPARK_DELTA_PACKAGE.strip())
+            builder = (
+                builder.config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
+                .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
             )
-            os.unlink(f.name)
+        if SPARK_JARS_REPOSITORIES.strip():
+            builder = builder.config("spark.jars.repositories", SPARK_JARS_REPOSITORIES.strip())
 
-        stdout = result.stdout
-        stderr = result.stderr
+        if extra_packages:
+            # Keep dependency resolution explicit to avoid version conflicts.
+            ordered_unique_packages = list(dict.fromkeys(extra_packages))
+            builder = builder.config("spark.jars.packages", ",".join(ordered_unique_packages))
 
-        # Check for table output
-        if "__TABLE_START__" in stdout and "__TABLE_END__" in stdout:
-            before = stdout[:stdout.index("__TABLE_START__")]
-            table_json = stdout[stdout.index("__TABLE_START__") + len("__TABLE_START__"):stdout.index("__TABLE_END__")].strip()
-            after = stdout[stdout.index("__TABLE_END__") + len("__TABLE_END__"):]
+        try:
+            _spark_session = builder.getOrCreate()
+        except Exception as exc:
+            if "stopped SparkContext" not in str(exc):
+                raise
+            logger.warning("Detected stopped SparkContext. Resetting and recreating Spark session.")
+            _reset_spark_singletons()
+            _spark_session = builder.getOrCreate()
+        logger.info("Notebook Spark session initialized. master=%s app=%s", SPARK_MASTER_URL, SPARK_APP_NAME)
+        return _spark_session
 
-            if before.strip():
-                outputs.append({"output_type": "stream", "name": "stdout", "text": before})
-            try:
-                table_data = json.loads(table_json)
-                outputs.append({
-                    "output_type": "execute_result",
-                    "data": {"application/json": table_data, "text/plain": table_json},
-                    "execution_count": exec_count,
-                })
-            except json.JSONDecodeError:
-                outputs.append({"output_type": "stream", "name": "stdout", "text": table_json})
-            if after.strip():
-                outputs.append({"output_type": "stream", "name": "stdout", "text": after})
-        elif stdout:
-            outputs.append({"output_type": "stream", "name": "stdout", "text": stdout})
 
-        if stderr:
-            outputs.append({"output_type": "stream", "name": "stderr", "text": stderr})
+def _json_safe(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(v) for v in value]
+    if hasattr(value, "isoformat"):
+        try:
+            return value.isoformat()
+        except Exception:
+            pass
+    if hasattr(value, "item"):
+        try:
+            return value.item()
+        except Exception:
+            pass
+    return str(value)
 
-        status = "ok" if result.returncode == 0 else "error"
-        if result.returncode != 0 and not stderr:
-            outputs.append({
+
+def _table_output(columns: list[str], rows: list[list[Any]], execution_count: int) -> dict[str, Any]:
+    return {
+        "output_type": "execute_result",
+        "data": {
+            "application/json": {
+                "columns": [str(c) for c in columns],
+                "rows": [[_json_safe(v) for v in row] for row in rows],
+            }
+        },
+        "execution_count": execution_count,
+    }
+
+
+def _format_value_output(value: Any, execution_count: int) -> Optional[dict[str, Any]]:
+    if value is None:
+        return None
+
+    try:
+        pd = importlib.import_module("pandas")
+        if isinstance(value, pd.DataFrame):
+            sample = value.head(NOTEBOOK_TABLE_ROW_LIMIT)
+            columns = [str(c) for c in sample.columns]
+            rows = sample.where(~sample.isna(), None).values.tolist()
+            return _table_output(columns, rows, execution_count)
+    except Exception:
+        pass
+
+    try:
+        spark_sql = importlib.import_module("pyspark.sql")
+        if isinstance(value, spark_sql.DataFrame):
+            sample = value.limit(NOTEBOOK_TABLE_ROW_LIMIT)
+            columns = [str(c) for c in sample.columns]
+            rows = sample.collect()
+            values = [[_json_safe(row[col]) for col in columns] for row in rows]
+            return _table_output(columns, values, execution_count)
+    except Exception:
+        pass
+
+    if isinstance(value, list) and value and all(isinstance(item, dict) for item in value):
+        columns: list[str] = []
+        seen: set[str] = set()
+        for row_obj in value:
+            for key in row_obj.keys():
+                k = str(key)
+                if k not in seen:
+                    seen.add(k)
+                    columns.append(k)
+        rows = [[_json_safe(row_obj.get(col)) for col in columns] for row_obj in value[:NOTEBOOK_TABLE_ROW_LIMIT]]
+        return _table_output(columns, rows, execution_count)
+
+    safe = _json_safe(value)
+    if isinstance(safe, (dict, list)):
+        text = json.dumps(safe, ensure_ascii=False, indent=2)
+    else:
+        text = str(safe)
+
+    return {
+        "output_type": "execute_result",
+        "data": {
+            "text/plain": text,
+        },
+        "execution_count": execution_count,
+    }
+
+
+def _ensure_local_session(session_id: str) -> None:
+    if session_id not in _sessions:
+        now = _now_iso()
+        _sessions[session_id] = {
+            "kernel_id": session_id,
+            "created_at": now,
+            "last_used": now,
+            "mode": "local",
+        }
+    if session_id not in _execution_counts:
+        _execution_counts[session_id] = 0
+    if session_id not in _local_namespaces:
+        _local_namespaces[session_id] = {
+            "__name__": "__main__",
+            "__builtins__": __builtins__,
+        }
+
+
+def _install_local_helpers(namespace: dict[str, Any]) -> None:
+    if namespace.get("__openclaw_helpers_loaded__"):
+        return
+
+    def _require_module(module_name: str, package_name: Optional[str] = None):
+        try:
+            return importlib.import_module(module_name)
+        except ModuleNotFoundError as exc:
+            pkg = package_name or module_name.split(".")[0]
+            raise RuntimeError(
+                f"Optional dependency '{pkg}' is not installed. Install it to use this feature."
+            ) from exc
+
+    def query_trino(sql: str, catalog: str = TRINO_CATALOG, schema: str = TRINO_SCHEMA):
+        trino_db = _require_module("trino.dbapi", "trino")
+        conn = trino_db.connect(host=TRINO_HOST, port=TRINO_PORT, user=TRINO_USER, catalog=catalog, schema=schema)
+        cur = conn.cursor()
+        cur.execute(sql)
+        if cur.description:
+            rows = cur.fetchall()
+            cols = [d[0] for d in cur.description]
+        else:
+            rows = []
+            cols = []
+        conn.close()
+        return cols, rows
+
+    def query_spark(
+        statement: str,
+        database: str = SPARK_DEFAULT_DATABASE,
+        limit: Optional[int] = NOTEBOOK_TABLE_ROW_LIMIT,
+    ):
+        _require_module("pyspark.sql", "pyspark")
+        spark = _get_spark_session()
+        sql_text = _sanitize_sql(statement)
+        if not sql_text:
+            raise RuntimeError("Spark SQL statement is empty")
+
+        with _spark_query_lock:
+            target_db = str(database).strip() or SPARK_DEFAULT_DATABASE
+            spark.catalog.setCurrentDatabase(target_db)
+            df = spark.sql(sql_text)
+            if limit is not None and int(limit) > 0:
+                df = df.limit(int(limit))
+            return df
+
+    def query(
+        statement: str,
+        catalog: str = TRINO_CATALOG,
+        schema: str = TRINO_SCHEMA,
+        *,
+        engine: str = NOTEBOOK_SQL_ENGINE,
+        database: Optional[str] = None,
+    ):
+        selected_engine = (engine or NOTEBOOK_SQL_ENGINE).strip().lower()
+        if selected_engine == "spark":
+            return query_spark(statement, database=database or schema or SPARK_DEFAULT_DATABASE)
+        if selected_engine != "trino":
+            raise RuntimeError(f"Unsupported SQL engine: {selected_engine}")
+
+        pd = _require_module("pandas", "pandas")
+        cols, rows = query_trino(statement, catalog=catalog, schema=schema)
+        return pd.DataFrame(rows, columns=cols)
+
+    def sql(
+        statement: str,
+        catalog: str = TRINO_CATALOG,
+        schema: str = TRINO_SCHEMA,
+        *,
+        engine: str = NOTEBOOK_SQL_ENGINE,
+        database: Optional[str] = None,
+    ):
+        return query(statement, catalog=catalog, schema=schema, engine=engine, database=database)
+
+    def spark_sql(
+        statement: str,
+        database: str = SPARK_DEFAULT_DATABASE,
+        limit: Optional[int] = NOTEBOOK_TABLE_ROW_LIMIT,
+    ):
+        return query_spark(statement, database=database, limit=limit)
+
+    spark_sql_module = _require_module("pyspark.sql", "pyspark")
+    spark_functions = _require_module("pyspark.sql.functions", "pyspark")
+    spark_types = _require_module("pyspark.sql.types", "pyspark")
+    spark = _get_spark_session()
+
+    namespace["query_trino"] = query_trino
+    namespace["query_spark"] = query_spark
+    namespace["query"] = query
+    namespace["sql"] = sql
+    namespace["spark_sql"] = spark_sql
+    namespace["spark"] = spark
+    namespace["SparkSession"] = spark_sql_module.SparkSession
+    namespace["F"] = spark_functions
+    namespace["T"] = spark_types
+    namespace["__openclaw_sql_default_engine__"] = NOTEBOOK_SQL_ENGINE
+    namespace["__openclaw_helpers_loaded__"] = True
+
+
+def _execute_trino_sql(raw_sql: str, execution_count: int) -> dict[str, Any]:
+    outputs: list[dict[str, Any]] = []
+    sql = _sanitize_sql(raw_sql)
+    if not sql:
+        return {
+            "status": "error",
+            "execution_count": execution_count,
+            "outputs": [{
                 "output_type": "error",
-                "ename": "ProcessError",
-                "evalue": f"Process exited with code {result.returncode}",
+                "ename": "ValueError",
+                "evalue": "SQL cell is empty after sanitization",
                 "traceback": [],
+            }],
+        }
+
+    try:
+        trino_db = importlib.import_module("trino.dbapi")
+    except ModuleNotFoundError:
+        return {
+            "status": "error",
+            "execution_count": execution_count,
+            "outputs": [{
+                "output_type": "error",
+                "ename": "DependencyError",
+                "evalue": "Optional dependency 'trino' is not installed. Install it to run %%sql cells.",
+                "traceback": [],
+            }],
+        }
+
+    try:
+        conn = trino_db.connect(
+            host=TRINO_HOST,
+            port=TRINO_PORT,
+            user=TRINO_USER,
+            catalog=TRINO_CATALOG,
+            schema=TRINO_SCHEMA,
+        )
+        cur = conn.cursor()
+        cur.execute(sql)
+
+        if cur.description:
+            rows = cur.fetchmany(NOTEBOOK_TABLE_ROW_LIMIT + 1)
+            columns = [d[0] for d in cur.description]
+            truncated = len(rows) > NOTEBOOK_TABLE_ROW_LIMIT
+            rows = rows[:NOTEBOOK_TABLE_ROW_LIMIT]
+            outputs.append(_table_output(columns, [list(r) for r in rows], execution_count))
+            if truncated:
+                outputs.append({
+                    "output_type": "stream",
+                    "name": "stdout",
+                    "text": f"Result truncated to {NOTEBOOK_TABLE_ROW_LIMIT} rows.\\n",
+                })
+        else:
+            outputs.append({
+                "output_type": "stream",
+                "name": "stdout",
+                "text": "Statement executed successfully.\\n",
             })
 
-    except subprocess.TimeoutExpired:
+        conn.close()
+        return {
+            "status": "ok",
+            "execution_count": execution_count,
+            "outputs": outputs,
+        }
+
+    except Exception as exc:
+        return {
+            "status": "error",
+            "execution_count": execution_count,
+            "outputs": [{
+                "output_type": "error",
+                "ename": type(exc).__name__,
+                "evalue": str(exc),
+                "traceback": traceback.format_exception(type(exc), exc, exc.__traceback__),
+            }],
+        }
+
+
+def _execute_spark_sql(raw_sql: str, execution_count: int, database: str = SPARK_DEFAULT_DATABASE) -> dict[str, Any]:
+    outputs: list[dict[str, Any]] = []
+    sql = _sanitize_sql(raw_sql)
+    if not sql:
+        return {
+            "status": "error",
+            "execution_count": execution_count,
+            "outputs": [{
+                "output_type": "error",
+                "ename": "ValueError",
+                "evalue": "SQL cell is empty after sanitization",
+                "traceback": [],
+            }],
+        }
+
+    try:
+        importlib.import_module("pyspark.sql")
+    except ModuleNotFoundError:
+        return {
+            "status": "error",
+            "execution_count": execution_count,
+            "outputs": [{
+                "output_type": "error",
+                "ename": "DependencyError",
+                "evalue": "Optional dependency 'pyspark' is not installed. Install it to run Spark SQL cells.",
+                "traceback": [],
+            }],
+        }
+
+    try:
+        spark = _get_spark_session()
+        with _spark_query_lock:
+            target_db = str(database).strip() or SPARK_DEFAULT_DATABASE
+            spark.catalog.setCurrentDatabase(target_db)
+            df = spark.sql(sql)
+            columns = [str(c) for c in df.columns]
+
+            if columns:
+                rows = df.limit(NOTEBOOK_TABLE_ROW_LIMIT + 1).collect()
+                truncated = len(rows) > NOTEBOOK_TABLE_ROW_LIMIT
+                rows = rows[:NOTEBOOK_TABLE_ROW_LIMIT]
+                values = [[row[col] for col in columns] for row in rows]
+                outputs.append(_table_output(columns, values, execution_count))
+                if truncated:
+                    outputs.append({
+                        "output_type": "stream",
+                        "name": "stdout",
+                        "text": f"Result truncated to {NOTEBOOK_TABLE_ROW_LIMIT} rows.\\n",
+                    })
+            else:
+                outputs.append({
+                    "output_type": "stream",
+                    "name": "stdout",
+                    "text": "Statement executed successfully.\\n",
+                })
+
+        return {
+            "status": "ok",
+            "execution_count": execution_count,
+            "outputs": outputs,
+        }
+
+    except Exception as exc:
+        return {
+            "status": "error",
+            "execution_count": execution_count,
+            "outputs": [{
+                "output_type": "error",
+                "ename": type(exc).__name__,
+                "evalue": str(exc),
+                "traceback": traceback.format_exception(type(exc), exc, exc.__traceback__),
+            }],
+        }
+
+
+def _compile_cell(code: str) -> tuple[Optional[Any], Optional[Any]]:
+    parsed = ast.parse(code, mode="exec")
+    body = list(parsed.body)
+
+    if body and isinstance(body[-1], ast.Expr):
+        expr = body.pop()
+        module = ast.Module(body=body, type_ignores=[])
+        ast.fix_missing_locations(module)
+        exec_code = compile(module, "<cell>", "exec") if body else None
+        expr_code = compile(ast.Expression(expr.value), "<cell>", "eval")
+        return exec_code, expr_code
+
+    module = ast.Module(body=body, type_ignores=[])
+    ast.fix_missing_locations(module)
+    exec_code = compile(module, "<cell>", "exec") if body else None
+    return exec_code, None
+
+
+def _execute_local_python(code: str, session_id: str, execution_count: int) -> dict[str, Any]:
+    _ensure_local_session(session_id)
+    namespace = _local_namespaces[session_id]
+    try:
+        _install_local_helpers(namespace)
+    except Exception as exc:
+        return {
+            "status": "error",
+            "execution_count": execution_count,
+            "outputs": [{
+                "output_type": "error",
+                "ename": type(exc).__name__,
+                "evalue": str(exc),
+                "traceback": traceback.format_exception(type(exc), exc, exc.__traceback__),
+            }],
+        }
+
+    outputs: list[dict[str, Any]] = []
+    display_outputs: list[dict[str, Any]] = []
+
+    def display(value: Any, _n: int = 20) -> None:
+        rendered = _format_value_output(value, execution_count)
+        if rendered:
+            display_outputs.append(rendered)
+
+    namespace["display"] = display
+
+    stdout_buffer = io.StringIO()
+    stderr_buffer = io.StringIO()
+
+    try:
+        exec_code, expr_code = _compile_cell(code)
+    except Exception as exc:
+        return {
+            "status": "error",
+            "execution_count": execution_count,
+            "outputs": [{
+                "output_type": "error",
+                "ename": type(exc).__name__,
+                "evalue": str(exc),
+                "traceback": traceback.format_exception(type(exc), exc, exc.__traceback__),
+            }],
+        }
+
+    status = "ok"
+    expr_value = None
+
+    try:
+        with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer):
+            if exec_code is not None:
+                exec(exec_code, namespace, namespace)
+            if expr_code is not None:
+                expr_value = eval(expr_code, namespace, namespace)
+    except Exception as exc:
         status = "error"
         outputs.append({
             "output_type": "error",
-            "ename": "TimeoutError",
-            "evalue": "Cell execution timed out after 120 seconds",
-            "traceback": [],
+            "ename": type(exc).__name__,
+            "evalue": str(exc),
+            "traceback": traceback.format_exception(type(exc), exc, exc.__traceback__),
         })
-    except Exception as e:
-        status = "error"
-        outputs.append({
-            "output_type": "error",
-            "ename": type(e).__name__,
-            "evalue": str(e),
-            "traceback": [],
-        })
+
+    stdout_text = stdout_buffer.getvalue()
+    stderr_text = stderr_buffer.getvalue()
+
+    if stdout_text:
+        outputs.insert(0, {"output_type": "stream", "name": "stdout", "text": stdout_text})
+    if stderr_text:
+        outputs.insert(0, {"output_type": "stream", "name": "stderr", "text": stderr_text})
+
+    outputs.extend(display_outputs)
+
+    if status == "ok" and expr_value is not None:
+        rendered = _format_value_output(expr_value, execution_count)
+        if rendered:
+            outputs.append(rendered)
 
     return {
         "status": status,
-        "execution_count": exec_count,
+        "execution_count": execution_count,
         "outputs": outputs,
     }
+
+
+def _execute_local(code: str, session_id: str) -> dict[str, Any]:
+    """Execute cell using local in-memory namespace (stateful across cells)."""
+    _ensure_local_session(session_id)
+    _touch_session(session_id)
+
+    _execution_counts.setdefault(session_id, 0)
+    _execution_counts[session_id] += 1
+    execution_count = _execution_counts[session_id]
+
+    stripped = (code or "").strip()
+    if stripped.startswith("%%spark"):
+        sql_code = stripped[len("%%spark"):].strip()
+        return _execute_spark_sql(sql_code, execution_count)
+
+    if stripped.startswith("%%trino"):
+        sql_code = stripped[len("%%trino"):].strip()
+        return _execute_trino_sql(sql_code, execution_count)
+
+    if stripped.startswith("%%sql"):
+        sql_body = stripped[len("%%sql"):].strip()
+        selected_engine = NOTEBOOK_SQL_ENGINE
+        match = re.match(r"^(spark|trino)\b", sql_body, re.IGNORECASE)
+        if match:
+            selected_engine = match.group(1).lower()
+            sql_body = sql_body[len(match.group(0)):].strip()
+
+        if selected_engine == "spark":
+            return _execute_spark_sql(sql_body, execution_count)
+        return _execute_trino_sql(sql_body, execution_count)
+
+    return _execute_local_python(code, session_id, execution_count)
 
 
 # ─── Routes: Kernel Management ───
@@ -522,6 +1014,8 @@ def create_schema(name):
 @router.get("/notebook/kernels")
 async def list_kernels():
     """List active kernel sessions."""
+    await _cleanup_stale_sessions()
+
     gw_available = await _kernel_gw_available()
     if gw_available:
         try:
@@ -530,7 +1024,6 @@ async def list_kernels():
         except Exception:
             pass
 
-    # Return local sessions
     return {
         "kernels": [
             {"id": sid, "name": "python3", "execution_state": "idle", **info}
@@ -543,29 +1036,37 @@ async def list_kernels():
 @router.post("/notebook/kernels")
 async def start_kernel():
     """Start a new kernel session."""
+    await _cleanup_stale_sessions()
     gw_available = await _kernel_gw_available()
 
     if gw_available:
         try:
             result = await _kg_request("POST", "/api/kernels", json={"name": "python3"})
             session_id = result.get("id", str(uuid.uuid4()))
+            now = _now_iso()
             _sessions[session_id] = {
                 "kernel_id": result.get("id"),
-                "created_at": datetime.utcnow().isoformat(),
+                "created_at": now,
+                "last_used": now,
                 "mode": "gateway",
             }
             return {"id": session_id, "mode": "gateway", "status": "started"}
         except Exception as e:
-            logger.warning(f"Kernel Gateway unavailable, falling back to local: {e}")
+            logger.warning("Kernel Gateway unavailable, falling back to local: %s", e)
 
-    # Local fallback
     session_id = str(uuid.uuid4())
+    now = _now_iso()
     _sessions[session_id] = {
         "kernel_id": session_id,
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": now,
+        "last_used": now,
         "mode": "local",
     }
     _execution_counts[session_id] = 0
+    _local_namespaces[session_id] = {
+        "__name__": "__main__",
+        "__builtins__": __builtins__,
+    }
     return {"id": session_id, "mode": "local", "status": "started"}
 
 
@@ -573,13 +1074,16 @@ async def start_kernel():
 async def shutdown_kernel(kernel_id: str):
     """Shutdown a kernel session."""
     session = _sessions.pop(kernel_id, None)
-    if session and session.get("mode") == "gateway":
+    _execution_counts.pop(kernel_id, None)
+    _local_namespaces.pop(kernel_id, None)
+    _session_locks.pop(kernel_id, None)
+
+    if session and session.get("mode") == "gateway" and session.get("kernel_id"):
         try:
             await _kg_request("DELETE", f"/api/kernels/{session['kernel_id']}")
         except Exception:
             pass
 
-    _execution_counts.pop(kernel_id, None)
     return {"status": "shutdown", "id": kernel_id}
 
 
@@ -590,12 +1094,18 @@ async def restart_kernel(kernel_id: str):
     if session and session.get("mode") == "gateway":
         try:
             await _kg_request("POST", f"/api/kernels/{session['kernel_id']}/restart")
+            _touch_session(kernel_id)
             return {"status": "restarted", "mode": "gateway"}
         except Exception:
             pass
 
-    # Reset local execution count
+    _ensure_local_session(kernel_id)
     _execution_counts[kernel_id] = 0
+    _local_namespaces[kernel_id] = {
+        "__name__": "__main__",
+        "__builtins__": __builtins__,
+    }
+    _touch_session(kernel_id)
     return {"status": "restarted", "mode": "local"}
 
 
@@ -606,9 +1116,11 @@ async def interrupt_kernel(kernel_id: str):
     if session and session.get("mode") == "gateway":
         try:
             await _kg_request("POST", f"/api/kernels/{session['kernel_id']}/interrupt")
+            _touch_session(kernel_id)
             return {"status": "interrupted"}
         except Exception:
             pass
+    _touch_session(kernel_id)
     return {"status": "interrupted"}
 
 
@@ -617,24 +1129,22 @@ async def interrupt_kernel(kernel_id: str):
 @router.post("/notebook/kernels/{kernel_id}/execute")
 async def execute_cell(kernel_id: str, req: ExecuteRequest):
     """Execute a code cell and return outputs."""
+    await _cleanup_stale_sessions()
     session = _sessions.get(kernel_id)
 
     if session and session.get("mode") == "gateway":
         try:
+            _touch_session(kernel_id)
             result = await _execute_via_gateway(session["kernel_id"], req.code)
             return result
         except Exception as e:
-            logger.warning(f"Gateway execution failed, falling back to local: {e}")
+            logger.warning("Gateway execution failed, falling back to local: %s", e)
 
-    # Local fallback
-    if kernel_id not in _sessions:
-        _sessions[kernel_id] = {
-            "kernel_id": kernel_id,
-            "created_at": datetime.utcnow().isoformat(),
-            "mode": "local",
-        }
-
-    result = _execute_local(req.code, kernel_id)
+    _ensure_local_session(kernel_id)
+    lock = _session_locks.setdefault(kernel_id, asyncio.Lock())
+    async with lock:
+        result = await asyncio.to_thread(_execute_local, req.code, kernel_id)
+    _touch_session(kernel_id)
     return result
 
 
@@ -642,27 +1152,47 @@ async def execute_cell(kernel_id: str, req: ExecuteRequest):
 
 @router.get("/notebook/files")
 async def list_notebooks():
-    """List saved notebook files."""
-    notebooks = []
+    """List saved notebook files, deduplicated by notebook name."""
+    entries: dict[str, dict[str, Any]] = {}
     nb_dir = Path(NOTEBOOKS_DIR)
+
+    def add_entry(name: str, filename: str, size: int, modified: float, priority: int) -> None:
+        current = entries.get(name)
+        if (
+            current is None
+            or priority > current["_priority"]
+            or (priority == current["_priority"] and modified > current["_modified_ts"])
+        ):
+            entries[name] = {
+                "name": name,
+                "filename": filename,
+                "size": size,
+                "modified": datetime.fromtimestamp(modified, timezone.utc).isoformat(),
+                "_priority": priority,
+                "_modified_ts": modified,
+            }
+
     for f in sorted(nb_dir.glob("*.ipynb")):
         stat = f.stat()
-        notebooks.append({
-            "name": f.stem,
-            "filename": f.name,
-            "size": stat.st_size,
-            "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
-        })
+        add_entry(f.stem, f.name, stat.st_size, stat.st_mtime, priority=1)
 
-    # Also list .json notebook files (our simple format)
     for f in sorted(nb_dir.glob("*.notebook.json")):
         stat = f.stat()
-        notebooks.append({
-            "name": f.name.replace(".notebook.json", ""),
-            "filename": f.name,
-            "size": stat.st_size,
-            "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
-        })
+        name = f.name.replace(".notebook.json", "")
+        add_entry(name, f.name, stat.st_size, stat.st_mtime, priority=2)
+
+    notebooks = sorted(
+        [
+            {
+                "name": v["name"],
+                "filename": v["filename"],
+                "size": v["size"],
+                "modified": v["modified"],
+            }
+            for v in entries.values()
+        ],
+        key=lambda item: item["name"].lower(),
+    )
 
     return {"notebooks": notebooks}
 
@@ -670,34 +1200,71 @@ async def list_notebooks():
 @router.post("/notebook/files")
 async def save_notebook(req: SaveNotebookRequest):
     """Save a notebook (cells + outputs)."""
-    safe_name = "".join(c for c in req.name if c.isalnum() or c in "-_ ").strip()
+    safe_name = _sanitize_notebook_name(req.name)
     if not safe_name:
         raise HTTPException(status_code=400, detail="Invalid notebook name")
 
     filepath = Path(NOTEBOOKS_DIR) / f"{safe_name}.notebook.json"
     data = {
         "name": safe_name,
-        "created": datetime.utcnow().isoformat(),
+        "updated": _now_iso(),
         "cells": req.cells,
     }
-    filepath.write_text(json.dumps(data, indent=2))
-    return {"status": "saved", "filename": filepath.name}
+    filepath.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    return {"status": "saved", "filename": filepath.name, "name": safe_name}
+
+
+@router.post("/notebook/files/rename")
+async def rename_notebook(req: RenameNotebookRequest):
+    """Rename notebook files for both .notebook.json and .ipynb variants."""
+    old_name = _require_valid_notebook_name(req.old_name)
+    new_name = _sanitize_notebook_name(req.new_name)
+
+    if not new_name:
+        raise HTTPException(status_code=400, detail="Invalid notebook name")
+    if old_name == new_name:
+        return {"status": "unchanged", "name": new_name, "oldName": old_name, "movedFiles": []}
+
+    nb_dir = Path(NOTEBOOKS_DIR)
+    extensions = [".notebook.json", ".ipynb"]
+    moved_files: list[str] = []
+
+    source_paths = []
+    for ext in extensions:
+        src = nb_dir / f"{old_name}{ext}"
+        dst = nb_dir / f"{new_name}{ext}"
+        if src.exists():
+            if dst.exists():
+                raise HTTPException(status_code=409, detail=f"Target notebook already exists: {new_name}{ext}")
+            source_paths.append((src, dst))
+
+    if not source_paths:
+        raise HTTPException(status_code=404, detail=f"Notebook '{old_name}' not found")
+
+    for src, dst in source_paths:
+        src.rename(dst)
+        moved_files.append(dst.name)
+
+    return {
+        "status": "renamed",
+        "oldName": old_name,
+        "name": new_name,
+        "movedFiles": moved_files,
+    }
 
 
 @router.get("/notebook/files/{name}")
 async def load_notebook(name: str):
     """Load a saved notebook."""
-    # Try our format first
-    filepath = Path(NOTEBOOKS_DIR) / f"{name}.notebook.json"
-    if filepath.exists():
-        data = json.loads(filepath.read_text())
-        return data
+    safe_name = _require_valid_notebook_name(name)
 
-    # Try .ipynb format
-    filepath_ipynb = Path(NOTEBOOKS_DIR) / f"{name}.ipynb"
+    filepath = Path(NOTEBOOKS_DIR) / f"{safe_name}.notebook.json"
+    if filepath.exists():
+        return json.loads(filepath.read_text(encoding="utf-8"))
+
+    filepath_ipynb = Path(NOTEBOOKS_DIR) / f"{safe_name}.ipynb"
     if filepath_ipynb.exists():
-        data = json.loads(filepath_ipynb.read_text())
-        # Convert ipynb to our format
+        data = json.loads(filepath_ipynb.read_text(encoding="utf-8"))
         cells = []
         for cell in data.get("cells", []):
             cells.append({
@@ -708,20 +1275,27 @@ async def load_notebook(name: str):
                 "outputs": cell.get("outputs", []),
                 "execution_count": cell.get("execution_count"),
             })
-        return {"name": name, "cells": cells}
+        return {"name": safe_name, "cells": cells}
 
-    raise HTTPException(status_code=404, detail=f"Notebook '{name}' not found")
+    raise HTTPException(status_code=404, detail=f"Notebook '{safe_name}' not found")
 
 
 @router.delete("/notebook/files/{name}")
 async def delete_notebook(name: str):
-    """Delete a saved notebook."""
+    """Delete notebook file variants (.notebook.json and .ipynb)."""
+    safe_name = _require_valid_notebook_name(name)
+
+    deleted_files: list[str] = []
     for ext in [".notebook.json", ".ipynb"]:
-        filepath = Path(NOTEBOOKS_DIR) / f"{name}{ext}"
+        filepath = Path(NOTEBOOKS_DIR) / f"{safe_name}{ext}"
         if filepath.exists():
             filepath.unlink()
-            return {"status": "deleted", "name": name}
-    raise HTTPException(status_code=404, detail=f"Notebook '{name}' not found")
+            deleted_files.append(filepath.name)
+
+    if not deleted_files:
+        raise HTTPException(status_code=404, detail=f"Notebook '{safe_name}' not found")
+
+    return {"status": "deleted", "name": safe_name, "deletedFiles": deleted_files}
 
 
 # ─── Routes: Health ───
@@ -729,11 +1303,18 @@ async def delete_notebook(name: str):
 @router.get("/notebook/health")
 async def notebook_health():
     """Check notebook execution engine status."""
+    cleaned = await _cleanup_stale_sessions()
     gw_available = await _kernel_gw_available()
     return {
         "gateway_available": gw_available,
+        "gateway_enabled": NOTEBOOK_USE_GATEWAY,
         "gateway_url": KERNEL_GW_URL,
         "mode": "gateway" if gw_available else "local",
         "active_sessions": len(_sessions),
+        "cleaned_sessions": cleaned,
+        "session_ttl_seconds": NOTEBOOK_SESSION_TTL_SECONDS,
+        "sql_default_engine": NOTEBOOK_SQL_ENGINE,
+        "spark_master_url": SPARK_MASTER_URL,
+        "spark_default_database": SPARK_DEFAULT_DATABASE,
         "notebooks_dir": str(NOTEBOOKS_DIR),
     }

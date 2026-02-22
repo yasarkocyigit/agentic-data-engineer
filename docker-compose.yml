@@ -20,10 +20,20 @@ services:
       - AIRFLOW_SA_PASSWORD=admin
       - MARQUEZ_URL=http://marquez:5000
       - MINIO_ENDPOINT=http://minio:9000
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER:-admin}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-admin123}
       - TRINO_HOST=trino
       - TRINO_PORT=8080
       - PG_HOST=host.docker.internal
       - PG_PORT=5433
+      - SPARK_MASTER_URL=local[*]
+      - SPARK_APP_NAME=openclaw-sql
+      - SPARK_S3_ENDPOINT=http://minio:9000
+      - SPARK_EXTRA_JARS=/workspace/jars/hadoop-aws-3.4.1.jar,/workspace/jars/bundle-2.31.1.jar
+      - SPARK_DELTA_PACKAGE=io.delta:delta-spark_2.13:4.0.0
+      - NOTEBOOK_SQL_ENGINE=spark
+      - NOTEBOOK_USE_GATEWAY=false
+      - SPARK_DEFAULT_DATABASE=default
     volumes:
       - ./dags:/opt/airflow/dags
       - ./notebooks:/opt/airflow/notebooks
@@ -31,6 +41,7 @@ services:
     depends_on:
       - airflow-webserver
       - trino
+      - spark-master
       - marquez
       - minio
     restart: unless-stopped
@@ -41,7 +52,7 @@ services:
   # SPARK MASTER
   # ---------------------------------------------------------
   spark-master:
-    image: apache/spark:4.1.1
+    image: apache/spark:4.0.1
     container_name: spark_master
     environment:
       - SPARK_MODE=master
@@ -61,7 +72,7 @@ services:
   # SPARK WORKER
   # ---------------------------------------------------------
   spark-worker:
-    image: apache/spark:4.1.1
+    image: apache/spark:4.0.1
     container_name: spark_worker
     environment:
       - SPARK_MODE=worker

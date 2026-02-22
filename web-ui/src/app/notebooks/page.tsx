@@ -12,7 +12,7 @@ import {
     StopCircle, RotateCw, EyeOff, PanelLeft, Eraser,
     type TypeIcon
 } from 'lucide-react';
-import Editor from '@monaco-editor/react';
+import Editor, { useMonaco } from '@monaco-editor/react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -45,8 +45,121 @@ type NotebookFile = {
     modified: string;
 };
 
+type NotebookSqlSuggestionKind = 'catalog' | 'schema' | 'table' | 'view' | 'column' | 'function';
+
+type NotebookSqlSuggestionItem = {
+    label: string;
+    detail: string;
+    fqn: string;
+    kind: NotebookSqlSuggestionKind;
+};
+
 // ─── Helpers ───
 const genId = () => Math.random().toString(36).substring(2, 10);
+const quoteSqlIdentifier = (value: string) => `"${String(value).replace(/"/g, '""')}"`;
+const escapeSqlLiteral = (value: string) => String(value).replace(/'/g, "''");
+
+const readStringFromRow = (row: any, preferredKeys: string[] = []): string | null => {
+    if (!row || typeof row !== 'object') return null;
+    for (const key of preferredKeys) {
+        const val = row[key];
+        if (val !== null && val !== undefined && String(val).trim()) return String(val).trim();
+    }
+    for (const val of Object.values(row)) {
+        if (val !== null && val !== undefined && String(val).trim()) return String(val).trim();
+    }
+    return null;
+};
+
+const loadMonacoLanguageTokens = async (
+    monacoInstance: any,
+    languageId: string,
+    tokenKeys: string[]
+): Promise<string[]> => {
+    try {
+        const registration = monacoInstance?.languages?.getLanguages?.().find((lang: any) => lang?.id === languageId);
+        if (!registration || typeof registration.loader !== 'function') return [];
+        const loaded = await registration.loader();
+        const languageDef = loaded?.language || {};
+        const tokens = new Set<string>();
+        for (const key of tokenKeys) {
+            const arr = languageDef?.[key];
+            if (!Array.isArray(arr)) continue;
+            for (const item of arr) {
+                const token = String(item || '').trim();
+                if (token) tokens.add(token);
+            }
+        }
+        return Array.from(tokens);
+    } catch {
+        return [];
+    }
+};
+
+const isPythonIdentifier = (value: string): boolean => /^[A-Za-z_][A-Za-z0-9_]*$/.test(value);
+
+const collectPythonNotebookSymbols = (cells: Cell[]): string[] => {
+    const symbols = new Set<string>();
+
+    for (const cell of cells) {
+        if (cell.cell_type !== 'code' || cell.language !== 'python') continue;
+        const lines = String(cell.source || '').split('\n');
+
+        for (const rawLine of lines) {
+            const line = rawLine.trim();
+            if (!line || line.startsWith('#')) continue;
+
+            const defMatch = line.match(/^def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/);
+            if (defMatch) {
+                symbols.add(defMatch[1]);
+                continue;
+            }
+
+            const classMatch = line.match(/^class\s+([A-Za-z_][A-Za-z0-9_]*)\s*[\(:]/);
+            if (classMatch) {
+                symbols.add(classMatch[1]);
+                continue;
+            }
+
+            const importMatch = line.match(/^import\s+(.+)$/);
+            if (importMatch) {
+                const parts = importMatch[1].split(',');
+                for (const part of parts) {
+                    const chunk = part.trim();
+                    if (!chunk) continue;
+                    const aliasMatch = chunk.match(/\s+as\s+([A-Za-z_][A-Za-z0-9_]*)$/);
+                    if (aliasMatch) {
+                        symbols.add(aliasMatch[1]);
+                        continue;
+                    }
+                    const moduleName = chunk.split('.')[0]?.trim();
+                    if (moduleName && isPythonIdentifier(moduleName)) symbols.add(moduleName);
+                }
+                continue;
+            }
+
+            const fromImportMatch = line.match(/^from\s+[A-Za-z0-9_\.]+\s+import\s+(.+)$/);
+            if (fromImportMatch) {
+                const parts = fromImportMatch[1].split(',');
+                for (const part of parts) {
+                    const chunk = part.trim();
+                    if (!chunk || chunk === '*') continue;
+                    const aliasMatch = chunk.match(/^([A-Za-z_][A-Za-z0-9_]*)(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?$/);
+                    if (!aliasMatch) continue;
+                    symbols.add(aliasMatch[2] || aliasMatch[1]);
+                }
+                continue;
+            }
+
+            const assignMatch = line.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=/);
+            if (assignMatch) {
+                symbols.add(assignMatch[1]);
+            }
+        }
+    }
+
+    return Array.from(symbols).sort((a, b) => a.localeCompare(b));
+};
 
 const INITIAL_CELL: Cell = {
     id: genId(),
@@ -56,6 +169,175 @@ const INITIAL_CELL: Cell = {
     outputs: [],
     execution_count: null,
     running: false,
+};
+
+const mapSuggestionKindToMonaco = (monaco: any, kind: NotebookSqlSuggestionKind) => {
+    if (kind === 'catalog') return monaco.languages.CompletionItemKind.Module;
+    if (kind === 'schema') return monaco.languages.CompletionItemKind.Struct;
+    if (kind === 'table') return monaco.languages.CompletionItemKind.Value;
+    if (kind === 'view') return monaco.languages.CompletionItemKind.Interface;
+    if (kind === 'column') return monaco.languages.CompletionItemKind.Field;
+    return monaco.languages.CompletionItemKind.Function;
+};
+
+const registerNotebookSqlAutocomplete = (
+    monaco: any,
+    getItems: () => NotebookSqlSuggestionItem[],
+    loadColumnsForTableFqn: (tableFqn: string) => Promise<NotebookSqlSuggestionItem[]>,
+    getSqlKeywords: () => string[]
+) => {
+    const monacoAny = monaco as any;
+    monacoAny.__openclawNotebookSqlSuggestionSource = getItems;
+    monacoAny.__openclawNotebookSqlColumnLoader = loadColumnsForTableFqn;
+    monacoAny.__openclawNotebookSqlKeywordSource = getSqlKeywords;
+    if (monacoAny.__openclawNotebookSqlAutocompleteRegistered) return;
+    monacoAny.__openclawNotebookSqlAutocompleteRegistered = true;
+
+    monaco.languages.registerCompletionItemProvider('sql', {
+        triggerCharacters: [' ', '.'],
+        provideCompletionItems: async (model: any, position: any) => {
+            const source = monacoAny.__openclawNotebookSqlSuggestionSource;
+            const metadataItems: NotebookSqlSuggestionItem[] = typeof source === 'function' ? source() : [];
+            const keywordSource = monacoAny.__openclawNotebookSqlKeywordSource;
+            const sqlKeywords: string[] = typeof keywordSource === 'function' ? keywordSource() : [];
+            const word = model.getWordUntilPosition(position);
+            const range = {
+                startLineNumber: position.lineNumber,
+                endLineNumber: position.lineNumber,
+                startColumn: word.startColumn,
+                endColumn: word.endColumn,
+            };
+
+            const textBefore = model.getValueInRange({
+                startLineNumber: position.lineNumber,
+                startColumn: 1,
+                endLineNumber: position.lineNumber,
+                endColumn: position.column,
+            });
+            const dotMatch = textBefore.match(/([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*)\.\s*$/);
+            const prefix = dotMatch ? dotMatch[1].toLowerCase() : null;
+            const typedPrefix = (word.word || '').toLowerCase();
+
+            let contextItems = metadataItems;
+            if (prefix) {
+                const prefixDepth = prefix.split('.').length;
+                contextItems = metadataItems.filter(item =>
+                    item.fqn.toLowerCase().startsWith(prefix + '.')
+                    && item.fqn.toLowerCase().split('.').length === prefixDepth + 1
+                );
+
+                if (contextItems.length === 0 && prefixDepth >= 3) {
+                    const columnLoader = monacoAny.__openclawNotebookSqlColumnLoader;
+                    if (typeof columnLoader === 'function') {
+                        try {
+                            contextItems = await columnLoader(prefix);
+                        } catch {
+                            contextItems = [];
+                        }
+                    }
+                }
+            } else if (typedPrefix) {
+                contextItems = metadataItems.filter(item => item.label.toLowerCase().startsWith(typedPrefix));
+            }
+
+            const keywordSuggestions = prefix
+                ? []
+                : sqlKeywords
+                    .filter(keyword => !typedPrefix || keyword.toLowerCase().startsWith(typedPrefix))
+                    .map(keyword => ({
+                        label: keyword.toUpperCase(),
+                        kind: monaco.languages.CompletionItemKind.Keyword,
+                        insertText: keyword.toUpperCase(),
+                        detail: 'sql keyword',
+                        range,
+                        sortText: `0_${keyword}`,
+                    }));
+
+            const metadataSuggestions = contextItems.map(item => ({
+                label: item.label,
+                kind: mapSuggestionKindToMonaco(monaco, item.kind),
+                insertText: item.label,
+                detail: item.detail,
+                range,
+                sortText: `1_${item.fqn}`,
+            }));
+
+            const seen = new Set<string>();
+            const suggestions = [...keywordSuggestions, ...metadataSuggestions].filter((item: any) => {
+                const key = String(item.label).toLowerCase();
+                if (seen.has(key)) return false;
+                seen.add(key);
+                return true;
+            });
+
+            return {
+                suggestions,
+            };
+        },
+    });
+};
+
+const registerNotebookPythonAutocomplete = (
+    monaco: any,
+    getPythonKeywords: () => string[],
+    getPythonSymbols: () => string[]
+) => {
+    const monacoAny = monaco as any;
+    monacoAny.__openclawNotebookPythonKeywordSource = getPythonKeywords;
+    monacoAny.__openclawNotebookPythonSymbolSource = getPythonSymbols;
+    if (monacoAny.__openclawNotebookPythonAutocompleteRegistered) return;
+    monacoAny.__openclawNotebookPythonAutocompleteRegistered = true;
+
+    monaco.languages.registerCompletionItemProvider('python', {
+        triggerCharacters: ['.', '_'],
+        provideCompletionItems: (model: any, position: any) => {
+            const keywordSource = monacoAny.__openclawNotebookPythonKeywordSource;
+            const symbolSource = monacoAny.__openclawNotebookPythonSymbolSource;
+            const keywords: string[] = typeof keywordSource === 'function' ? keywordSource() : [];
+            const symbols: string[] = typeof symbolSource === 'function' ? symbolSource() : [];
+
+            const word = model.getWordUntilPosition(position);
+            const typedPrefix = (word.word || '').toLowerCase();
+            const range = {
+                startLineNumber: position.lineNumber,
+                endLineNumber: position.lineNumber,
+                startColumn: word.startColumn,
+                endColumn: word.endColumn,
+            };
+
+            const keywordSuggestions = keywords
+                .filter(keyword => !typedPrefix || keyword.toLowerCase().startsWith(typedPrefix))
+                .map(keyword => ({
+                    label: keyword,
+                    kind: monaco.languages.CompletionItemKind.Keyword,
+                    insertText: keyword,
+                    detail: 'python keyword',
+                    range,
+                    sortText: `0_${keyword}`,
+                }));
+
+            const symbolSuggestions = symbols
+                .filter(symbol => !typedPrefix || symbol.toLowerCase().startsWith(typedPrefix))
+                .map(symbol => ({
+                    label: symbol,
+                    kind: monaco.languages.CompletionItemKind.Variable,
+                    insertText: symbol,
+                    detail: 'notebook symbol',
+                    range,
+                    sortText: `1_${symbol}`,
+                }));
+
+            const seen = new Set<string>();
+            const suggestions = [...keywordSuggestions, ...symbolSuggestions].filter((item: any) => {
+                const key = String(item.label).toLowerCase();
+                if (seen.has(key)) return false;
+                seen.add(key);
+                return true;
+            });
+
+            return { suggestions };
+        },
+    });
 };
 
 // ─── Native Output Renderers ───
@@ -168,6 +450,11 @@ function NotebookCell({
     onMoveDown,
     onRun,
     onAddBelow,
+    sqlSuggestionItems,
+    loadSqlColumns,
+    sqlKeywordItems,
+    pythonKeywordItems,
+    pythonSymbolItems,
 }: {
     cell: Cell;
     index: number;
@@ -180,12 +467,25 @@ function NotebookCell({
     onMoveDown: () => void;
     onRun: () => void;
     onAddBelow: (type: 'code' | 'markdown') => void;
+    sqlSuggestionItems: NotebookSqlSuggestionItem[];
+    loadSqlColumns: (tableFqn: string) => Promise<NotebookSqlSuggestionItem[]>;
+    sqlKeywordItems: string[];
+    pythonKeywordItems: string[];
+    pythonSymbolItems: string[];
 }) {
     const editorRef = useRef<any>(null);
+    const monacoRef = useRef<any>(null);
     const lineCount = cell.source.split('\n').length;
     const initialHeight = Math.max(40, Math.min(lineCount * 18 + 16, 500));
     const [editorHeight, setEditorHeight] = useState(initialHeight);
     const [showPreview, setShowPreview] = useState(false);
+
+    // Keep global completion providers in sync with latest async state.
+    useEffect(() => {
+        if (!monacoRef.current) return;
+        registerNotebookSqlAutocomplete(monacoRef.current, () => sqlSuggestionItems, loadSqlColumns, () => sqlKeywordItems);
+        registerNotebookPythonAutocomplete(monacoRef.current, () => pythonKeywordItems, () => pythonSymbolItems);
+    }, [sqlSuggestionItems, loadSqlColumns, sqlKeywordItems, pythonKeywordItems, pythonSymbolItems]);
 
     // ─── Markdown Toolbar Actions ───
     const insertMarkdown = useCallback((type: string) => {
@@ -342,10 +642,13 @@ function NotebookCell({
                 'editorLineNumber.foreground': '#404050',
             }
         });
+        registerNotebookSqlAutocomplete(monaco, () => sqlSuggestionItems, loadSqlColumns, () => sqlKeywordItems);
+        registerNotebookPythonAutocomplete(monaco, () => pythonKeywordItems, () => pythonSymbolItems);
     };
 
     const handleEditorMount = (editor: any, monaco: any) => {
         editorRef.current = editor;
+        monacoRef.current = monaco;
         monaco.editor.setTheme('obsidian');
         editor.onKeyDown((e: any) => {
             // Shift+Enter OR Cmd/Ctrl+Enter
@@ -354,6 +657,15 @@ function NotebookCell({
                 onRun();
             }
         });
+
+        if (selectedLang === 'sql' || selectedLang === 'python') {
+            editor.addAction({
+                id: `trigger-suggest-${selectedLang}-${cell.id}`,
+                label: 'Trigger Suggest',
+                keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Space],
+                run: () => editor.trigger('keyboard', 'editor.action.triggerSuggest', {}),
+            });
+        }
     };
 
     const selectedLang = cell.language || 'python';
@@ -493,6 +805,9 @@ function NotebookCell({
                                                 contextmenu: false,
                                                 matchBrackets: 'near',
                                                 fontLigatures: true,
+                                                quickSuggestions: { other: true, comments: false, strings: false },
+                                                suggestOnTriggerCharacters: true,
+                                                acceptSuggestionOnEnter: 'on',
                                             }}
                                         />
                                     </div>
@@ -587,6 +902,7 @@ function NotebookCell({
 
 // ─── Main Native Page ───
 export default function NotebooksPage() {
+    const monaco = useMonaco();
     const [cells, setCells] = useState<Cell[]>([INITIAL_CELL]);
     const [activeCell, setActiveCell] = useState<string>(INITIAL_CELL.id);
     const [kernelId, setKernelId] = useState<string | null>(null);
@@ -602,13 +918,200 @@ export default function NotebooksPage() {
     const [cellClipboard, setCellClipboard] = useState<Cell | null>(null);
     const [activeMenu, setActiveMenu] = useState<string | null>(null);
     const [showShortcutsModal, setShowShortcutsModal] = useState(false);
+    const [sqlSuggestionItems, setSqlSuggestionItems] = useState<NotebookSqlSuggestionItem[]>([]);
+    const [sqlKeywordItems, setSqlKeywordItems] = useState<string[]>([]);
+    const [pythonKeywordItems, setPythonKeywordItems] = useState<string[]>([]);
+    const sqlColumnCacheRef = useRef<Map<string, NotebookSqlSuggestionItem[]>>(new Map());
+    const pythonSymbolItems = React.useMemo(() => collectPythonNotebookSymbols(cells), [cells]);
+
+    useEffect(() => {
+        if (!monaco) return;
+        let active = true;
+        void (async () => {
+            const [sqlTokens, pythonTokens] = await Promise.all([
+                loadMonacoLanguageTokens(monaco, 'sql', ['keywords']),
+                loadMonacoLanguageTokens(monaco, 'python', ['keywords', 'builtins', 'typeKeywords']),
+            ]);
+            if (!active) return;
+            setSqlKeywordItems(sqlTokens);
+            setPythonKeywordItems(pythonTokens);
+        })();
+        return () => {
+            active = false;
+        };
+    }, [monaco]);
+
+    const fetchJsonOrThrow = useCallback(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const resp = await fetch(input, init);
+        const data = await resp.json().catch(() => ({} as any));
+        if (!resp.ok) {
+            const detail = data?.detail || data?.error || `HTTP ${resp.status}`;
+            throw new Error(String(detail));
+        }
+        return data;
+    }, []);
+
+    const fetchTrinoRows = useCallback(async (query: string, catalog?: string) => {
+        const payload: Record<string, any> = { query };
+        if (catalog) payload.catalog = catalog;
+        const data = await fetchJsonOrThrow('/api/trino', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        return Array.isArray(data?.data) ? data.data : [];
+    }, [fetchJsonOrThrow]);
+
+    const refreshSqlSuggestions = useCallback(async () => {
+        const itemsByFqn = new Map<string, NotebookSqlSuggestionItem>();
+        const addItem = (item: NotebookSqlSuggestionItem) => {
+            const key = `${item.kind}:${item.fqn}`.toLowerCase();
+            if (!itemsByFqn.has(key)) itemsByFqn.set(key, item);
+        };
+
+        try {
+            const catalogRows = await fetchTrinoRows('SHOW CATALOGS');
+            for (const catalogRow of catalogRows) {
+                const catalogName = readStringFromRow(catalogRow, ['Catalog', 'catalog', 'catalog_name']);
+                if (!catalogName) continue;
+
+                addItem({
+                    label: catalogName,
+                    detail: 'catalog',
+                    fqn: catalogName,
+                    kind: 'catalog',
+                });
+
+                let schemaRows: any[] = [];
+                try {
+                    schemaRows = await fetchTrinoRows(`SHOW SCHEMAS FROM ${quoteSqlIdentifier(catalogName)}`, catalogName);
+                } catch {
+                    schemaRows = [];
+                }
+
+                for (const schemaRow of schemaRows) {
+                    const schemaName = readStringFromRow(schemaRow, ['Schema', 'schema', 'schema_name']);
+                    if (!schemaName) continue;
+                    const schemaFqn = `${catalogName}.${schemaName}`;
+
+                    addItem({
+                        label: schemaName,
+                        detail: `schema (${catalogName})`,
+                        fqn: schemaFqn,
+                        kind: 'schema',
+                    });
+
+                    let tableRows: any[] = [];
+                    try {
+                        tableRows = await fetchTrinoRows(
+                            `SELECT table_name, table_type FROM ${quoteSqlIdentifier(catalogName)}.information_schema.tables WHERE table_schema = '${escapeSqlLiteral(schemaName)}' ORDER BY table_name`,
+                            catalogName
+                        );
+                    } catch {
+                        try {
+                            tableRows = await fetchTrinoRows(
+                                `SHOW TABLES FROM ${quoteSqlIdentifier(catalogName)}.${quoteSqlIdentifier(schemaName)}`,
+                                catalogName
+                            );
+                        } catch {
+                            tableRows = [];
+                        }
+                    }
+
+                    for (const tableRow of tableRows) {
+                        const tableName = readStringFromRow(tableRow, ['table_name', 'Table', 'name']);
+                        if (!tableName) continue;
+                        const tableType = (readStringFromRow(tableRow, ['table_type']) || 'TABLE').toUpperCase();
+                        const tableKind: NotebookSqlSuggestionKind = tableType.includes('VIEW') ? 'view' : 'table';
+                        const tableFqn = `${schemaFqn}.${tableName}`;
+                        addItem({
+                            label: tableName,
+                            detail: `${tableKind} (${schemaFqn})`,
+                            fqn: tableFqn,
+                            kind: tableKind,
+                        });
+                    }
+
+                    let functionRows: any[] = [];
+                    try {
+                        functionRows = await fetchTrinoRows(
+                            `SHOW FUNCTIONS FROM ${quoteSqlIdentifier(catalogName)}.${quoteSqlIdentifier(schemaName)}`,
+                            catalogName
+                        );
+                    } catch {
+                        functionRows = [];
+                    }
+
+                    for (const fnRow of functionRows) {
+                        const fnName = readStringFromRow(fnRow, ['Function', 'function_name', 'name']);
+                        if (!fnName) continue;
+                        const fnFqn = `${schemaFqn}.${fnName}`;
+                        addItem({
+                            label: fnName,
+                            detail: `function (${schemaFqn})`,
+                            fqn: fnFqn,
+                            kind: 'function',
+                        });
+                    }
+                }
+            }
+        } catch (err) {
+            console.error('Failed to refresh notebook SQL metadata:', err);
+        }
+
+        const nextItems = Array.from(itemsByFqn.values()).sort((a, b) => a.fqn.localeCompare(b.fqn));
+        setSqlSuggestionItems(nextItems);
+        sqlColumnCacheRef.current.clear();
+    }, [fetchTrinoRows]);
+
+    const loadSqlColumns = useCallback(async (tableFqn: string): Promise<NotebookSqlSuggestionItem[]> => {
+        const normalized = tableFqn.trim();
+        if (!normalized) return [];
+        const cached = sqlColumnCacheRef.current.get(normalized);
+        if (cached) return cached;
+
+        const parts = normalized.split('.');
+        if (parts.length < 3) return [];
+        const catalog = parts[0];
+        const schema = parts[1];
+        const table = parts.slice(2).join('.');
+
+        try {
+            const rows = await fetchTrinoRows(
+                `SHOW COLUMNS FROM ${quoteSqlIdentifier(catalog)}.${quoteSqlIdentifier(schema)}.${quoteSqlIdentifier(table)}`,
+                catalog
+            );
+            const columns = rows
+                .map((row: any) => readStringFromRow(row, ['Column', 'column', 'Field', 'name']))
+                .filter(Boolean)
+                .map((columnName: string | null) => ({
+                    label: String(columnName),
+                    detail: `column (${normalized})`,
+                    fqn: `${normalized}.${String(columnName)}`,
+                    kind: 'column' as const,
+                }));
+
+            sqlColumnCacheRef.current.set(normalized, columns);
+            if (columns.length > 0) {
+                setSqlSuggestionItems(prev => {
+                    const merged = new Map<string, NotebookSqlSuggestionItem>();
+                    for (const item of prev) merged.set(`${item.kind}:${item.fqn}`.toLowerCase(), item);
+                    for (const item of columns) merged.set(`${item.kind}:${item.fqn}`.toLowerCase(), item);
+                    return Array.from(merged.values()).sort((a, b) => a.fqn.localeCompare(b.fqn));
+                });
+            }
+            return columns;
+        } catch {
+            sqlColumnCacheRef.current.set(normalized, []);
+            return [];
+        }
+    }, [fetchTrinoRows]);
 
     // ─── Kernel Management ───
     const startKernel = useCallback(async () => {
         setKernelStatus('starting');
         try {
-            const resp = await fetch('/api/notebook/kernels', { method: 'POST' });
-            const data = await resp.json();
+            const data = await fetchJsonOrThrow('/api/notebook/kernels', { method: 'POST' });
             setKernelId(data.id);
             setEngineMode(data.mode);
             setKernelStatus('idle');
@@ -616,48 +1119,72 @@ export default function NotebooksPage() {
             console.error('Failed to start kernel:', e);
             setKernelStatus('disconnected');
         }
-    }, []);
+    }, [fetchJsonOrThrow]);
 
     const restartKernel = useCallback(async () => {
         if (!kernelId) return;
         setKernelStatus('starting');
         try {
-            await fetch(`/api/notebook/kernels/${kernelId}/restart`, { method: 'POST' });
+            await fetchJsonOrThrow(`/api/notebook/kernels/${encodeURIComponent(kernelId)}/restart`, { method: 'POST' });
             setKernelStatus('idle');
             setCells(prev => prev.map(c => ({ ...c, outputs: [], execution_count: null })));
         } catch (e) {
             console.error('Failed to restart kernel:', e);
             setKernelStatus('disconnected');
         }
-    }, [kernelId]);
+    }, [kernelId, fetchJsonOrThrow]);
 
     const interruptKernel = useCallback(async () => {
         if (!kernelId) return;
         try {
-            await fetch(`/api/notebook/kernels/${kernelId}/interrupt`, { method: 'POST' });
+            await fetchJsonOrThrow(`/api/notebook/kernels/${encodeURIComponent(kernelId)}/interrupt`, { method: 'POST' });
         } catch (e) {
             console.error('Failed to interrupt kernel:', e);
         }
-    }, [kernelId]);
+    }, [kernelId, fetchJsonOrThrow]);
 
     useEffect(() => { startKernel(); }, [startKernel]);
+
+    useEffect(() => {
+        void refreshSqlSuggestions();
+        const interval = window.setInterval(() => {
+            void refreshSqlSuggestions();
+        }, 60000);
+        return () => window.clearInterval(interval);
+    }, [refreshSqlSuggestions]);
+
+    useEffect(() => {
+        if (!kernelId) return;
+
+        const shutdown = () => {
+            fetch(`/api/notebook/kernels/${encodeURIComponent(kernelId)}`, {
+                method: 'DELETE',
+                keepalive: true,
+            }).catch(() => { });
+        };
+
+        window.addEventListener('beforeunload', shutdown);
+        return () => {
+            window.removeEventListener('beforeunload', shutdown);
+            shutdown();
+        };
+    }, [kernelId]);
 
     // ─── Save / Load ───
     const loadNotebookList = useCallback(async () => {
         try {
-            const resp = await fetch('/api/notebook/files');
-            const data = await resp.json();
+            const data = await fetchJsonOrThrow('/api/notebook/files');
             setSavedNotebooks(data.notebooks || []);
         } catch (e) {
             console.error('Failed to load notebooks:', e);
         }
-    }, []);
+    }, [fetchJsonOrThrow]);
 
     useEffect(() => { loadNotebookList(); }, [loadNotebookList]);
 
     const saveNotebook = useCallback(async () => {
         try {
-            await fetch('/api/notebook/files', {
+            const data = await fetchJsonOrThrow('/api/notebook/files', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -665,11 +1192,16 @@ export default function NotebooksPage() {
                     cells: cells.map(c => ({ id: c.id, cell_type: c.cell_type, source: c.source, language: c.language, outputs: c.outputs, execution_count: c.execution_count })),
                 }),
             });
+            if (data?.name && data.name !== notebookName) {
+                setNotebookName(data.name);
+                setOpenTabs(prev => prev.map(t => t === notebookName ? data.name : t));
+            }
             loadNotebookList();
         } catch (e) {
             console.error('Failed to save:', e);
+            alert(`Failed to save notebook: ${String(e)}`);
         }
-    }, [notebookName, cells, loadNotebookList]);
+    }, [notebookName, cells, loadNotebookList, fetchJsonOrThrow]);
 
     const createNewNotebook = useCallback(async () => {
         let i = 1;
@@ -681,7 +1213,7 @@ export default function NotebooksPage() {
         const newCells = [{ ...INITIAL_CELL, id: genId() }];
 
         try {
-            await fetch('/api/notebook/files', {
+            const data = await fetchJsonOrThrow('/api/notebook/files', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -689,22 +1221,23 @@ export default function NotebooksPage() {
                     cells: newCells.map(c => ({ id: c.id, cell_type: c.cell_type, source: c.source, language: c.language, outputs: c.outputs, execution_count: c.execution_count })),
                 }),
             });
+            const resolvedName = data?.name || newName;
 
             await loadNotebookList();
-            setNotebookName(newName);
+            setNotebookName(resolvedName);
             setCells(newCells);
             setActiveCell(newCells[0].id);
-            setOpenTabs(prev => [...prev, newName]);
+            setOpenTabs(prev => prev.includes(resolvedName) ? prev : [...prev, resolvedName]);
             setIsEditingName(false);
         } catch (e) {
             console.error('Failed to create new notebook:', e);
+            alert(`Failed to create notebook: ${String(e)}`);
         }
-    }, [savedNotebooks, loadNotebookList]);
+    }, [savedNotebooks, loadNotebookList, fetchJsonOrThrow]);
 
     const loadNotebook = useCallback(async (name: string) => {
         try {
-            const resp = await fetch(`/api/notebook/files/${name}`);
-            const data = await resp.json();
+            const data = await fetchJsonOrThrow(`/api/notebook/files/${encodeURIComponent(name)}`);
             setNotebookName(data.name || name);
             setCells((data.cells || []).map((c: any) => ({ ...c, id: c.id || genId(), running: false, outputs: c.outputs || [] })));
             if (data.cells?.length > 0) setActiveCell(data.cells[0].id || genId());
@@ -712,8 +1245,9 @@ export default function NotebooksPage() {
             setIsEditingName(false);
         } catch (e) {
             console.error('Failed to load notebook:', e);
+            alert(`Failed to load notebook '${name}': ${String(e)}`);
         }
-    }, []);
+    }, [fetchJsonOrThrow]);
 
     // ─── Cell Operations ───
     const addCell = useCallback((afterId?: string, type: 'code' | 'markdown' = 'code') => {
@@ -745,7 +1279,7 @@ export default function NotebooksPage() {
         if (!confirm(`Are you sure you want to delete '${name}'?`)) return;
 
         try {
-            await fetch(`/api/notebook/files/${name}`, { method: 'DELETE' });
+            await fetchJsonOrThrow(`/api/notebook/files/${encodeURIComponent(name)}`, { method: 'DELETE' });
             await loadNotebookList();
 
             const nextTabs = openTabs.filter(t => t !== name);
@@ -764,9 +1298,9 @@ export default function NotebooksPage() {
             }
         } catch (err) {
             console.error('Failed to delete notebook:', err);
-            alert(`Failed to delete '${name}'`);
+            alert(`Failed to delete '${name}': ${String(err)}`);
         }
-    }, [loadNotebookList, notebookName, loadNotebook, openTabs]);
+    }, [loadNotebookList, notebookName, loadNotebook, openTabs, fetchJsonOrThrow]);
 
     const closeTab = useCallback((name: string, e: React.MouseEvent) => {
         e.stopPropagation();
@@ -786,12 +1320,49 @@ export default function NotebooksPage() {
         }
     }, [openTabs, notebookName, isEditingName, originalName, loadNotebook]);
 
-    const finalizeRename = useCallback(() => {
-        setIsEditingName(false);
-        if (originalName && originalName !== notebookName) {
-            setOpenTabs(prev => prev.map(t => t === originalName ? notebookName : t));
+    const finalizeRename = useCallback(async () => {
+        const targetName = notebookName.trim();
+        if (!targetName) {
+            setNotebookName(originalName || 'Untitled');
+            setIsEditingName(false);
+            return;
         }
-    }, [originalName, notebookName]);
+
+        if (!originalName || originalName === targetName) {
+            setNotebookName(targetName);
+            setIsEditingName(false);
+            return;
+        }
+
+        const existsOnDisk = savedNotebooks.some(nb => nb.name === originalName);
+        if (!existsOnDisk) {
+            setNotebookName(targetName);
+            setOpenTabs(prev => prev.map(t => t === originalName ? targetName : t));
+            setIsEditingName(false);
+            return;
+        }
+
+        try {
+            const data = await fetchJsonOrThrow('/api/notebook/files/rename', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    old_name: originalName,
+                    new_name: targetName,
+                }),
+            });
+            const resolvedName = data?.name || targetName;
+            setNotebookName(resolvedName);
+            setOpenTabs(prev => prev.map(t => t === originalName ? resolvedName : t));
+            await loadNotebookList();
+        } catch (err) {
+            console.error('Failed to rename notebook:', err);
+            setNotebookName(originalName);
+            alert(`Failed to rename notebook: ${String(err)}`);
+        } finally {
+            setIsEditingName(false);
+        }
+    }, [originalName, notebookName, savedNotebooks, fetchJsonOrThrow, loadNotebookList]);
 
     const moveCell = useCallback((id: string, direction: 'up' | 'down') => {
         setCells(prev => {
@@ -818,10 +1389,13 @@ export default function NotebooksPage() {
         }
 
         try {
-            const resp = await fetch(`/api/notebook/kernels/${kernelId}/execute`, {
+            const resp = await fetch(`/api/notebook/kernels/${encodeURIComponent(kernelId)}/execute`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: codeToExecute }),
             });
-            const result = await resp.json();
+            const result = await resp.json().catch(() => ({} as any));
+            if (!resp.ok) {
+                throw new Error(result?.detail || result?.error || `HTTP ${resp.status}`);
+            }
             updateCell(id, { running: false, outputs: result.outputs || [], execution_count: result.execution_count });
         } catch (e) {
             updateCell(id, { running: false, outputs: [{ output_type: 'error', ename: 'ExecutionError', evalue: String(e), traceback: [] }] });
@@ -890,8 +1464,7 @@ export default function NotebooksPage() {
     // ─── Databricks-like: Export Notebook as .ipynb download ───
     const exportNotebook = useCallback(async () => {
         try {
-            const resp = await fetch(`/api/notebook/files/${notebookName}`);
-            const data = await resp.json();
+            const data = await fetchJsonOrThrow(`/api/notebook/files/${encodeURIComponent(notebookName)}`);
             const ipynbData = {
                 nbformat: 4, nbformat_minor: 5,
                 metadata: { kernelspec: { display_name: 'Python 3', language: 'python', name: 'python3' }, language_info: { name: 'python', version: '3.11' } },
@@ -913,7 +1486,7 @@ export default function NotebooksPage() {
             console.error('Failed to export:', e);
             alert('Failed to export notebook');
         }
-    }, [notebookName]);
+    }, [notebookName, fetchJsonOrThrow]);
 
     // ─── Export as .py (Databricks/VS Code percent format) ───
     const exportAsPy = useCallback(() => {
@@ -1263,8 +1836,8 @@ export default function NotebooksPage() {
                                             className="text-[13px] font-medium text-white bg-transparent outline-none w-32 tracking-wide"
                                             value={notebookName}
                                             onChange={(e) => setNotebookName(e.target.value)}
-                                            onBlur={finalizeRename}
-                                            onKeyDown={(e) => { if (e.key === 'Enter') finalizeRename(); }}
+                                            onBlur={() => { void finalizeRename(); }}
+                                            onKeyDown={(e) => { if (e.key === 'Enter') void finalizeRename(); }}
                                             onClick={(e) => e.stopPropagation()}
                                         />
                                     ) : (
@@ -1322,6 +1895,11 @@ export default function NotebooksPage() {
                                     onMoveDown={() => moveCell(cell.id, 'down')}
                                     onRun={() => runCell(cell.id)}
                                     onAddBelow={(type) => addCell(cell.id, type)}
+                                    sqlSuggestionItems={sqlSuggestionItems}
+                                    loadSqlColumns={loadSqlColumns}
+                                    sqlKeywordItems={sqlKeywordItems}
+                                    pythonKeywordItems={pythonKeywordItems}
+                                    pythonSymbolItems={pythonSymbolItems}
                                 />
                             </div>
                         ))}

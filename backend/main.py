@@ -8,7 +8,7 @@ load_dotenv()  # Load .env before any router imports read os.getenv()
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from routers import trino, postgres, airflow, lineage, storage, orchestrator, health, files, gitea, docker, notebook
+from routers import trino, postgres, airflow, lineage, storage, orchestrator, health, files, gitea, docker, notebook, spark
 
 app = FastAPI(
     title="OpenClaw API",
@@ -42,6 +42,7 @@ app.include_router(files.router,        prefix="/api", tags=["Files"])
 app.include_router(gitea.router,       prefix="/api", tags=["Gitea"])
 app.include_router(docker.router,       prefix="/api", tags=["Docker"])
 app.include_router(notebook.router,     prefix="/api", tags=["Notebook"])
+app.include_router(spark.router,        prefix="/api", tags=["Spark"])
 
 
 @app.get("/")

@@ -17,19 +17,20 @@ import {
 type SortDirection = 'asc' | 'desc' | null;
 type SortConfig = { column: string; direction: SortDirection };
 type BottomPanel = 'results' | 'history' | 'queries' | 'saved' | 'properties';
+type Engine = 'trino' | 'spark' | 'postgres';
 
 type SavedQuery = {
     id: string;
     name: string;
     sql: string;
-    engine: 'trino' | 'postgres';
+    engine: Engine;
     savedAt: number;
 };
 
 type QueryHistoryItem = {
     id: string;
     query: string;
-    engine: 'trino' | 'postgres';
+    engine: Engine;
     timestamp: number;
     duration: number;
     rowCount: number | null;
@@ -104,12 +105,40 @@ type StatementExecution = {
 
 const TRANSACTION_CONTROL_PATTERN = /\b(BEGIN|START\s+TRANSACTION|COMMIT|ROLLBACK|SAVEPOINT|RELEASE\s+SAVEPOINT)\b/i;
 const SCHEMA_MUTATION_PATTERN = /\b(CREATE|ALTER|DROP|TRUNCATE|COMMENT\s+ON|RENAME)\b/i;
+const ENGINE_ORDER: Engine[] = ['trino', 'spark', 'postgres'];
+const ENGINE_LABELS: Record<Engine, string> = {
+    trino: 'Trino',
+    spark: 'Spark',
+    postgres: 'PostgreSQL',
+};
 
 const hasExplicitTransactionControl = (sql: string) => TRANSACTION_CONTROL_PATTERN.test(sql);
 const isSchemaMutationStatement = (sql: string) => SCHEMA_MUTATION_PATTERN.test(sql);
 
 const escapeSqlLiteral = (value: string) => value.replace(/'/g, "''");
 const quoteTrinoIdentifier = (value: string) => `"${String(value).replace(/"/g, '""')}"`;
+const readTrinoCatalogName = (row: any): string => {
+    const value = row?.Catalog ?? row?.catalog ?? row?.CATALOG ?? row?.catalog_name ?? row?.CATALOG_NAME;
+    return typeof value === 'string' ? value.trim() : '';
+};
+const loadMonacoSqlKeywords = async (monacoInstance: any): Promise<string[]> => {
+    try {
+        const sqlRegistration = monacoInstance?.languages?.getLanguages?.().find((lang: any) => lang?.id === 'sql');
+        if (!sqlRegistration || typeof sqlRegistration.loader !== 'function') return [];
+        const loaded = await sqlRegistration.loader();
+        const rawKeywords = loaded?.language?.keywords;
+        if (!Array.isArray(rawKeywords)) return [];
+        return Array.from(
+            new Set(
+                rawKeywords
+                    .map((item: any) => String(item).trim())
+                    .filter((item: string) => item.length > 0)
+            )
+        );
+    } catch {
+        return [];
+    }
+};
 
 const makeStableId = (prefix: string): string => {
     if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -352,15 +381,15 @@ const SchemaTreeNode = ({
 // ─── Main Component ───
 export default function DataExplorer() {
     const [tabs, setTabs] = useState<QueryTab[]>([
-        { id: '1', name: 'console.sql', query: 'SELECT * FROM iceberg.silver.clean_customer LIMIT 100', active: true, results: null, pgSessionId: makeStableId('pg') },
-        { id: '2', name: 'analysis_v2.sql', query: '-- Analyzing customer churn\nSELECT count(*) FROM iceberg.silver.clean_orders;', active: false, pgSessionId: makeStableId('pg') }
+        { id: '1', name: 'console.sql', query: '', active: true, results: null, pgSessionId: makeStableId('pg') }
     ]);
     const activeTab = tabs.find(t => t.active) || tabs[0];
     const [isExecuting, setIsExecuting] = useState(false);
-    const [engine, setEngine] = useState<'trino' | 'postgres'>('trino');
+    const [engine, setEngine] = useState<Engine>('trino');
     const [pgDatabase, setPgDatabase] = useState<string>('controldb');
-    const [trinoCatalog, setTrinoCatalog] = useState<string>('iceberg');
+    const [trinoCatalog, setTrinoCatalog] = useState<string>('');
     const [trinoSchema, setTrinoSchema] = useState<string>('');
+    const [sparkDatabase, setSparkDatabase] = useState<string>('default');
     const [showTrinoSettings, setShowTrinoSettings] = useState(false);
     const [trinoRole, setTrinoRole] = useState('');
     const [trinoClientTagsInput, setTrinoClientTagsInput] = useState('');
@@ -424,6 +453,7 @@ export default function DataExplorer() {
     const [showSchemaExplorer, setShowSchemaExplorer] = useState(true);
     const [schemaTree, setSchemaTree] = useState<SchemaNode[]>([]);
     const [isSchemaLoading, setIsSchemaLoading] = useState(false);
+    const [sqlLanguageKeywords, setSqlLanguageKeywords] = useState<string[]>([]);
 
     // ─── Trino Queries & Cluster Info State ───
     const [trinoQueries, setTrinoQueries] = useState<any[]>([]);
@@ -438,16 +468,23 @@ export default function DataExplorer() {
     const [pgQueries, setPgQueries] = useState<any[]>([]);
     const [pgQueriesLoading, setPgQueriesLoading] = useState(false);
     const [pgInfo, setPgInfo] = useState<{ version?: string; uptime?: string; activeConnections?: number; databaseSize?: string; state?: string } | null>(null);
+    const [sparkInfo, setSparkInfo] = useState<{ version?: string; master?: string; appName?: string; defaultDatabase?: string; state?: string } | null>(null);
 
     // ─── Saved Queries State ───
     const [savedQueries, setSavedQueries] = useState<SavedQuery[]>([]);
     const [showSaveDialog, setShowSaveDialog] = useState(false);
     const [saveQueryName, setSaveQueryName] = useState('');
     const [currentExecution, setCurrentExecution] = useState<{
-        engine: 'trino' | 'postgres';
+        engine: Engine;
         queryTag: string;
         sessionId?: string;
     } | null>(null);
+    const cycleEngine = useCallback(() => {
+        setEngine(prev => {
+            const idx = ENGINE_ORDER.indexOf(prev);
+            return ENGINE_ORDER[(idx + 1) % ENGINE_ORDER.length];
+        });
+    }, []);
 
     // ─── Load query history from localStorage ───
     useEffect(() => {
@@ -808,7 +845,7 @@ export default function DataExplorer() {
         const newTab: QueryTab = {
             id: newId,
             name: `query_${newId}.sql`,
-            query: '-- New Query\nSELECT * FROM iceberg.silver.clean_orders LIMIT 10;',
+            query: '',
             active: true,
             pgSessionId: makeStableId('pg')
         };
@@ -831,6 +868,9 @@ export default function DataExplorer() {
                     if (matched?.queryId) {
                         await fetch(`/api/trino/queries/${matched.queryId}`, { method: 'DELETE' });
                     }
+                } else if (executing.engine === 'spark') {
+                    // Spark query cancellation is engine/deployment specific.
+                    // Request abortion above already stops waiting on the client side.
                 } else {
                     const res = await fetch(`/api/postgres/queries?database=${encodeURIComponent(pgDatabase)}`);
                     const data = await res.json();
@@ -939,9 +979,39 @@ export default function DataExplorer() {
         if (!contextMenu) return [];
         const { node, parentNames } = contextMenu;
         const isPostgres = engine === 'postgres';
+        const isSpark = engine === 'spark';
 
         // Build fully qualified name from parentNames
         const buildFQN = (names: string[]) => names.join('.');
+
+        if (isSpark) {
+            if (['table', 'view', 'materialized_view'].includes(node.type)) {
+                const dbName = parentNames[0] || sparkDatabase;
+                const objectName = node.sqlName || parentNames[parentNames.length - 1];
+                const fqn = `${dbName}.${objectName}`;
+                return [
+                    { label: 'Preview Top 100', icon: <Eye className="w-3.5 h-3.5" />, action: () => { updateQuery(`SELECT * FROM ${fqn} LIMIT 100`); setTimeout(() => executeRef.current(), 100); } },
+                    { label: 'Describe Table', icon: <Info className="w-3.5 h-3.5" />, action: () => { updateQuery(`DESCRIBE TABLE ${fqn}`); setTimeout(() => executeRef.current(), 100); } },
+                    { label: 'Row Count', icon: <Columns className="w-3.5 h-3.5" />, action: () => { updateQuery(`SELECT count(*) AS total_rows FROM ${fqn}`); setTimeout(() => executeRef.current(), 100); } },
+                    { divider: true },
+                    { label: 'Insert Name', icon: <Plus className="w-3.5 h-3.5" />, action: () => { insertIntoEditor(fqn); } },
+                ];
+            }
+            if (node.type === 'database' || node.type === 'schema') {
+                const dbName = node.name;
+                return [
+                    { label: 'Show Tables', icon: <Layers className="w-3.5 h-3.5" />, action: () => { updateQuery(`SHOW TABLES IN ${dbName}`); setTimeout(() => executeRef.current(), 100); } },
+                    { label: 'Set Current DB', icon: <Database className="w-3.5 h-3.5" />, action: () => { setSparkDatabase(dbName); } },
+                ];
+            }
+            if (node.type === 'column') {
+                return [
+                    { label: 'Insert Name', icon: <Plus className="w-3.5 h-3.5" />, action: () => { insertIntoEditor(node.name); } },
+                    { label: 'Copy Name', icon: <Copy className="w-3.5 h-3.5" />, action: () => { navigator.clipboard.writeText(node.name); } },
+                ];
+            }
+            return [];
+        }
 
         if (['table', 'view', 'materialized_view', 'function', 'procedure'].includes(node.type)) {
             const fqn = buildFQN(parentNames);
@@ -1112,7 +1182,7 @@ export default function DataExplorer() {
         }
 
         return [];
-    }, [contextMenu, engine, updateQuery, insertIntoEditor, trinoCatalog, trinoSchema]);
+    }, [contextMenu, engine, updateQuery, insertIntoEditor, trinoCatalog, trinoSchema, sparkDatabase]);
 
     // ─── Properties Panel Fetch ───
     const fetchProperties = useCallback(async (obj: { schema: string; name: string; database: string; type: string }, tab: string) => {
@@ -1209,6 +1279,20 @@ export default function DataExplorer() {
                     setTrinoInfo({ version: data.nodeVersion?.version, uptime: data.uptime, state: data.state });
                 } catch { }
             })();
+        } else if (engine === 'spark') {
+            (async () => {
+                try {
+                    const res = await fetch('/api/spark/info');
+                    const data = await res.json();
+                    setSparkInfo({
+                        version: data.version,
+                        master: data.master,
+                        appName: data.appName,
+                        defaultDatabase: data.defaultDatabase,
+                        state: data.state,
+                    });
+                } catch { }
+            })();
         } else {
             (async () => {
                 try {
@@ -1227,11 +1311,13 @@ export default function DataExplorer() {
             fetchTrinoQueries();
             const interval = setInterval(fetchTrinoQueries, 5000);
             return () => clearInterval(interval);
-        } else {
+        }
+        if (engine === 'postgres') {
             fetchPgQueries();
             const interval = setInterval(fetchPgQueries, 5000);
             return () => clearInterval(interval);
         }
+        return undefined;
     }, [bottomPanel, engine, fetchTrinoQueries, fetchPgQueries]);
 
     useEffect(() => {
@@ -1261,6 +1347,15 @@ export default function DataExplorer() {
         }
 
         if (!queryToRun || isExecuting) return;
+        if (engine === 'trino' && !trinoCatalog) {
+            setTabs(prev => prev.map(t => t.active ? {
+                ...t,
+                results: null,
+                error: 'No Trino catalog selected. Please select a catalog from the database dropdown.'
+            } : t));
+            setBottomPanel('results');
+            return;
+        }
 
         const runAsSingleScript = engine === 'postgres' && hasExplicitTransactionControl(queryToRun);
         const statements = runAsSingleScript ? [queryToRun] : splitSqlStatements(queryToRun);
@@ -1279,7 +1374,11 @@ export default function DataExplorer() {
         setTabs(prev => prev.map(t => t.active ? { ...t, results: null, resultSets: undefined, activeResultSetIndex: undefined, error: null } : t));
 
         try {
-            const apiUrl = engine === 'postgres' ? '/api/postgres' : '/api/trino';
+            const apiUrl = engine === 'postgres'
+                ? '/api/postgres'
+                : engine === 'spark'
+                    ? '/api/spark'
+                    : '/api/trino';
             const executionResults: StatementExecution[] = [];
             const queryTag = makeStableId('q');
             setCurrentExecution({
@@ -1299,9 +1398,16 @@ export default function DataExplorer() {
                         query_tag: queryTag,
                         ...(rowLimit ? { limit: rowLimit } : {})
                     }
+                    : engine === 'spark'
+                        ? {
+                            action: 'query',
+                            query: statement,
+                            database: sparkDatabase,
+                            ...(rowLimit ? { limit: rowLimit } : {})
+                        }
                     : {
                         query: statement,
-                        catalog: trinoCatalog,
+                        ...(trinoCatalog ? { catalog: trinoCatalog } : {}),
                         ...(trinoSchema ? { schema: trinoSchema } : {}),
                         ...(trinoRole.trim() ? { role: trinoRole.trim() } : {}),
                         ...(parsedTrinoSessionProperties ? { session_properties: parsedTrinoSessionProperties } : {}),
@@ -1453,6 +1559,7 @@ export default function DataExplorer() {
         engine,
         rowLimit,
         pgDatabase,
+        sparkDatabase,
         trinoCatalog,
         trinoSchema,
         trinoRole,
@@ -1465,7 +1572,9 @@ export default function DataExplorer() {
         const cleanQuery = activeTab.query.trim().replace(/;$/, '');
         const explainQuery = engine === 'postgres'
             ? `EXPLAIN (ANALYZE, FORMAT JSON) ${cleanQuery}`
-            : `EXPLAIN ANALYZE ${cleanQuery}`;
+            : engine === 'spark'
+                ? `EXPLAIN FORMATTED ${cleanQuery}`
+                : `EXPLAIN ANALYZE ${cleanQuery}`;
         updateQuery(explainQuery);
         setTimeout(() => {
             executeRef.current();
@@ -1567,6 +1676,24 @@ export default function DataExplorer() {
                         id: `pg_${d.name}`, name: d.name, type: 'database', isOpen: false, children: []
                     })));
                 }
+            } else if (engine === 'spark') {
+                const res = await fetch('/api/spark', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'explore', type: 'databases' })
+                });
+                const data = await res.json();
+                if (data.data) {
+                    const dbs = data.data.map((d: any) => ({
+                        id: `spark_${d.name}`, name: d.name, type: 'database' as const, isOpen: false, children: []
+                    }));
+                    setSchemaTree(dbs);
+                    if (dbs.length > 0) {
+                        setSparkDatabase(prev => dbs.some((d: any) => d.name === prev) ? prev : dbs[0].name);
+                    } else {
+                        setSparkDatabase('default');
+                    }
+                }
             } else {
                 // Trino - Show Catalogs
                 const res = await fetch('/api/trino', {
@@ -1576,12 +1703,18 @@ export default function DataExplorer() {
                 });
                 const data = await res.json();
                 if (data.data) {
-                    const catalogs = data.data.map((c: any) => ({
-                        id: `trino_${c.Catalog}`, name: c.Catalog, type: 'catalog', isOpen: false, children: []
-                    }));
+                    const catalogs = data.data
+                        .map((row: any) => readTrinoCatalogName(row))
+                        .filter((name: string) => Boolean(name))
+                        .map((name: string) => ({
+                            id: `trino_${name}`, name, type: 'catalog', isOpen: false, children: []
+                        }));
                     setSchemaTree(catalogs);
                     if (catalogs.length > 0) {
                         setTrinoCatalog(prev => catalogs.some((c: any) => c.name === prev) ? prev : catalogs[0].name);
+                        setTrinoSchema('');
+                    } else {
+                        setTrinoCatalog('');
                         setTrinoSchema('');
                     }
                 }
@@ -1721,6 +1854,43 @@ export default function DataExplorer() {
                         }));
                     }
                 }
+            } else if (engine === 'spark') {
+                if (nodeType === 'database') {
+                    const dbName = parentNames[0];
+                    setSparkDatabase(dbName);
+                    const res = await fetch('/api/spark', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ action: 'explore', type: 'tables', schema: dbName, database: dbName })
+                    });
+                    const data = await res.json();
+                    if (data.data) {
+                        newChildren = data.data.map((item: any) => ({
+                            id: `${nodeId}_${item.name}`,
+                            name: item.name,
+                            type: item.object_type || 'table',
+                            isOpen: false,
+                            children: [],
+                        }));
+                    }
+                } else if (['table', 'view', 'materialized_view'].includes(nodeType)) {
+                    const dbName = parentNames[0];
+                    const tableName = targetNode.sqlName || parentNames[parentNames.length - 1];
+                    const res = await fetch('/api/spark', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ action: 'explore', type: 'columns', schema: dbName, table: tableName, database: dbName })
+                    });
+                    const data = await res.json();
+                    if (data.data) {
+                        newChildren = data.data.map((c: any) => ({
+                            id: `${nodeId}_${c.name}`,
+                            name: c.name,
+                            type: 'column' as const,
+                            dataType: c.data_type,
+                        }));
+                    }
+                }
             } else {
                 // Trino
                 if (nodeType === 'catalog') {
@@ -1728,7 +1898,7 @@ export default function DataExplorer() {
                     setTrinoSchema('');
                     const res = await fetch('/api/trino', {
                         method: 'POST', headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ query: `SHOW SCHEMAS FROM ${catalogName}`, catalog: catalogName })
+                        body: JSON.stringify({ query: `SHOW SCHEMAS FROM ${quoteTrinoIdentifier(catalogName)}`, catalog: catalogName })
                     });
                     const data = await res.json();
                     if (data.data) {
@@ -1755,7 +1925,10 @@ export default function DataExplorer() {
                         res = await fetch('/api/trino', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ query: `SHOW TABLES FROM ${catalogName}.${schemaName}`, catalog: catalogName })
+                            body: JSON.stringify({
+                                query: `SHOW TABLES FROM ${quoteTrinoIdentifier(catalogName)}.${quoteTrinoIdentifier(schemaName)}`,
+                                catalog: catalogName
+                            })
                         });
                         data = await res.json();
                     }
@@ -1810,7 +1983,10 @@ export default function DataExplorer() {
                     setTrinoSchema(schemaName);
                     const res = await fetch('/api/trino', {
                         method: 'POST', headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ query: `SHOW COLUMNS FROM ${catalogName}.${schemaName}.${tableName}`, catalog: catalogName })
+                        body: JSON.stringify({
+                            query: `SHOW COLUMNS FROM ${quoteTrinoIdentifier(catalogName)}.${quoteTrinoIdentifier(schemaName)}.${quoteTrinoIdentifier(tableName)}`,
+                            catalog: catalogName
+                        })
                     });
                     const data = await res.json();
                     if (data.data) {
@@ -1923,7 +2099,7 @@ export default function DataExplorer() {
     const formatSQL = () => {
         try {
             const q = formatSqlText(activeTab.query, {
-                language: engine === 'postgres' ? 'postgresql' : 'trino',
+                language: engine === 'postgres' ? 'postgresql' : engine === 'spark' ? 'spark' : 'trino',
                 keywordCase: 'upper',
                 linesBetweenQueries: 1,
                 tabWidth: 4,
@@ -1966,6 +2142,18 @@ export default function DataExplorer() {
         const f = historyFilter.toLowerCase();
         return queryHistory.filter(h => h.query.toLowerCase().includes(f));
     }, [queryHistory, historyFilter]);
+
+    useEffect(() => {
+        if (!monaco) return;
+        let active = true;
+        void (async () => {
+            const keywords = await loadMonacoSqlKeywords(monaco);
+            if (active) setSqlLanguageKeywords(keywords);
+        })();
+        return () => {
+            active = false;
+        };
+    }, [monaco]);
 
     // ─── Monaco Config ───
     useEffect(() => {
@@ -2016,90 +2204,8 @@ export default function DataExplorer() {
         monaco.editor.setTheme('obsidian-premium');
 
         // ── SQL Autocomplete Provider ──
-        // Common keywords shared by both engines
-        const commonKeywords = [
-            'SELECT', 'FROM', 'WHERE', 'AND', 'OR', 'NOT', 'IN', 'BETWEEN', 'LIKE', 'IS', 'NULL',
-            'AS', 'ON', 'JOIN', 'LEFT', 'RIGHT', 'INNER', 'OUTER', 'FULL', 'CROSS', 'NATURAL',
-            'GROUP BY', 'ORDER BY', 'HAVING', 'LIMIT', 'OFFSET', 'UNION', 'UNION ALL', 'EXCEPT', 'INTERSECT',
-            'INSERT INTO', 'VALUES', 'UPDATE', 'SET', 'DELETE', 'CREATE', 'ALTER', 'DROP', 'TABLE', 'VIEW',
-            'INDEX', 'SCHEMA', 'DATABASE', 'IF EXISTS', 'IF NOT EXISTS', 'CASCADE',
-            'DISTINCT', 'ALL', 'TOP', 'CASE', 'WHEN', 'THEN', 'ELSE', 'END',
-            'ASC', 'DESC', 'NULLS FIRST', 'NULLS LAST', 'WITH', 'RECURSIVE',
-            'EXISTS', 'ANY', 'SOME', 'WINDOW', 'OVER', 'PARTITION BY', 'ROW_NUMBER', 'RANK', 'DENSE_RANK',
-            'EXPLAIN', 'ANALYZE', 'GRANT', 'REVOKE', 'COMMIT', 'ROLLBACK', 'SAVEPOINT', 'TRANSACTION',
-            'TRUE', 'FALSE',
-        ];
-        // Engine-specific keywords
-        const trinoOnlyKeywords = [
-            'FETCH', 'NEXT', 'ROWS', 'ONLY', 'PERCENT', 'TIES', 'TABLESAMPLE',
-            'VERBOSE', 'FORMAT', 'SHOW', 'DESCRIBE', 'USE',
-        ];
-        const pgOnlyKeywords = [
-            'RETURNING', 'ON CONFLICT', 'DO NOTHING', 'DO UPDATE', 'LATERAL', 'ILIKE',
-            'VACUUM', 'REINDEX', 'CLUSTER', 'NOTIFY', 'LISTEN', 'UNLISTEN', 'COPY',
-            'INHERITS', 'TABLESPACE', 'CONCURRENTLY', 'EXCLUDE', 'USING',
-            'FOR UPDATE', 'FOR SHARE', 'SKIP LOCKED', 'NOWAIT',
-            'GENERATED ALWAYS', 'GENERATED BY DEFAULT', 'IDENTITY',
-            'PRIMARY KEY', 'FOREIGN KEY', 'REFERENCES', 'UNIQUE', 'CHECK', 'DEFAULT',
-            'SERIAL', 'BIGSERIAL', 'SMALLSERIAL',
-            'PERFORM', 'RAISE', 'NOTICE', 'EXCEPTION',
-        ];
-        const sqlKeywords = [...commonKeywords, ...(engine === 'postgres' ? pgOnlyKeywords : trinoOnlyKeywords)];
-
-        // Common functions
-        const commonFunctions = [
-            'COUNT', 'SUM', 'AVG', 'MIN', 'MAX', 'COALESCE', 'NULLIF', 'CAST',
-            'CONCAT', 'SUBSTRING', 'TRIM', 'UPPER', 'LOWER', 'LENGTH', 'REPLACE', 'POSITION',
-            'ROUND', 'FLOOR', 'CEIL', 'ABS', 'MOD', 'POWER', 'SQRT', 'LOG', 'LN', 'EXP',
-            'CURRENT_DATE', 'CURRENT_TIME', 'CURRENT_TIMESTAMP', 'NOW', 'EXTRACT',
-            'ROW_NUMBER', 'RANK', 'DENSE_RANK', 'NTILE', 'LAG', 'LEAD', 'FIRST_VALUE', 'LAST_VALUE',
-        ];
-        const trinoOnlyFunctions = [
-            'TRY_CAST', 'DATE_TRUNC', 'DATE_ADD', 'DATE_DIFF', 'YEAR', 'MONTH', 'DAY', 'HOUR', 'MINUTE', 'SECOND',
-            'LISTAGG', 'ARRAY_AGG', 'STRING_AGG', 'JSON_EXTRACT', 'JSON_FORMAT',
-            'REGEXP_LIKE', 'REGEXP_REPLACE', 'REGEXP_EXTRACT', 'SPLIT', 'SPLIT_PART',
-            'APPROX_DISTINCT', 'APPROX_PERCENTILE', 'ARBITRARY',
-            'IF', 'IFF', 'TYPEOF',
-        ];
-        const pgOnlyFunctions = [
-            'pg_size_pretty', 'pg_total_relation_size', 'pg_relation_size', 'pg_database_size',
-            'pg_indexes_size', 'pg_column_size', 'pg_tablespace_size',
-            'pg_terminate_backend', 'pg_cancel_backend', 'pg_backend_pid', 'pg_postmaster_start_time',
-            'generate_series', 'string_agg', 'array_agg', 'array_to_string', 'string_to_array',
-            'to_char', 'to_date', 'to_timestamp', 'to_number',
-            'date_part', 'date_trunc', 'age', 'clock_timestamp', 'statement_timestamp', 'timeofday',
-            'regexp_matches', 'regexp_replace', 'regexp_split_to_table', 'regexp_split_to_array',
-            'json_build_object', 'json_agg', 'jsonb_build_object', 'jsonb_agg', 'jsonb_each', 'jsonb_array_elements',
-            'row_to_json', 'json_extract_path', 'json_extract_path_text',
-            'unnest', 'array_length', 'array_append', 'array_remove', 'array_position',
-            'format', 'left', 'right', 'lpad', 'rpad', 'md5', 'encode', 'decode',
-            'bool_and', 'bool_or', 'every', 'bit_and', 'bit_or',
-            'current_schema', 'current_user', 'current_database', 'current_setting', 'set_config',
-            'txid_current', 'pg_advisory_lock', 'pg_try_advisory_lock',
-        ];
-        const sqlFunctions = [...commonFunctions, ...(engine === 'postgres' ? pgOnlyFunctions : trinoOnlyFunctions)];
-
-        // Common types
-        const commonTypes = [
-            'VARCHAR', 'CHAR', 'INTEGER', 'INT', 'BIGINT', 'SMALLINT',
-            'DECIMAL', 'DOUBLE', 'REAL', 'FLOAT', 'BOOLEAN', 'DATE', 'TIME', 'TIMESTAMP',
-            'ARRAY', 'JSON', 'UUID',
-        ];
-        const trinoOnlyTypes = [
-            'TINYINT', 'MAP', 'ROW', 'VARBINARY', 'IPADDRESS',
-        ];
-        const pgOnlyTypes = [
-            'TEXT', 'BYTEA', 'JSONB', 'INTERVAL', 'NUMERIC', 'MONEY',
-            'SERIAL', 'BIGSERIAL', 'SMALLSERIAL',
-            'CIDR', 'INET', 'MACADDR', 'MACADDR8',
-            'POINT', 'LINE', 'LSEG', 'BOX', 'PATH', 'POLYGON', 'CIRCLE',
-            'TSQUERY', 'TSVECTOR', 'OID', 'REGCLASS', 'REGTYPE',
-            'INT2', 'INT4', 'INT8', 'FLOAT4', 'FLOAT8', 'BOOL',
-            'TIMESTAMPTZ', 'TIMETZ', 'DATERANGE', 'TSRANGE', 'INT4RANGE', 'INT8RANGE', 'NUMRANGE',
-            'BIT', 'BIT VARYING', 'VARBIT',
-        ];
-        const sqlTypes = [...commonTypes, ...(engine === 'postgres' ? pgOnlyTypes : trinoOnlyTypes)];
-        // Build dynamic schema items from the loaded schema tree
+        // SQL keywords/functions/types are provided by Monaco language service.
+        // Here we only provide live metadata suggestions from the loaded schema tree.
         const schemaItems: { label: string; detail: string; kind: any; fqn?: string }[] = [];
         const collectNodes = (nodes: SchemaNode[], path: string[] = []) => {
             for (const node of nodes) {
@@ -2148,6 +2254,8 @@ export default function DataExplorer() {
                 const dotMatch = textBefore.match(/(\w+(?:\.\w+)*)\.\s*$/);
                 const prefix = dotMatch ? dotMatch[1].toLowerCase() : null;
 
+                const typedPrefix = (word.word || '').toLowerCase();
+
                 // Filter schema items by context
                 let contextItems = schemaItems;
                 if (prefix) {
@@ -2156,48 +2264,45 @@ export default function DataExplorer() {
                         item.fqn && item.fqn.toLowerCase().startsWith(prefix + '.') &&
                         item.fqn.toLowerCase().split('.').length === prefix.split('.').length + 1
                     );
+                } else if (typedPrefix) {
+                    contextItems = schemaItems.filter(item => item.label.toLowerCase().startsWith(typedPrefix));
                 }
 
-                const suggestions = [
-                    ...sqlKeywords.map(kw => ({
-                        label: kw,
-                        kind: monaco.languages.CompletionItemKind.Keyword,
-                        insertText: kw,
-                        range,
-                        sortText: '0' + kw,
-                    })),
-                    ...sqlFunctions.map(fn => ({
-                        label: fn,
-                        kind: monaco.languages.CompletionItemKind.Function,
-                        insertText: fn + '($0)',
-                        insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-                        range,
-                        detail: 'function',
-                        sortText: '1' + fn,
-                    })),
-                    ...sqlTypes.map(tp => ({
-                        label: tp,
-                        kind: monaco.languages.CompletionItemKind.TypeParameter,
-                        insertText: tp,
-                        range,
-                        detail: 'data type',
-                        sortText: '2' + tp,
-                    })),
-                    ...contextItems.map(item => ({
-                        label: item.label,
-                        kind: item.kind,
-                        insertText: item.label,
-                        range,
-                        detail: item.detail,
-                        sortText: '3' + item.label,
-                    })),
-                ];
+                const keywordSuggestions = prefix
+                    ? []
+                    : sqlLanguageKeywords
+                        .filter(keyword => !typedPrefix || keyword.toLowerCase().startsWith(typedPrefix))
+                        .map(keyword => ({
+                            label: keyword.toUpperCase(),
+                            kind: monaco.languages.CompletionItemKind.Keyword,
+                            insertText: keyword.toUpperCase(),
+                            range,
+                            detail: 'sql keyword',
+                            sortText: '0_' + keyword,
+                        }));
+
+                const metadataSuggestions = contextItems.map(item => ({
+                    label: item.label,
+                    kind: item.kind,
+                    insertText: item.label,
+                    range,
+                    detail: item.detail,
+                    sortText: '1_' + item.label,
+                }));
+
+                const seen = new Set<string>();
+                const suggestions = [...keywordSuggestions, ...metadataSuggestions].filter((item: any) => {
+                    const key = String(item.label).toLowerCase();
+                    if (seen.has(key)) return false;
+                    seen.add(key);
+                    return true;
+                });
                 return { suggestions } as any;
             }
         });
 
         return () => disposable.dispose();
-    }, [monaco, engine, schemaTree]);
+    }, [monaco, engine, schemaTree, sqlLanguageKeywords]);
 
     // ─── Monaco Mount ───
     const handleEditorMount: OnMount = (editor, monacoInstance) => {
@@ -2340,13 +2445,13 @@ export default function DataExplorer() {
                 {/* Explorer Header */}
                 <div className="h-10 border-b border-white/5 flex items-center justify-between px-4 shrink-0">
                     <div
-                        onClick={() => setEngine(engine === 'trino' ? 'postgres' : 'trino')}
+                        onClick={cycleEngine}
                         className="flex items-center gap-2 cursor-pointer group hover:bg-white/5 px-2 py-1 -ml-2 rounded transition-colors"
                         title="Switch Connection"
                     >
                         <Database className="w-3.5 h-3.5 text-sky-400 opacity-80 group-hover:opacity-100 transition-opacity" />
                         <span className="text-xs font-semibold text-white/90 tracking-wide">
-                            {engine === 'trino' ? 'Trino (Iceberg)' : 'PostgreSQL'}
+                            {ENGINE_LABELS[engine]}
                         </span>
                         <ArrowUpDown className="w-3 h-3 text-white/30 group-hover:text-white/70 transition-colors ml-1" />
                     </div>
@@ -2423,8 +2528,12 @@ export default function DataExplorer() {
                                 <Database className="w-3 h-3 text-obsidian-info" />
                                 <span className="text-foreground/80 font-medium">
                                     {engine === 'trino'
-                                        ? (trinoSchema ? `${trinoCatalog}.${trinoSchema}` : trinoCatalog)
-                                        : pgDatabase}
+                                        ? (trinoCatalog
+                                            ? (trinoSchema ? `${trinoCatalog}.${trinoSchema}` : trinoCatalog)
+                                            : 'Select catalog')
+                                        : engine === 'spark'
+                                            ? sparkDatabase
+                                            : pgDatabase}
                                 </span>
                                 <ChevronDown className="w-3.5 h-3.5 text-obsidian-muted" />
                             </button>
@@ -2443,13 +2552,26 @@ export default function DataExplorer() {
                                             </div>
                                             {engine === 'trino' ? (
                                                 <>
-                                                    {(schemaTree.length > 0 ? schemaTree : [{ name: 'iceberg' }, { name: 'system' }, { name: 'mysql' }]).map((catalog: any) => (
+                                                    {schemaTree.length === 0 && (
+                                                        <div className="px-2 py-2 text-[11px] text-white/40">
+                                                            No catalogs loaded
+                                                        </div>
+                                                    )}
+                                                    {schemaTree.map((catalog: any) => (
                                                         <button
                                                             key={catalog.name}
                                                             onClick={() => { setTrinoCatalog(catalog.name); setTrinoSchema(''); setShowDbMenu(false); }}
                                                             className={`flex items-center gap-2 px-2 py-1.5 text-xs text-left rounded transition-colors ${trinoCatalog === catalog.name ? 'bg-white/[0.04] text-white font-medium' : 'hover:bg-white/[0.02] text-obsidian-muted'}`}
                                                         >
                                                             <Database className={`w-3 h-3 ${trinoCatalog === catalog.name ? 'text-obsidian-info' : 'opacity-50'}`} /> {catalog.name}
+                                                        </button>
+                                                    ))}
+                                                </>
+                                            ) : engine === 'spark' ? (
+                                                <>
+                                                    {schemaTree.map(db => (
+                                                        <button key={db.name} onClick={() => { setSparkDatabase(db.name); setShowDbMenu(false); }} className={`flex items-center gap-2 px-2 py-1.5 text-xs text-left rounded transition-colors ${sparkDatabase === db.name ? 'bg-white/[0.04] text-white font-medium' : 'hover:bg-white/[0.02] text-obsidian-muted'}`}>
+                                                            <Database className={`w-3 h-3 ${sparkDatabase === db.name ? 'text-obsidian-info' : 'opacity-50'}`} /> {db.name}
                                                         </button>
                                                     ))}
                                                 </>
@@ -2497,7 +2619,7 @@ export default function DataExplorer() {
                                                 <input
                                                     value={trinoRole}
                                                     onChange={(e) => setTrinoRole(e.target.value)}
-                                                    placeholder="e.g. system, role_name"
+                                                    placeholder="e.g. catalog_or_schema, role_name"
                                                     className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1.5 text-[11px] text-white placeholder-white/30 focus:outline-none focus:border-sky-400/40"
                                                 />
                                             </div>
@@ -3242,8 +3364,18 @@ export default function DataExplorer() {
                             {bottomPanel === 'queries' && (
                                 <div className="flex flex-col h-full bg-obsidian-bg">
                                     <div className="p-3 border-b border-obsidian-border/30 flex items-center justify-between shrink-0 bg-black/40">
-                                        <span className="text-[11px] text-white/60">{engine === 'trino' ? 'Trino Active & Recent Queries' : 'PostgreSQL Active Queries'}</span>
-                                        <button onClick={engine === 'trino' ? fetchTrinoQueries : fetchPgQueries} className="text-xs flex items-center gap-1.5 text-white/50 hover:text-white hover:bg-white/5 px-2 py-1 rounded transition-colors">
+                                        <span className="text-[11px] text-white/60">
+                                            {engine === 'trino'
+                                                ? 'Trino Active & Recent Queries'
+                                                : engine === 'spark'
+                                                    ? 'Spark Query Monitoring'
+                                                    : 'PostgreSQL Active Queries'}
+                                        </span>
+                                        <button
+                                            onClick={engine === 'trino' ? fetchTrinoQueries : engine === 'postgres' ? fetchPgQueries : undefined}
+                                            disabled={engine === 'spark'}
+                                            className="text-xs flex items-center gap-1.5 text-white/50 hover:text-white hover:bg-white/5 px-2 py-1 rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                                        >
                                             <RefreshCw className={clsx("w-3.5 h-3.5", (engine === 'trino' ? trinoQueriesLoading : pgQueriesLoading) && "animate-spin")} /> Refresh
                                         </button>
                                     </div>
@@ -3437,6 +3569,10 @@ export default function DataExplorer() {
                                                     )}
                                                 </div>
                                             )
+                                        ) : engine === 'spark' ? (
+                                            <div className="flex h-full items-center justify-center p-8 text-obsidian-muted text-[11px]">
+                                                Spark query list/cancel metrics are not wired yet. Query execution works via `/api/spark`.
+                                            </div>
                                         ) : (
                                             /* ── PostgreSQL Queries ── */
                                             pgQueries.length === 0 ? (
@@ -3653,12 +3789,19 @@ export default function DataExplorer() {
                 {/* ─── Status Bar ─── */}
                 <div className="absolute bottom-0 left-0 right-0 flex items-center px-5 justify-between h-8 bg-black/40 backdrop-blur-xl text-[10px] text-white/40 font-mono select-none z-10 border-t border-white/5">
                     <div className="flex items-center gap-4">
-                        <span>Connected to <span className="text-white/80">{engine === 'trino' ? 'Trino' : 'PostgreSQL'}</span> @ localhost</span>
+                        <span>Connected to <span className="text-white/80">{ENGINE_LABELS[engine]}</span> @ localhost</span>
                         <div className="w-[1px] h-3 bg-white/10" />
                         {engine === 'trino' && activeTab.results && activeTab.results.stats ? (
                             <span className="flex items-center gap-1 text-sky-400/60">
                                 <Zap className="w-3 h-3" /> {activeTab.results.stats.elapsedTimeMillis}ms
                             </span>
+                        ) : engine === 'spark' && sparkInfo ? (
+                            <>
+                                <div className="w-[1px] h-3 bg-white/10" />
+                                <span className="flex items-center gap-1 text-sky-400/60">
+                                    <Zap className="w-3 h-3" /> v{sparkInfo.version} · {sparkInfo.master} · {sparkInfo.defaultDatabase}
+                                </span>
+                            </>
                         ) : engine === 'postgres' && pgInfo && (
                             <>
                                 <div className="w-[1px] h-3 bg-white/10" />

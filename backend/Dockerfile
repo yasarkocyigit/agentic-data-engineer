@@ -1,7 +1,13 @@
 # ─── OpenClaw FastAPI Backend ───
+FROM apache/spark:4.0.1 AS spark-runtime
 FROM python:3.12-slim
 
 WORKDIR /app
+
+# Keep PySpark driver on same JDK major as Spark master/worker containers.
+COPY --from=spark-runtime /opt/java/openjdk /opt/java/openjdk
+ENV JAVA_HOME=/opt/java/openjdk
+ENV PATH="${JAVA_HOME}/bin:${PATH}"
 
 # Install dependencies first (cached layer)
 COPY requirements.txt .
