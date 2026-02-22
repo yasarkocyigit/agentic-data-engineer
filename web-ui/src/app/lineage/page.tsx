@@ -282,10 +282,17 @@ export default function LineagePage() {
     };
 
     return (
-        <div className="flex h-screen bg-obsidian-bg text-foreground font-sans overflow-hidden">
-            <Sidebar />
+        <div className="flex h-screen bg-[#09090b] text-foreground font-sans overflow-hidden relative" style={{ fontFamily: "'Inter', -apple-system, sans-serif" }}>
 
-            <main className="flex-1 flex flex-col min-w-0 overflow-hidden bg-obsidian-bg">
+            {/* Ambient Lighting */}
+            <div className="absolute top-0 left-0 w-[800px] h-[800px] bg-purple-500/5 rounded-full blur-[120px] pointer-events-none -translate-x-1/4 -translate-y-1/4 z-0" />
+            <div className="absolute bottom-0 right-0 w-[600px] h-[600px] bg-sky-500/5 rounded-full blur-[100px] pointer-events-none translate-x-1/4 -translate-y-1/4 z-0" />
+
+            <div className="relative z-10 shrink-0">
+                <Sidebar />
+            </div>
+
+            <main className="flex-1 flex flex-col min-w-0 bg-transparent relative z-10">
                 {/* ─── Top Bar ─── */}
                 <div className="flex items-center px-4 justify-between shrink-0 h-10 bg-black/60 border-b border-obsidian-border/30 z-10 w-full">
                     <div className="flex items-center gap-3 text-[12px]">
@@ -351,10 +358,10 @@ export default function LineagePage() {
                 </div>
 
                 {/* ─── Main Content ─── */}
-                <div className="flex-1 flex overflow-hidden">
+                <div className="flex-1 flex overflow-hidden bg-transparent">
 
                     {/* Left: Job/Dataset List */}
-                    <div className="w-[280px] border-r border-obsidian-border/30 flex flex-col bg-[#09090b]/80 backdrop-blur-xl overflow-hidden shrink-0 shadow-[4px_0_24px_rgba(0,0,0,0.4)] z-10 transition-all duration-300">
+                    <div className="w-[280px] border-r border-obsidian-border/30 flex flex-col bg-black/20 backdrop-blur-xl overflow-hidden shrink-0 shadow-[4px_0_24px_rgba(0,0,0,0.4)] z-10 transition-all duration-300">
                         {/* Jobs Section */}
                         <div className="flex-1 overflow-hidden flex flex-col border-b border-obsidian-border/30">
                             <div className="px-4 py-3 text-[10px] font-bold text-obsidian-muted uppercase tracking-widest flex items-center justify-between bg-black/40 shrink-0 shadow-sm border-b border-obsidian-border/20 sticky top-0 z-10 backdrop-blur-md">
@@ -425,7 +432,7 @@ export default function LineagePage() {
                     </div>
 
                     {/* Center: Lineage Graph */}
-                    <div className="flex-1 relative bg-obsidian-bg overflow-hidden">
+                    <div className="flex-1 relative bg-transparent overflow-hidden">
                         {/* Zoom Controls */}
                         <div className="absolute top-3 right-3 z-20 flex flex-col gap-1">
                             <button onClick={() => setZoom(z => Math.min(3, z + 0.15))} className="p-1.5 bg-obsidian-panel border border-obsidian-border rounded hover:bg-obsidian-panel-hover transition-colors">
@@ -647,7 +654,7 @@ export default function LineagePage() {
 
                     {/* Right: Detail Panel */}
                     {selectedNode && (
-                        <div className="w-[320px] border-l border-white/5 flex flex-col bg-[#09090b]/80 backdrop-blur-xl overflow-hidden shrink-0 shadow-[-4px_0_24px_rgba(0,0,0,0.4)] z-10 transition-all duration-300 transform translate-x-0">
+                        <div className="w-[320px] border-l border-white/5 flex flex-col bg-black/20 backdrop-blur-xl overflow-hidden shrink-0 shadow-[-4px_0_24px_rgba(0,0,0,0.4)] z-10 transition-all duration-300 transform translate-x-0">
                             <div className="px-5 py-4 border-b border-white/5 bg-black/40 shadow-sm shrink-0">
                                 <div className="flex items-center gap-2.5 mb-2.5">
                                     {selectedNode.type === 'DATASET' ? (

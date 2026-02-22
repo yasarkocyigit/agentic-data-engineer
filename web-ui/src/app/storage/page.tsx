@@ -186,17 +186,17 @@ export default function StoragePage() {
     };
 
     return (
-        <div className="flex h-screen bg-[#09090b] text-foreground font-sans overflow-hidden relative">
+        <div className="flex h-screen bg-[#09090b] text-foreground font-sans overflow-hidden relative" style={{ fontFamily: "'Inter', -apple-system, sans-serif" }}>
             {/* Ambient Lighting */}
-            <div className="absolute top-0 left-0 w-[800px] h-[800px] bg-obsidian-purple/[0.04] rounded-full blur-[120px] pointer-events-none -translate-x-1/4 -translate-y-1/4" />
-            <div className="absolute bottom-0 right-0 w-[600px] h-[600px] bg-obsidian-info/[0.03] rounded-full blur-[100px] pointer-events-none translate-x-1/4 translate-y-1/4" />
+            <div className="absolute top-0 left-0 w-[800px] h-[800px] bg-purple-500/5 rounded-full blur-[120px] pointer-events-none -translate-x-1/4 -translate-y-1/4 z-0" />
+            <div className="absolute bottom-0 right-0 w-[600px] h-[600px] bg-sky-500/5 rounded-full blur-[100px] pointer-events-none translate-x-1/4 -translate-y-1/4 z-0" />
 
             {/* Sidebar */}
             <div className="relative z-10 shrink-0">
                 <Sidebar />
             </div>
 
-            <main className="flex-1 flex flex-col min-w-0 overflow-hidden relative z-10">
+            <main className="flex-1 flex flex-col min-w-0 bg-transparent relative z-10">
 
                 {/* ─── Top Bar ─── */}
                 <header className="flex items-center px-4 justify-between shrink-0 h-10 bg-black/40 backdrop-blur-md border-b border-white/5 z-10 w-full relative">
@@ -257,11 +257,11 @@ export default function StoragePage() {
                 </header>
 
                 {/* ─── Main Content ─── */}
-                <div className="flex-1 flex overflow-hidden">
+                <div className="flex-1 flex overflow-hidden bg-transparent">
 
                     {/* ─── Bucket/Object Browser ─── */}
                     <div className={clsx(
-                        "flex-1 flex flex-col overflow-hidden",
+                        "flex-1 flex flex-col overflow-hidden bg-transparent custom-scrollbar",
                         selectedFile && !fullscreenPreview && "border-r border-white/5"
                     )}>
 

@@ -171,6 +171,10 @@ const clusterShuffleWarningLabel = (cluster: NotebookCluster | null | undefined)
     return '';
 };
 
+const emitNotebookNotice = (message: string) => {
+    window.dispatchEvent(new CustomEvent('openclaw:notebooks-notice', { detail: { message } }));
+};
+
 // ─── Helpers ───
 const genId = () => Math.random().toString(36).substring(2, 10);
 const quoteSqlIdentifier = (value: string) => `"${String(value).replace(/"/g, '""')}"`;
@@ -836,8 +840,8 @@ function NotebookCell({
                             {/* Right Side: Markdown Badge, Sparkles, Expand, More */}
                             <div className="flex items-center gap-1.5 text-obsidian-muted">
                                 <span className="px-2 py-0.5 mr-1 text-[11px] font-medium text-foreground/50 bg-[#252830] rounded border border-white/5">Markdown</span>
-                                <button onClick={(e) => { e.stopPropagation(); alert('AI Generate requires an LLM API key configuration. Coming soon!'); }} className="w-6 h-6 flex items-center justify-center rounded hover:bg-white/10 text-[#d7aef2] hover:text-[#f3d0ff] transition-colors" title="AI Generate"><Sparkles className="w-3.5 h-3.5" /></button>
-                                <button onClick={(e) => { e.stopPropagation(); alert('Expand mode coming soon!'); }} className="w-6 h-6 flex items-center justify-center rounded hover:bg-white/10 transition-colors" title="Expand"><Maximize2 className="w-3.5 h-3.5" /></button>
+                                <button onClick={(e) => { e.stopPropagation(); emitNotebookNotice('AI Generate requires an LLM API key configuration. Coming soon!'); }} className="w-6 h-6 flex items-center justify-center rounded hover:bg-white/10 text-[#d7aef2] hover:text-[#f3d0ff] transition-colors" title="AI Generate"><Sparkles className="w-3.5 h-3.5" /></button>
+                                <button onClick={(e) => { e.stopPropagation(); emitNotebookNotice('Expand mode coming soon!'); }} className="w-6 h-6 flex items-center justify-center rounded hover:bg-white/10 transition-colors" title="Expand"><Maximize2 className="w-3.5 h-3.5" /></button>
                                 <button className="w-6 h-6 flex items-center justify-center rounded hover:bg-white/10 transition-colors" title="More options"><MoreHorizontal className="w-3.5 h-3.5" /></button>
                                 <button onClick={(e) => { e.stopPropagation(); onDelete(); }} disabled={total <= 1} className="w-6 h-6 flex items-center justify-center rounded text-obsidian-danger/50 hover:text-obsidian-danger hover:bg-obsidian-danger/10 transition-colors disabled:opacity-20" title="Delete cell"><Trash2 className="w-4 h-4" /></button>
                             </div>
@@ -985,13 +989,15 @@ function NotebookCell({
             </div>
 
             {/* Markdown Active Bottom Hints */}
-            {cell.cell_type === 'markdown' && isActive && (
-                <div className="w-full flex-col items-center justify-center text-obsidian-muted/40 text-[11px] font-mono mt-8 leading-loose text-center mb-4 tracking-wide">
-                    [Shift+Enter] to run and move to next cell<br />
-                    [Cmd+Shift+P] to open the command palette<br />
-                    [Esc H] to see all keyboard shortcuts
-                </div>
-            )}
+            {
+                cell.cell_type === 'markdown' && isActive && (
+                    <div className="w-full flex-col items-center justify-center text-obsidian-muted/40 text-[11px] font-mono mt-8 leading-loose text-center mb-4 tracking-wide">
+                        [Shift+Enter] to run and move to next cell<br />
+                        [Cmd+Shift+P] to open the command palette<br />
+                        [Esc H] to see all keyboard shortcuts
+                    </div>
+                )
+            }
 
             {/* Add Cell Divider (Databricks-style centered + button) */}
             <div className="w-full max-w-[1200px] 2xl:max-w-[1400px] h-6 relative flex items-center justify-center group/divider">
@@ -1013,7 +1019,7 @@ function NotebookCell({
                     </button>
                 </div>
             </div>
-        </div>
+        </div >
     );
 }
 
@@ -1046,8 +1052,27 @@ export default function NotebooksPage() {
     const [clusterObservability, setClusterObservability] = useState<NotebookObservabilityItem | null>(null);
     const [clustersLoaded, setClustersLoaded] = useState(false);
     const [clusterApiAvailable, setClusterApiAvailable] = useState<boolean>(true);
+    const [uiNotice, setUiNotice] = useState<{ tone: 'success' | 'error' | 'info'; message: string } | null>(null);
     const sqlColumnCacheRef = useRef<Map<string, NotebookSqlSuggestionItem[]>>(new Map());
     const pythonSymbolItems = React.useMemo(() => collectPythonNotebookSymbols(cells), [cells]);
+    const [navExpanded, setNavExpanded] = useState(true); // Added for navExpanded
+
+    useEffect(() => {
+        if (!uiNotice) return;
+        const timer = window.setTimeout(() => setUiNotice(null), 3500);
+        return () => window.clearTimeout(timer);
+    }, [uiNotice]);
+
+    useEffect(() => {
+        const handler = (event: Event) => {
+            const detail = (event as CustomEvent<{ message?: string }>).detail;
+            const message = detail?.message;
+            if (!message) return;
+            setUiNotice({ tone: 'info', message });
+        };
+        window.addEventListener('openclaw:notebooks-notice', handler);
+        return () => window.removeEventListener('openclaw:notebooks-notice', handler);
+    }, []);
 
     useEffect(() => {
         if (!monaco) return;
@@ -1337,7 +1362,7 @@ export default function NotebooksPage() {
     const attachCluster = useCallback(async () => {
         if (!kernelId || !selectedClusterId) return;
         if (!clusterApiAvailable) {
-            alert('Bu backend sürümünde cluster attach API yok. openclaw-api containerını güncel kodla yeniden build et.');
+            setUiNotice({ tone: 'error', message: 'Bu backend sürümünde cluster attach API yok. openclaw-api containerını güncel kodla yeniden build et.' });
             return;
         }
         setClusterAttachBusy(true);
@@ -1359,7 +1384,7 @@ export default function NotebooksPage() {
         } catch (err) {
             console.error('Failed to attach cluster:', err);
             setKernelStatus('disconnected');
-            alert(`Failed to attach cluster: ${String(err)}`);
+            setUiNotice({ tone: 'error', message: `Failed to attach cluster: ${String(err)}` });
         } finally {
             setClusterAttachBusy(false);
         }
@@ -1455,7 +1480,7 @@ export default function NotebooksPage() {
             loadNotebookList();
         } catch (e) {
             console.error('Failed to save:', e);
-            alert(`Failed to save notebook: ${String(e)}`);
+            setUiNotice({ tone: 'error', message: `Failed to save notebook: ${String(e)}` });
         }
     }, [notebookName, cells, loadNotebookList, fetchJsonOrThrow]);
 
@@ -1487,7 +1512,7 @@ export default function NotebooksPage() {
             setIsEditingName(false);
         } catch (e) {
             console.error('Failed to create new notebook:', e);
-            alert(`Failed to create notebook: ${String(e)}`);
+            setUiNotice({ tone: 'error', message: `Failed to create notebook: ${String(e)}` });
         }
     }, [savedNotebooks, loadNotebookList, fetchJsonOrThrow]);
 
@@ -1501,7 +1526,7 @@ export default function NotebooksPage() {
             setIsEditingName(false);
         } catch (e) {
             console.error('Failed to load notebook:', e);
-            alert(`Failed to load notebook '${name}': ${String(e)}`);
+            setUiNotice({ tone: 'error', message: `Failed to load notebook '${name}': ${String(e)}` });
         }
     }, [fetchJsonOrThrow]);
 
@@ -1554,7 +1579,7 @@ export default function NotebooksPage() {
             }
         } catch (err) {
             console.error('Failed to delete notebook:', err);
-            alert(`Failed to delete '${name}': ${String(err)}`);
+            setUiNotice({ tone: 'error', message: `Failed to delete '${name}': ${String(err)}` });
         }
     }, [loadNotebookList, notebookName, loadNotebook, openTabs, fetchJsonOrThrow]);
 
@@ -1614,7 +1639,7 @@ export default function NotebooksPage() {
         } catch (err) {
             console.error('Failed to rename notebook:', err);
             setNotebookName(originalName);
-            alert(`Failed to rename notebook: ${String(err)}`);
+            setUiNotice({ tone: 'error', message: `Failed to rename notebook: ${String(err)}` });
         } finally {
             setIsEditingName(false);
         }
@@ -1740,7 +1765,7 @@ export default function NotebooksPage() {
             URL.revokeObjectURL(url);
         } catch (e) {
             console.error('Failed to export:', e);
-            alert('Failed to export notebook');
+            setUiNotice({ tone: 'error', message: 'Failed to export notebook' });
         }
     }, [notebookName, fetchJsonOrThrow]);
 
@@ -1826,106 +1851,105 @@ export default function NotebooksPage() {
     );
 
     return (
-        <div className="flex h-screen bg-[#09090b] text-foreground font-sans overflow-hidden">
-            <Sidebar />
+        <div className="flex h-screen bg-[#09090b] text-foreground font-sans overflow-hidden relative" style={{ fontFamily: "'Inter', -apple-system, sans-serif" }}>
 
-            {/* Background ambient light */}
-            <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden">
-                <div className="absolute -top-[15%] -right-[10%] w-[45%] h-[45%] bg-obsidian-purple/[0.04] blur-[120px] rounded-full" />
-                <div className="absolute bottom-[10%] -left-[10%] w-[40%] h-[40%] bg-obsidian-info/[0.03] blur-[100px] rounded-full" />
+            {/* Ambient Lighting */}
+            <div className="absolute top-0 left-0 w-[800px] h-[800px] bg-purple-500/5 rounded-full blur-[120px] pointer-events-none -translate-x-1/4 -translate-y-1/4 z-0" />
+            <div className="absolute bottom-0 right-0 w-[600px] h-[600px] bg-sky-500/5 rounded-full blur-[100px] pointer-events-none translate-x-1/4 -translate-y-1/4 z-0" />
+
+            <div className="relative z-10 shrink-0">
+                <Sidebar />
             </div>
 
-            {/* ─── Left Explorer Sidebar (Premium Obsidian Design) ─── */}
-            <div
-                className={clsx(
-                    "relative flex flex-col bg-black/20 backdrop-blur-md border-r border-white/5 z-20 overflow-hidden transition-[width] duration-300",
-                    !showFilePanel && "w-0 border-r-0"
-                )}
-                style={{ width: showFilePanel ? 260 : 0 }}
-            >
-                <div className="h-10 bg-black/40 border-b border-white/5 flex items-center justify-between px-3 shrink-0">
-                    <div className="flex items-center gap-2">
-                        <BookOpen className="w-3.5 h-3.5 text-white/40" />
-                        <span className="text-[11px] font-bold text-white tracking-widest uppercase">Notebooks</span>
-                    </div>
-                    <div className="flex gap-1">
-                        <button
-                            onClick={loadNotebookList}
-                            className="p-1 hover:bg-white/10 rounded text-obsidian-muted hover:text-white transition-all active:scale-95"
-                            title="Refresh"
-                        >
-                            <RefreshCw className="w-3 h-3" />
-                        </button>
-                        <button
-                            onClick={createNewNotebook}
-                            className="p-1 hover:bg-white/10 rounded text-obsidian-muted hover:text-white transition-all active:scale-95"
-                            title="New notebook"
-                        >
-                            <Plus className="w-3 h-3" />
-                        </button>
-                    </div>
-                </div>
-                <div className="flex-1 overflow-auto py-2 custom-scrollbar">
-                    {savedNotebooks.length === 0 ? (
-                        <div className="flex flex-col items-center justify-center py-8 text-obsidian-muted gap-2">
-                            <BookOpen className="w-4 h-4 opacity-50" />
-                            <span className="text-[10px]">No notebooks saved.</span>
+            {/* Left Nav Pane - Notebook Browser */}
+            {navExpanded && (
+                <div className="w-[280px] bg-black/20 backdrop-blur-xl border-r border-white/5 shrink-0 flex flex-col z-10 relative shadow-[4px_0_24px_rgba(0,0,0,0.4)]">
+                    <div className="h-10 bg-black/40 border-b border-white/5 flex items-center justify-between px-3 shrink-0">
+                        <div className="flex items-center gap-2">
+                            <BookOpen className="w-3.5 h-3.5 text-white/40" />
+                            <span className="text-[11px] font-bold text-white tracking-widest uppercase">Notebooks</span>
                         </div>
-                    ) : (
-                        <div className="flex flex-col pl-2 pr-2">
-                            {savedNotebooks.map(nb => {
-                                const isActive = notebookName === nb.name;
-                                return (
-                                    <div
-                                        key={nb.filename}
-                                        onClick={() => loadNotebook(nb.name)}
-                                        className={clsx(
-                                            "flex items-center gap-1.5 py-1.5 px-2 hover:bg-white/5 rounded-md transition-colors cursor-pointer group relative",
-                                            isActive ? "bg-white/10" : ""
-                                        )}
-                                    >
-                                        <FileText className={clsx(
-                                            "w-3.5 h-3.5",
-                                            isActive ? "text-white/80" : "text-obsidian-muted group-hover:text-white/80"
-                                        )} />
-                                        <div className="min-w-0 flex-1">
-                                            <span className={clsx(
-                                                "truncate block text-[12px] font-medium",
-                                                isActive ? "text-white" : "text-foreground/70 group-hover:text-white"
-                                            )}>{nb.name}</span>
-                                        </div>
-                                        <button
-                                            onClick={(e) => deleteSavedNotebook(nb.name, e)}
-                                            className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-500/20 text-white/40 hover:text-red-400 rounded transition-all active:scale-95"
-                                            title="Delete Notebook"
+                        <div className="flex gap-1">
+                            <button
+                                onClick={loadNotebookList}
+                                className="p-1 hover:bg-white/10 rounded text-obsidian-muted hover:text-white transition-all active:scale-95"
+                                title="Refresh"
+                            >
+                                <RefreshCw className="w-3 h-3" />
+                            </button>
+                            <button
+                                onClick={createNewNotebook}
+                                className="p-1 hover:bg-white/10 rounded text-obsidian-muted hover:text-white transition-all active:scale-95"
+                                title="New notebook"
+                            >
+                                <Plus className="w-3 h-3" />
+                            </button>
+                        </div>
+                    </div>
+                    <div className="flex-1 overflow-auto py-2 custom-scrollbar">
+                        {savedNotebooks.length === 0 ? (
+                            <div className="flex flex-col items-center justify-center py-8 text-obsidian-muted gap-2">
+                                <BookOpen className="w-4 h-4 opacity-50" />
+                                <span className="text-[10px]">No notebooks saved.</span>
+                            </div>
+                        ) : (
+                            <div className="flex flex-col pl-2 pr-2">
+                                {savedNotebooks.map(nb => {
+                                    const isActive = notebookName === nb.name;
+                                    return (
+                                        <div
+                                            key={nb.filename}
+                                            onClick={() => loadNotebook(nb.name)}
+                                            className={clsx(
+                                                "flex items-center gap-1.5 py-1.5 px-2 hover:bg-white/5 rounded-md transition-colors cursor-pointer group relative",
+                                                isActive ? "bg-white/10" : ""
+                                            )}
                                         >
-                                            <Trash2 className="w-3 h-3" />
-                                        </button>
-                                    </div>
-                                );
-                            })}
-                        </div>
-                    )}
+                                            <FileText className={clsx(
+                                                "w-3.5 h-3.5",
+                                                isActive ? "text-white/80" : "text-obsidian-muted group-hover:text-white/80"
+                                            )} />
+                                            <div className="min-w-0 flex-1">
+                                                <span className={clsx(
+                                                    "truncate block text-[12px] font-medium",
+                                                    isActive ? "text-white" : "text-foreground/70 group-hover:text-white"
+                                                )}>{nb.name}</span>
+                                            </div>
+                                            <button
+                                                onClick={(e) => deleteSavedNotebook(nb.name, e)}
+                                                className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-500/20 text-white/40 hover:text-red-400 rounded transition-all active:scale-95"
+                                                title="Delete Notebook"
+                                            >
+                                                <Trash2 className="w-3 h-3" />
+                                            </button>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </div>
                 </div>
-            </div>
+            )}
 
-            <main className="flex-1 flex flex-col min-w-0 overflow-hidden bg-transparent backdrop-blur-xl relative z-10">
+            <main className="flex-1 flex flex-col min-w-0 bg-transparent backdrop-blur-xl relative z-10">
                 {/* ─── Top Navigation Bar (Premium Obsidian) ─── */}
-                <div className="flex items-center px-4 justify-between shrink-0 h-10 bg-black/40 backdrop-blur-md border-b border-white/5 z-10 relative">
-                    <div className="absolute top-0 left-0 right-0 h-[1px] bg-white/10" />
-                    <div className="flex items-center gap-3">
+                <header className="flex items-center px-4 justify-between shrink-0 h-12 bg-[#09090b]/60 backdrop-blur-xl border-b border-white/[0.06] z-20 relative shadow-sm">
+                    {/* Top edge subtle highlight */}
+                    <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-white/[0.05] to-transparent pointer-events-none" />
+
+                    <div className="flex items-center gap-4">
                         {/* Toggle Sidebar Button */}
                         <button
                             onClick={() => setShowFilePanel(!showFilePanel)}
-                            className="p-1.5 hover:bg-white/10 rounded-md text-obsidian-muted hover:text-white transition-all active:scale-95 border border-transparent hover:border-white/10"
+                            className="p-1.5 hover:bg-white/[0.08] rounded-md text-white/50 hover:text-white transition-all active:scale-95 flex items-center justify-center border border-transparent hover:border-white/[0.05] shadow-sm cursor-pointer"
                             title="Toggle Notebooks Explorer"
                         >
-                            <LayoutPanelLeft className="w-4 h-4" />
+                            <LayoutPanelLeft className="w-[18px] h-[18px]" />
                         </button>
 
-                        <div className="w-[1px] h-4 bg-white/10 mx-1"></div>
+                        <div className="w-[1px] h-5 bg-gradient-to-b from-transparent via-white/10 to-transparent mx-1 rounded-full"></div>
 
-                        <div className="flex items-center gap-0 text-[12px]">
+                        <div className="flex items-center gap-0.5 relative">
                             {/* ─── Functional Menu Dropdowns (Databricks-like) ─── */}
                             {[
                                 {
@@ -1977,34 +2001,34 @@ export default function NotebooksPage() {
                                     ]
                                 },
                             ].map(menu => (
-                                <div key={menu.label} className="relative">
+                                <div key={menu.label} className="relative group/menu">
                                     <button
                                         onClick={(e) => { e.stopPropagation(); setActiveMenu(activeMenu === menu.label ? null : menu.label); }}
                                         className={clsx(
-                                            "px-2.5 py-1 rounded transition-colors tracking-wide",
-                                            activeMenu === menu.label ? "text-white bg-white/10" : "text-white/50 hover:text-white hover:bg-white/5"
+                                            "px-3 py-1.5 rounded-md text-[13px] font-medium transition-all duration-200 tracking-tight",
+                                            activeMenu === menu.label ? "text-white bg-white/10 shadow-inner" : "text-white/60 hover:text-white hover:bg-white/[0.06]"
                                         )}
                                     >
                                         {menu.label}
                                     </button>
                                     {activeMenu === menu.label && (
                                         <div
-                                            className="absolute top-full left-0 mt-1 w-56 bg-[#1a1a1e] border border-white/10 rounded-lg shadow-2xl z-50 overflow-hidden py-1 backdrop-blur-xl"
+                                            className="absolute top-[calc(100%+4px)] left-0 w-56 bg-[#18181b]/95 border border-white/10 rounded-xl shadow-2xl z-50 overflow-hidden py-1.5 backdrop-blur-2xl ring-1 ring-black/50"
                                             onClick={(e) => e.stopPropagation()}
                                         >
                                             {(menu.items as any[]).map((item: any, i: number) =>
                                                 item.divider ? (
-                                                    <div key={i} className="h-px bg-white/10 my-1 mx-2" />
+                                                    <div key={`div-${i}`} className="h-[1px] bg-gradient-to-r from-transparent via-white/10 to-transparent my-1.5 mx-2" />
                                                 ) : (
                                                     <button
-                                                        key={i}
+                                                        key={`btn-${i}`}
                                                         onClick={() => { item.action(); setActiveMenu(null); }}
                                                         disabled={item.disabled}
-                                                        className="w-full flex items-center gap-2.5 px-3 py-1.5 text-[12px] text-white/70 hover:text-white hover:bg-white/10 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                                                        className="w-full flex items-center gap-3 px-3 py-1.5 text-[12px] font-medium text-white/70 hover:text-white hover:bg-blue-500/10 transition-colors disabled:opacity-30 disabled:cursor-not-allowed group/item"
                                                     >
-                                                        <span className="text-white/40">{item.icon}</span>
+                                                        <span className="text-white/40 group-hover/item:text-blue-400 transition-colors">{item.icon}</span>
                                                         <span className="flex-1 text-left">{item.label}</span>
-                                                        {item.shortcut && <span className="text-[10px] text-white/30 font-mono">{item.shortcut}</span>}
+                                                        {item.shortcut && <span className="text-[10px] text-white/30 font-mono tracking-wider">{item.shortcut}</span>}
                                                     </button>
                                                 )
                                             )}
@@ -2013,37 +2037,35 @@ export default function NotebooksPage() {
                                 </div>
                             ))}
 
-                            <div className="w-px h-4 bg-white/10 mx-2" />
+                            <div className="w-[1px] h-5 bg-gradient-to-b from-transparent via-white/10 to-transparent mx-3 rounded-full" />
 
                             {/* ─── Functional Default Language Selector (Databricks-like) ─── */}
                             <div className="relative">
                                 <button
                                     onClick={(e) => { e.stopPropagation(); setActiveMenu(activeMenu === 'lang' ? null : 'lang'); }}
                                     className={clsx(
-                                        "flex items-center gap-1 px-2 py-1 rounded font-medium transition-colors",
-                                        activeMenu === 'lang' ? "text-white bg-white/10" : "text-white/80 hover:bg-white/5"
+                                        "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[13px] font-bold tracking-wide transition-all",
+                                        activeMenu === 'lang' ? "text-blue-400 bg-blue-500/10 shadow-inner" : "text-white/70 hover:text-white hover:bg-white/[0.06]"
                                     )}
                                 >
                                     <span>{defaultLanguage === 'python' ? 'Python' : 'SQL'}</span>
-                                    <ChevronDown className="w-3 h-3 text-white/40" />
+                                    <ChevronDown className={clsx("w-3.5 h-3.5 transition-transform opacity-70", activeMenu === 'lang' && "rotate-180")} />
                                 </button>
                                 {activeMenu === 'lang' && (
                                     <div
-                                        className="absolute top-full left-0 mt-1 w-40 bg-[#1a1a1e] border border-white/10 rounded-lg shadow-2xl z-50 overflow-hidden py-1 backdrop-blur-xl"
+                                        className="absolute top-[calc(100%+4px)] left-0 w-40 bg-[#18181b]/95 border border-white/10 rounded-xl shadow-2xl z-50 overflow-hidden py-1.5 backdrop-blur-2xl ring-1 ring-black/50"
                                         onClick={(e) => e.stopPropagation()}
                                     >
                                         {[{ id: 'python' as const, label: 'Python' }, { id: 'sql' as const, label: 'SQL' }].map(lang => (
                                             <button
                                                 key={lang.id}
                                                 onClick={() => { setDefaultLanguage(lang.id); setActiveMenu(null); }}
-                                                className={clsx(
-                                                    "w-full flex items-center gap-2.5 px-3 py-1.5 text-[12px] transition-colors",
-                                                    defaultLanguage === lang.id ? "text-white bg-white/10" : "text-white/70 hover:text-white hover:bg-white/10"
-                                                )}
+                                                className="w-full flex items-center gap-3 px-3 py-1.5 text-[12px] font-medium transition-colors hover:bg-blue-500/10 hover:text-blue-400 group/lang text-white/70"
                                             >
-                                                {defaultLanguage === lang.id && <Check className="w-3 h-3 text-white/60" />}
-                                                {defaultLanguage !== lang.id && <div className="w-3 h-3" />}
-                                                <span>{lang.label}</span>
+                                                <div className="flex items-center justify-center w-4 h-4">
+                                                    {defaultLanguage === lang.id ? <Check className="w-4 h-4 text-blue-400" /> : null}
+                                                </div>
+                                                <span className={defaultLanguage === lang.id ? "text-white" : ""}>{lang.label}</span>
                                             </button>
                                         ))}
                                     </div>
@@ -2054,27 +2076,32 @@ export default function NotebooksPage() {
 
                     {/* Right side controls */}
                     <div className="flex items-center gap-3">
-                        <button onClick={runAllCells} disabled={kernelStatus !== 'idle'}
-                            className="flex items-center gap-1.5 px-3 py-1 rounded hover:bg-white/10 disabled:opacity-50 transition-colors text-white/70 hover:text-white font-medium text-[11px]">
-                            <Play className="w-3.5 h-3.5" /> Run all
+                        <button onClick={runAllCells} disabled={kernelStatus !== 'busy'}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-white/10 bg-white/[0.03] hover:bg-white/[0.06] transition-all cursor-pointer group/run active:scale-95 text-[12px] font-medium text-white/70 hover:text-white disabled:opacity-50">
+                            <Play className="w-3.5 h-3.5 text-obsidian-muted group-hover/run:text-green-400 transition-colors" />
+                            Run all
                         </button>
 
-                        <div className="hidden md:flex items-center gap-2">
-                            <div className="flex items-center gap-1.5 px-2 py-1 rounded border border-white/10 bg-white/[0.03]">
-                                <Server className="w-3 h-3 text-white/50" />
-                                <select
-                                    value={selectedClusterId}
-                                    onChange={(e) => setSelectedClusterId(e.target.value)}
-                                    className="bg-transparent text-[11px] text-white/80 font-medium outline-none"
-                                    disabled={clusterAttachBusy || kernelStatus === 'busy'}
-                                >
-                                    {clusterProfiles.map(profile => (
-                                        <option key={profile.id} value={profile.id} className="bg-[#1a1a1e] text-white">
-                                            {profile.label} - {clusterPowerLabel(profile)}
-                                        </option>
-                                    ))}
-                                </select>
+                        <div className="hidden md:flex items-center gap-1.5 p-0.5 rounded-md border border-white/[0.08] bg-[#09090b]/80 shadow-sm relative z-10">
+                            <div className="flex items-center gap-1.5 pl-2.5 pr-1 py-1">
+                                <Server className="w-3.5 h-3.5 text-obsidian-muted" />
+                                <div className="relative flex items-center">
+                                    <select
+                                        value={selectedClusterId}
+                                        onChange={(e) => setSelectedClusterId(e.target.value)}
+                                        className="bg-transparent text-[12px] text-white/80 font-medium outline-none cursor-pointer appearance-none pr-5 pl-1"
+                                        disabled={clusterAttachBusy || kernelStatus === 'busy'}
+                                    >
+                                        {clusterProfiles.map(profile => (
+                                            <option key={profile.id} value={profile.id} className="bg-[#18181b] text-white">
+                                                {profile.label} • {clusterPowerLabel(profile)}
+                                            </option>
+                                        ))}
+                                    </select>
+                                    <ChevronDown className="w-3 h-3 text-white/40 absolute right-0 pointer-events-none" />
+                                </div>
                             </div>
+                            <div className="w-px h-4 bg-white/10" />
                             <button
                                 onClick={attachCluster}
                                 disabled={
@@ -2085,53 +2112,50 @@ export default function NotebooksPage() {
                                     || !clusterApiAvailable
                                     || selectedClusterId === attachedClusterId
                                 }
-                                className="flex items-center gap-1.5 px-2.5 py-1 rounded border border-white/10 text-[11px] text-white/70 hover:text-white hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                                className="flex items-center gap-1.5 px-3 py-1 rounded-[4px] text-[12px] font-medium transition-all
+                                disabled:opacity-40 disabled:cursor-not-allowed
+                                hover:bg-white/[0.08] text-white/80 active:scale-95"
                                 title="Attach selected cluster profile"
                             >
-                                {clusterAttachBusy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Activity className="w-3 h-3" />}
-                                Attach
+                                {clusterAttachBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-400" /> : <Activity className="w-3.5 h-3.5 text-obsidian-muted" />}
+                                <span className={attachedClusterId === selectedClusterId ? "text-green-400" : ""}>Attach</span>
                             </button>
-                            {(clusterObservability?.spark_ui_url || clusterObservability?.spark_master_ui_url) && (
-                                <a
-                                    href={clusterObservability?.spark_ui_url || clusterObservability?.spark_master_ui_url || '#'}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className="flex items-center gap-1 px-2 py-1 rounded border border-white/10 text-[11px] text-white/60 hover:text-white hover:bg-white/10 transition-colors"
-                                    title="Open Spark UI"
-                                >
-                                    <ExternalLink className="w-3 h-3" /> Spark UI
-                                </a>
-                            )}
                         </div>
+
                         {selectedCluster && (
-                            <div className="hidden xl:flex items-center gap-2 text-[10px] font-mono max-w-[640px]">
+                            <div className="hidden xl:flex items-center gap-2 text-[11px] font-mono max-w-[640px] px-2">
                                 <span className="text-white/45 truncate">
                                     {selectedCluster.label}: {clusterPowerLabel(selectedCluster)}
                                 </span>
                                 {clusterShuffleLabel(selectedCluster) && (
                                     <span className="text-white/55 whitespace-nowrap">{clusterShuffleLabel(selectedCluster)}</span>
                                 )}
-                                {selectedCluster.shuffle_tuning?.status === 'low' && (
-                                    <span className="px-1.5 py-0.5 rounded border border-amber-400/30 text-amber-300/90 whitespace-nowrap">
-                                        Shuffle Low
-                                    </span>
-                                )}
-                                {selectedCluster.shuffle_tuning?.status === 'high' && (
-                                    <span className="px-1.5 py-0.5 rounded border border-rose-400/30 text-rose-300/90 whitespace-nowrap">
-                                        Shuffle High
-                                    </span>
-                                )}
                             </div>
                         )}
 
-                        <div className="w-px h-4 bg-obsidian-border/50 mx-1" />
+                        {(clusterObservability?.spark_ui_url || clusterObservability?.spark_master_ui_url) && (
+                            <a
+                                href={clusterObservability?.spark_ui_url || clusterObservability?.spark_master_ui_url || '#'}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="hidden md:flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-obsidian-info/20 bg-obsidian-info/5 text-[12px] font-medium text-obsidian-info hover:bg-obsidian-info/10 transition-colors shadow-sm ring-1 ring-inset ring-obsidian-info/10 active:scale-95"
+                                title="Open Spark UI"
+                            >
+                                <ExternalLink className="w-3.5 h-3.5" />
+                                <span>Spark UI</span>
+                            </a>
+                        )}
+
+                        <div className="w-[1px] h-5 bg-gradient-to-b from-transparent via-white/10 to-transparent mx-1 rounded-full" />
 
                         <button onClick={saveNotebook}
-                            className="px-3 py-1 rounded hover:bg-white/10 transition-colors text-white/60 hover:text-white text-[11px] font-medium">
+                            className="px-3 py-1.5 rounded-md hover:bg-white/[0.08] transition-all text-white/70 hover:text-white text-[12px] font-medium flex items-center gap-1.5 active:scale-95"
+                        >
+                            <Save className="w-3.5 h-3.5 opacity-70" />
                             Save
                         </button>
                     </div>
-                </div>
+                </header>
 
                 {/* ─── Tab Bar (Premium Obsidian) ─── */}
                 <div className="flex items-end overflow-x-auto shrink-0 bg-black/40 backdrop-blur-md h-[38px] w-full border-b border-white/5 custom-scrollbar">
@@ -2196,8 +2220,8 @@ export default function NotebooksPage() {
                     })}
                 </div>
 
-                {/* ─── Main Notebook Area ─── */}
-                <div className="flex-1 flex flex-col overflow-auto bg-transparent relative z-0">
+                {/* Main Content Area */}
+                <div className="flex-1 relative flex flex-col min-h-0 bg-transparent custom-scrollbar">
                     <div className="flex-1 py-4 px-6 flex flex-col gap-2 items-center w-full max-w-[1440px] mx-auto custom-scrollbar">
                         {cells.map((cell, i) => (
                             <div key={cell.id} className="w-full">
@@ -2318,6 +2342,28 @@ export default function NotebooksPage() {
                     </div>
                 </div>
             </main>
+
+            {uiNotice && (
+                <div className="absolute right-4 bottom-12 z-[120] max-w-md">
+                    <div
+                        className={clsx(
+                            "flex items-start gap-2 rounded-lg border px-3 py-2 shadow-2xl backdrop-blur-md",
+                            uiNotice.tone === 'success' && "border-emerald-400/40 bg-emerald-500/15 text-emerald-300",
+                            uiNotice.tone === 'error' && "border-rose-400/40 bg-rose-500/15 text-rose-300",
+                            uiNotice.tone === 'info' && "border-cyan-400/40 bg-cyan-500/15 text-cyan-300",
+                        )}
+                    >
+                        <div className="text-[11px] leading-5">{uiNotice.message}</div>
+                        <button
+                            onClick={() => setUiNotice(null)}
+                            className="ml-1 text-current/80 hover:text-current"
+                            aria-label="Dismiss notification"
+                        >
+                            <X className="w-3.5 h-3.5" />
+                        </button>
+                    </div>
+                </div>
+            )}
 
             {/* ─── Keyboard Shortcuts Modal (Databricks-like) ─── */}
             {showShortcutsModal && (

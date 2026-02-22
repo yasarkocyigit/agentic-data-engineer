@@ -31,18 +31,27 @@ export default function VisualizePage() {
     useEffect(() => { checkHealth(); }, [checkHealth]);
 
     return (
-        <div className="flex h-screen bg-obsidian-bg text-foreground font-sans overflow-hidden">
-            {!isFullscreen && <Sidebar />}
+        <div className="flex h-screen bg-[#09090b] text-foreground font-sans overflow-hidden relative" style={{ fontFamily: "'Inter', -apple-system, sans-serif" }}>
 
-            <div className="flex-1 flex flex-col min-w-0">
+            {/* Ambient Lighting */}
+            <div className="absolute top-0 left-0 w-[800px] h-[800px] bg-purple-500/5 rounded-full blur-[120px] pointer-events-none -translate-x-1/4 -translate-y-1/4 z-0" />
+            <div className="absolute bottom-0 right-0 w-[600px] h-[600px] bg-sky-500/5 rounded-full blur-[100px] pointer-events-none translate-x-1/4 -translate-y-1/4 z-0" />
+
+            {!isFullscreen && (
+                <div className="relative z-10 shrink-0">
+                    <Sidebar />
+                </div>
+            )}
+
+            <main className="flex-1 flex flex-col min-w-0 bg-transparent relative z-10">
                 {/* ─── Top Bar ─── */}
-                <div className="h-9 bg-obsidian-panel border-b border-obsidian-border flex items-center px-4 justify-between shrink-0">
+                <div className="h-9 bg-black/40 backdrop-blur-md border-b border-white/5 flex items-center px-4 justify-between shrink-0 mb-0">
                     <div className="flex items-center gap-3 text-[12px]">
-                        <BarChart3 className="w-3.5 h-3.5 text-obsidian-warning" />
-                        <span className="text-foreground font-medium">Data Visualization</span>
-                        <span className="text-obsidian-muted">·</span>
-                        <span className="text-obsidian-muted">Apache Superset</span>
-                        <span className="text-obsidian-muted">·</span>
+                        <BarChart3 className="w-3.5 h-3.5 text-obsidian-warning drop-shadow-[0_0_8px_rgba(255,203,107,0.5)]" />
+                        <span className="text-white font-bold tracking-wide">Data Visualization</span>
+                        <span className="text-obsidian-muted/40">·</span>
+                        <span className="text-obsidian-muted font-medium">Apache Superset</span>
+                        <span className="text-obsidian-muted/40">·</span>
 
                         {/* Status Badge */}
                         {status === 'checking' ? (
@@ -105,14 +114,14 @@ export default function VisualizePage() {
                                     </p>
                                     <div className="bg-obsidian-panel border border-obsidian-border rounded-lg p-3 text-left">
                                         <p className="text-[10px] text-obsidian-muted uppercase tracking-wider mb-2">Start command</p>
-                                        <code className="text-[11px] text-obsidian-warning font-mono">
+                                        <code className="text-[11px] text-obsidian-warning font-mono bg-black/40 px-2 py-1 rounded inline-block">
                                             docker compose up -d superset
                                         </code>
                                     </div>
                                 </div>
                                 <button
                                     onClick={() => { checkHealth(); setIframeKey(k => k + 1); }}
-                                    className="px-4 py-1.5 bg-[#e5c07b]/15 text-obsidian-warning rounded text-[11px] font-medium hover:bg-[#e5c07b]/25 transition-colors active:scale-95"
+                                    className="px-4 py-1.5 bg-[#e5c07b]/15 border border-[#e5c07b]/30 text-[#e5c07b] rounded text-[11px] font-bold tracking-wide hover:bg-[#e5c07b]/25 transition-colors active:scale-95 shadow-[0_0_12px_rgba(229,192,123,0.1)]"
                                 >
                                     Retry Connection
                                 </button>
@@ -120,19 +129,19 @@ export default function VisualizePage() {
                         </div>
                     ) : status === 'checking' ? (
                         <div className="absolute inset-0 flex items-center justify-center">
-                            <Loader2 className="w-6 h-6 text-obsidian-warning animate-spin" />
+                            <Loader2 className="w-6 h-6 text-[#e5c07b] animate-spin drop-shadow-[0_0_8px_rgba(229,192,123,0.5)]" />
                         </div>
                     ) : (
                         <iframe
                             key={iframeKey}
                             src={SUPERSET_URL}
-                            className="w-full h-full border-0"
+                            className="w-full h-full border-0 rounded-tl-xl overflow-hidden bg-black/20"
                             title="Apache Superset"
                             sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-modals"
                         />
                     )}
                 </div>
-            </div>
+            </main>
         </div>
     );
 }

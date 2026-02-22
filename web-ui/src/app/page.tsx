@@ -10,7 +10,7 @@ import remarkGfm from 'remark-gfm';
 // ─── Material Obsidian Theme (matches /data Monaco editor) ───
 const codeDarkTheme: { [key: string]: React.CSSProperties } = {
   'code[class*="language-"]': { color: '#eeffff', background: 'none', fontFamily: 'inherit', textAlign: 'left', whiteSpace: 'pre', wordSpacing: 'normal', wordBreak: 'normal', wordWrap: 'normal', lineHeight: '1.5', tabSize: 4, hyphens: 'none' },
-  'pre[class*="language-"]': { color: '#eeffff', background: '#111113', padding: '1em', margin: '0', overflow: 'auto' },
+  'pre[class*="language-"]': { color: '#eeffff', background: 'transparent', padding: '1em', margin: '0', overflow: 'auto' },
   // ── Comments ──
   'comment': { color: '#546e7a', fontStyle: 'italic' },
   'prolog': { color: '#546e7a' },
@@ -155,10 +155,10 @@ function HomeContent() {
   }, []);
 
   return (
-    <div className="flex h-screen bg-[#09090b] text-foreground font-sans overflow-hidden relative">
+    <div className="flex h-screen bg-[#09090b] text-foreground font-sans overflow-hidden relative" style={{ fontFamily: "'Inter', -apple-system, sans-serif" }}>
       {/* Ambient Lighting */}
-      <div className="absolute top-0 left-0 w-[800px] h-[800px] bg-obsidian-purple/[0.04] rounded-full blur-[120px] pointer-events-none -translate-x-1/4 -translate-y-1/4 z-0" />
-      <div className="absolute bottom-0 right-0 w-[600px] h-[600px] bg-obsidian-info/[0.03] rounded-full blur-[100px] pointer-events-none translate-x-1/4 translate-y-1/4 z-0" />
+      <div className="absolute top-0 left-0 w-[800px] h-[800px] bg-purple-500/5 rounded-full blur-[120px] pointer-events-none -translate-x-1/4 -translate-y-1/4 z-0" />
+      <div className="absolute bottom-0 right-0 w-[600px] h-[600px] bg-sky-500/5 rounded-full blur-[100px] pointer-events-none translate-x-1/4 translate-y-1/4 z-0" />
 
       {/* Sidebar */}
       <div className="relative z-10 shrink-0">
@@ -245,7 +245,7 @@ function HomeContent() {
             </div>
 
             {/* File Content */}
-            <div className="flex-1 overflow-auto bg-transparent">
+            <div className="flex-1 overflow-auto bg-black/20 backdrop-blur-xl custom-scrollbar relative z-0">
               {fileLoading && (
                 <div className="flex items-center justify-center h-full">
                   <div className="text-obsidian-muted text-sm animate-pulse">Loading file...</div>
@@ -281,7 +281,7 @@ function HomeContent() {
                   customStyle={{
                     margin: 0,
                     padding: '12px 0',
-                    background: '#111113',
+                    background: 'transparent',
                     fontSize: '13px',
                     lineHeight: '22px',
                     borderRadius: 0,
@@ -308,7 +308,7 @@ function HomeContent() {
 
             {/* Bottom Status Bar */}
             {openFile && (
-              <div className="h-6 bg-black/40 backdrop-blur-md border-t border-white/5 flex items-center px-3 text-[10px] text-obsidian-muted gap-4 shrink-0">
+              <div className="h-6 bg-black/40 backdrop-blur-md border-t border-white/5 flex items-center px-3 text-[10px] text-obsidian-muted gap-4 shrink-0 relative z-10">
                 <span className="flex items-center gap-1">
                   <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: getLanguageColor(openFile.language) }} />
                   {openFile.language}
@@ -324,9 +324,9 @@ function HomeContent() {
           <div className="flex-1 flex flex-col p-0 overflow-hidden">
 
             {/* Top Section: stats */}
-            <div className="h-[140px] border-b border-white/5 bg-transparent flex shrink-0">
+            <div className="h-[140px] border-b border-white/5 bg-black/20 backdrop-blur-xl flex shrink-0 relative">
               {/* Card 1: DAGs */}
-              <div className="flex-1 border-r border-white/5 p-5 flex flex-col justify-between hover:bg-white/[0.02] transition-colors">
+              <div className="flex-1 border-r border-white/5 p-5 flex flex-col justify-between hover:bg-white/5 transition-colors z-10 relative">
                 <div className="flex justify-between items-start">
                   <span className="text-[10px] text-obsidian-muted font-bold uppercase tracking-widest">Airflow DAGs</span>
                   <Activity className="w-4 h-4 text-white/40" />
@@ -340,7 +340,7 @@ function HomeContent() {
               </div>
 
               {/* Card 2: Agent */}
-              <div className="flex-1 border-r border-white/5 p-5 flex flex-col justify-between hover:bg-white/[0.02] transition-colors">
+              <div className="flex-1 border-r border-white/5 p-5 flex flex-col justify-between hover:bg-white/5 transition-colors z-10 relative">
                 <div className="flex justify-between items-start">
                   <span className="text-[10px] text-obsidian-muted font-bold uppercase tracking-widest">Agent Status</span>
                   <Bot className="w-4 h-4 text-white/40" />
@@ -354,7 +354,7 @@ function HomeContent() {
               </div>
 
               {/* Card 3: System Load */}
-              <div className="flex-1 border-r border-white/5 p-5 flex flex-col justify-between hover:bg-white/[0.02] transition-colors">
+              <div className="flex-1 border-r border-white/5 p-5 flex flex-col justify-between hover:bg-white/5 transition-colors z-10 relative">
                 <div className="flex justify-between items-start">
                   <span className="text-[10px] text-obsidian-muted font-bold uppercase tracking-widest">System Load</span>
                   <Cpu className="w-4 h-4 text-white/40" />
@@ -368,7 +368,7 @@ function HomeContent() {
               </div>
 
               {/* Card 4: Data Volume */}
-              <div className="flex-1 p-5 flex flex-col justify-between hover:bg-white/[0.02] transition-colors">
+              <div className="flex-1 p-5 flex flex-col justify-between hover:bg-white/5 transition-colors z-10 relative">
                 <div className="flex justify-between items-start">
                   <span className="text-[10px] text-obsidian-muted font-bold uppercase tracking-widest">Data Volume</span>
                   <Database className="w-4 h-4 text-white/40" />
@@ -383,14 +383,14 @@ function HomeContent() {
             {/* Bottom Section: Split Pane */}
             <div className="flex-1 flex min-h-0">
               {/* Left: Console / Output */}
-              <div className="flex-[2] border-r border-white/5 flex flex-col bg-black/20 backdrop-blur-md">
-                <div className="h-8 bg-black/40 border-b border-white/5 flex items-center px-4 justify-between shrink-0 shadow-sm">
+              <div className="flex-[2] border-r border-white/5 flex flex-col bg-black/20 backdrop-blur-xl relative">
+                <div className="h-8 bg-black/40 border-b border-white/5 flex items-center px-4 justify-between shrink-0 shadow-sm z-10 relative">
                   <div className="flex items-center gap-2">
                     <Terminal className="w-3.5 h-3.5 text-white/40" />
                     <span className="text-[10px] font-bold text-obsidian-muted uppercase tracking-widest">Agent Console Output</span>
                   </div>
                 </div>
-                <div className="flex-1 overflow-auto p-4 font-mono text-[11px] leading-6 custom-scrollbar">
+                <div className="flex-1 overflow-auto p-4 font-mono text-[11px] leading-6 custom-scrollbar relative z-10">
                   <div className="text-obsidian-muted group hover:bg-white/5 px-2 -mx-2 rounded transition-colors"><span className="text-white/30">[10:42:15]</span> <span className="text-white/60 font-bold">INFO...</span> Started metadata analysis of `medallion_pipeline.py`</div>
                   <div className="text-obsidian-muted group hover:bg-white/5 px-2 -mx-2 rounded transition-colors"><span className="text-white/30">[10:42:25]</span> <span className="text-white/40 font-bold">ACTION.</span> Executing `pip install pandas==2.1.0` in Docker container...</div>
                   <div className="text-obsidian-muted group hover:bg-white/5 px-2 -mx-2 rounded transition-colors"><span className="text-white/30">[10:43:02]</span> <span className="text-white/60 font-bold">SUCCESS</span> Dependencies resolved.</div>
@@ -403,12 +403,12 @@ function HomeContent() {
               </div>
 
               {/* Right: Iceberg Catalog */}
-              <div className="flex-1 flex flex-col bg-black/20 backdrop-blur-md">
-                <div className="h-8 bg-black/40 border-b border-white/5 flex items-center px-4 justify-between shrink-0 shadow-sm">
+              <div className="flex-1 flex flex-col bg-black/20 backdrop-blur-xl relative">
+                <div className="h-8 bg-black/40 border-b border-white/5 flex items-center px-4 justify-between shrink-0 shadow-sm z-10 relative">
                   <span className="text-[10px] font-bold text-obsidian-muted uppercase tracking-widest">Iceberg Catalog</span>
                   <Search className="w-3.5 h-3.5 text-obsidian-muted" />
                 </div>
-                <div className="flex-1 overflow-auto p-2 custom-scrollbar">
+                <div className="flex-1 overflow-auto p-2 custom-scrollbar relative z-10">
                   <table className="w-full text-left border-collapse">
                     <thead>
                       <tr>

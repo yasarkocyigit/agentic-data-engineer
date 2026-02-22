@@ -124,6 +124,48 @@ function shortOperator(op: string): string {
         .trim();
 }
 
+function detailToMessage(detail: unknown): string {
+    if (typeof detail === 'string') return detail;
+    if (Array.isArray(detail)) {
+        return detail
+            .map((item) => {
+                if (typeof item === 'string') return item;
+                if (item && typeof item === 'object' && 'msg' in item) return String((item as { msg: unknown }).msg);
+                return JSON.stringify(item);
+            })
+            .join('; ');
+    }
+    if (detail && typeof detail === 'object') return JSON.stringify(detail);
+    return '';
+}
+
+async function parseApiResponse<T>(res: Response): Promise<T> {
+    const raw = await res.text();
+    let data: unknown = {};
+
+    if (raw) {
+        try {
+            data = JSON.parse(raw);
+        } catch {
+            data = { text: raw };
+        }
+    }
+
+    if (!res.ok) {
+        const message =
+            detailToMessage((data as { detail?: unknown })?.detail) ||
+            detailToMessage((data as { error?: unknown })?.error) ||
+            `${res.status} ${res.statusText}`.trim();
+        throw new Error(message);
+    }
+
+    if (data && typeof data === 'object' && 'error' in data && (data as { error?: unknown }).error) {
+        throw new Error(detailToMessage((data as { error?: unknown }).error) || 'Request failed');
+    }
+
+    return data as T;
+}
+
 // ─── Component ───
 export default function DagGraph({ dagId, runId, className, onNodeClick }: DagGraphProps) {
     const [graph, setGraph] = useState<PipelineGraph | null>(null);
@@ -142,9 +184,8 @@ export default function DagGraph({ dagId, runId, className, onNodeClick }: DagGr
             setLoading(true);
             const params = new URLSearchParams();
             if (runId) params.set('run_id', runId);
-            const res = await fetch(`/api/orchestrator/dags/${dagId}/structure?${params}`);
-            const data = await res.json();
-            if (data.error) throw new Error(data.error);
+            const res = await fetch(`/api/orchestrator/dags/${encodeURIComponent(dagId)}/structure?${params}`);
+            const data = await parseApiResponse<PipelineGraph>(res);
             setGraph(data);
             setError(null);
         } catch (err: unknown) {

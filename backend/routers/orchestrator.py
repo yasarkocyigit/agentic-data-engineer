@@ -12,15 +12,30 @@ import logging
 import os
 import re
 import time
+from contextvars import ContextVar
 from pathlib import Path
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Literal
+from urllib.parse import urlencode
 import httpx
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+_request_airflow_token: ContextVar[Optional[str]] = ContextVar(
+    "request_airflow_token", default=None
+)
+
+
+async def bind_request_airflow_token(request: Request) -> None:
+    header = request.headers.get("X-Airflow-Authorization") or request.headers.get("Authorization")
+    token: Optional[str] = None
+    if header and header.lower().startswith("bearer "):
+        token = header.split(" ", 1)[1].strip()
+    _request_airflow_token.set(token)
+
+
+router = APIRouter(dependencies=[Depends(bind_request_airflow_token)])
 
 AIRFLOW_BASE = os.getenv("AIRFLOW_API_URL", "http://localhost:8081")
 API_PREFIX = "/api/v2"
@@ -28,14 +43,28 @@ SA_USERNAME = os.getenv("AIRFLOW_SA_USERNAME", "admin")
 SA_PASSWORD = os.getenv("AIRFLOW_SA_PASSWORD", "admin")
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-NOTEBOOKS_DIR = PROJECT_ROOT / "notebooks"
-DAGS_DIR = PROJECT_ROOT / "dags"
+NOTEBOOKS_DIR = Path(
+    os.getenv(
+        "ORCH_NOTEBOOKS_DIR",
+        "/opt/airflow/notebooks" if Path("/opt/airflow/notebooks").exists() else str(PROJECT_ROOT / "notebooks"),
+    )
+)
+DAGS_DIR = Path(
+    os.getenv(
+        "ORCH_DAGS_DIR",
+        "/opt/airflow/dags" if Path("/opt/airflow/dags").exists() else str(PROJECT_ROOT / "dags"),
+    )
+)
 DOCKER_NOTEBOOK_PREFIX = "/opt/airflow/notebooks/"
 
 # ─── JWT Token Manager ───
 
 _cached_token: Optional[str] = None
 _token_expires_at: float = 0
+
+_last_run_cache: dict[str, tuple[float, Optional[dict]]] = {}
+LAST_RUN_CACHE_TTL_SECONDS = int(os.getenv("ORCH_LAST_RUN_CACHE_TTL_SECONDS", "30"))
+LAST_RUN_FETCH_CONCURRENCY = int(os.getenv("ORCH_LAST_RUN_FETCH_CONCURRENCY", "8"))
 
 
 async def get_airflow_token() -> str:
@@ -77,18 +106,25 @@ async def get_airflow_token() -> str:
 # ─── Core Fetch Helper ───
 
 
-async def airflow_fetch(path: str, method: str = "GET", body: dict = None) -> dict:
+async def airflow_fetch(
+    path: str,
+    method: str = "GET",
+    body: dict = None,
+    extra_headers: Optional[dict] = None,
+) -> dict:
     """Authenticated request to Airflow REST API."""
-    token = await get_airflow_token()
+    token = _request_airflow_token.get() or await get_airflow_token()
     url = f"{AIRFLOW_BASE}{API_PREFIX}{path}"
 
     async with httpx.AsyncClient(timeout=30.0) as client:
-        kwargs = {
-            "headers": {
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-            }
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
         }
+        if extra_headers:
+            headers.update(extra_headers)
+
+        kwargs = {"headers": headers}
         if body is not None:
             kwargs["json"] = body
 
@@ -159,6 +195,8 @@ def transform_run(run: dict) -> dict:
 
     return {
         "run_id": run.get("dag_run_id"),
+        "logical_date": run.get("logical_date"),
+        "run_after": run.get("run_after"),
         "state": run.get("state"),
         "run_type": run.get("run_type"),
         "triggered_by": run.get("triggered_by"),
@@ -186,18 +224,13 @@ async def list_dags(limit=100, offset=0, dag_id_pattern=None, paused=None, tags=
 
     data = await airflow_fetch(f"/dags?{params}")
 
-    # Fetch last run for each DAG concurrently
+    # Fetch last run for each DAG with bounded concurrency.
+    semaphore = asyncio.Semaphore(max(1, LAST_RUN_FETCH_CONCURRENCY))
+
     async def get_dag_with_run(dag):
-        last_run = None
-        try:
-            runs = await airflow_fetch(
-                f"/dags/{dag['dag_id']}/dagRuns?order_by=-start_date&limit=1"
-            )
-            if runs.get("dag_runs") and len(runs["dag_runs"]) > 0:
-                last_run = transform_run(runs["dag_runs"][0])
-        except Exception:
-            pass
-        return transform_dag(dag, last_run)
+        async with semaphore:
+            last_run = await get_cached_last_run(dag["dag_id"])
+            return transform_dag(dag, last_run)
 
     dags_with_runs = await asyncio.gather(
         *[get_dag_with_run(dag) for dag in data.get("dags", [])]
@@ -208,20 +241,54 @@ async def list_dags(limit=100, offset=0, dag_id_pattern=None, paused=None, tags=
 
 async def get_dag(dag_id: str):
     dag = await airflow_fetch(f"/dags/{dag_id}")
-    last_run = None
-    try:
-        runs = await airflow_fetch(f"/dags/{dag_id}/dagRuns?order_by=-start_date&limit=1")
-        if runs.get("dag_runs") and len(runs["dag_runs"]) > 0:
-            last_run = transform_run(runs["dag_runs"][0])
-    except Exception:
-        pass
+    last_run = await get_cached_last_run(dag_id)
     return transform_dag(dag, last_run)
 
 
-async def list_runs(dag_id: str, limit=25, offset=0, state=None):
-    params = f"order_by=-start_date&limit={limit}&offset={offset}"
+async def list_runs(
+    dag_id: str,
+    limit=25,
+    offset=0,
+    state: Optional[list[str]] = None,
+    run_type: Optional[list[str]] = None,
+    order_by: str = "-start_date",
+    run_after_gte: Optional[str] = None,
+    run_after_lte: Optional[str] = None,
+    logical_date_gte: Optional[str] = None,
+    logical_date_lte: Optional[str] = None,
+    start_date_gte: Optional[str] = None,
+    start_date_lte: Optional[str] = None,
+    end_date_gte: Optional[str] = None,
+    end_date_lte: Optional[str] = None,
+):
+    query_pairs: list[tuple[str, str]] = [
+        ("order_by", order_by),
+        ("limit", str(limit)),
+        ("offset", str(offset)),
+    ]
+
     if state:
-        params += f"&state={state}"
+        for item in state:
+            query_pairs.append(("state", item))
+    if run_type:
+        for item in run_type:
+            query_pairs.append(("run_type", item))
+
+    optional_scalar = {
+        "run_after_gte": run_after_gte,
+        "run_after_lte": run_after_lte,
+        "logical_date_gte": logical_date_gte,
+        "logical_date_lte": logical_date_lte,
+        "start_date_gte": start_date_gte,
+        "start_date_lte": start_date_lte,
+        "end_date_gte": end_date_gte,
+        "end_date_lte": end_date_lte,
+    }
+    for key, value in optional_scalar.items():
+        if value:
+            query_pairs.append((key, value))
+
+    params = urlencode(query_pairs)
     data = await airflow_fetch(f"/dags/{dag_id}/dagRuns?{params}")
     return {
         "runs": [transform_run(r) for r in data.get("dag_runs", [])],
@@ -240,6 +307,7 @@ async def trigger_run(dag_id: str, conf=None):
             "conf": conf or {},
         },
     )
+    invalidate_last_run_cache(dag_id)
     return transform_run(result)
 
 
@@ -249,6 +317,7 @@ async def cancel_run(dag_id: str, run_id: str):
         method="PATCH",
         body={"state": "failed"},
     )
+    invalidate_last_run_cache(dag_id)
     return transform_run(result)
 
 
@@ -304,34 +373,165 @@ async def get_health():
         },
     }
 
-async def clear_task_instances(dag_id: str, run_id: str, task_id: str):
+async def clear_task_instances(
+    dag_id: str,
+    run_id: str,
+    task_id: str,
+    include_upstream: bool = False,
+    include_downstream: bool = False,
+    include_future: bool = False,
+    include_past: bool = False,
+):
     body = {
         "dry_run": False,
         "task_ids": [task_id],
         "dag_run_id": run_id,
-        "include_upstream": False,
-        "include_downstream": True,
-        "include_future": False,
-        "include_past": False,
+        "include_upstream": include_upstream,
+        "include_downstream": include_downstream,
+        "include_future": include_future,
+        "include_past": include_past,
     }
     result = await airflow_fetch(f"/dags/{dag_id}/clearTaskInstances", method="POST", body=body)
     return result
 
-async def get_task_logs(dag_id: str, run_id: str, task_id: str, try_number: int):
-    result = await airflow_fetch(f"/dags/{dag_id}/dagRuns/{run_id}/taskInstances/{task_id}/logs/{try_number}")
-    return result
+async def patch_task_instance_state(
+    dag_id: str,
+    run_id: str,
+    task_id: str,
+    new_state: str,
+    map_index: int = -1,
+    note: Optional[str] = None,
+    include_upstream: bool = False,
+    include_downstream: bool = False,
+    include_future: bool = False,
+    include_past: bool = False,
+):
+    query_params = {}
+    if map_index != -1:
+        query_params["map_index"] = map_index
+
+    body = {
+        "new_state": new_state,
+        "include_upstream": include_upstream,
+        "include_downstream": include_downstream,
+        "include_future": include_future,
+        "include_past": include_past,
+    }
+    if note:
+        body["note"] = note
+
+    path = f"/dags/{dag_id}/dagRuns/{run_id}/taskInstances/{task_id}"
+    if query_params:
+        path += f"?{urlencode(query_params)}"
+
+    return await airflow_fetch(path, method="PATCH", body=body)
+
+
+async def get_task_instance_tries(
+    dag_id: str,
+    run_id: str,
+    task_id: str,
+    map_index: int = -1,
+):
+    query_params = {}
+    if map_index != -1:
+        query_params["map_index"] = map_index
+
+    path = f"/dags/{dag_id}/dagRuns/{run_id}/taskInstances/{task_id}/tries"
+    if query_params:
+        path += f"?{urlencode(query_params)}"
+
+    return await airflow_fetch(path)
+
+
+async def get_task_logs(
+    dag_id: str,
+    run_id: str,
+    task_id: str,
+    try_number: int,
+    map_index: int = -1,
+    full_content: bool = True,
+    continuation_token: Optional[str] = None,
+):
+    query_params = {"full_content": str(full_content).lower()}
+    if map_index != -1:
+        query_params["map_index"] = map_index
+    if continuation_token:
+        query_params["token"] = continuation_token
+
+    path = (
+        f"/dags/{dag_id}/dagRuns/{run_id}/taskInstances/{task_id}/logs/{try_number}"
+        f"?{urlencode(query_params)}"
+    )
+    result = await airflow_fetch(path, extra_headers={"accept": "application/json"})
+
+    content = result.get("content")
+    continuation = result.get("continuation_token")
+
+    if isinstance(content, list):
+        rendered_lines = []
+        for item in content:
+            if isinstance(item, str):
+                rendered_lines.append(item)
+            elif isinstance(item, dict):
+                rendered_lines.append(
+                    str(item.get("event") or item.get("message") or json.dumps(item))
+                )
+            else:
+                rendered_lines.append(str(item))
+        rendered = "".join(rendered_lines)
+    elif content is None:
+        rendered = result.get("text", "")
+    else:
+        rendered = str(content)
+
+    return {
+        "content": rendered,
+        "continuation_token": continuation,
+    }
+
+
+def invalidate_last_run_cache(dag_id: str) -> None:
+    _last_run_cache.pop(dag_id, None)
+
+
+async def get_cached_last_run(dag_id: str) -> Optional[dict]:
+    now = time.time()
+    cached = _last_run_cache.get(dag_id)
+    if cached and (now - cached[0]) < LAST_RUN_CACHE_TTL_SECONDS:
+        return cached[1]
+
+    last_run = None
+    try:
+        runs = await airflow_fetch(f"/dags/{dag_id}/dagRuns?order_by=-start_date&limit=1")
+        if runs.get("dag_runs") and len(runs["dag_runs"]) > 0:
+            last_run = transform_run(runs["dag_runs"][0])
+    except Exception:
+        last_run = None
+
+    _last_run_cache[dag_id] = (now, last_run)
+    return last_run
 
 
 # ─── Notebook Resolution ───
 
 
-def build_task_notebook_map() -> dict:
+def build_task_notebook_map(dag_id: Optional[str] = None) -> dict:
     """Parse DAG files to build task_id → notebook path mapping."""
     mapping = {}
     if not DAGS_DIR.exists():
         return mapping
 
-    for dag_file in DAGS_DIR.glob("*.py"):
+    dag_files = []
+    if dag_id:
+        candidate = DAGS_DIR / f"{dag_id}.py"
+        if candidate.exists():
+            dag_files.append(candidate)
+
+    if not dag_files:
+        dag_files = list(DAGS_DIR.glob("*.py"))
+
+    for dag_file in dag_files:
         content = dag_file.read_text(encoding="utf-8", errors="replace")
         for match in re.finditer(r"SparkSubmitOperator\s*\(([\s\S]*?)\)", content):
             block = match.group(1)
@@ -378,9 +578,17 @@ class DagActionRequest(BaseModel):
 
 class NotebookRequest(BaseModel):
     task_id: str
+    dag_id: Optional[str] = None
 
 class TaskActionRequest(BaseModel):
-    action: str
+    action: Literal["clear", "mark_success", "mark_failed", "mark_running", "mark_queued", "set_state"]
+    new_state: Optional[str] = None
+    note: Optional[str] = None
+    include_upstream: bool = False
+    include_downstream: bool = False
+    include_future: bool = False
+    include_past: bool = False
+    map_index: int = -1
 
 
 # ─── Routes ───
@@ -468,9 +676,87 @@ async def get_dag_runs(
     limit: int = Query(default=25),
     offset: int = Query(default=0),
     state: Optional[str] = Query(default=None),
+    run_type: Optional[str] = Query(default=None),
+    triggered_by: Optional[str] = Query(default=None),
+    order_by: str = Query(default="-start_date"),
+    run_after_gte: Optional[str] = Query(default=None),
+    run_after_lte: Optional[str] = Query(default=None),
+    logical_date_gte: Optional[str] = Query(default=None),
+    logical_date_lte: Optional[str] = Query(default=None),
+    start_date_gte: Optional[str] = Query(default=None),
+    start_date_lte: Optional[str] = Query(default=None),
+    end_date_gte: Optional[str] = Query(default=None),
+    end_date_lte: Optional[str] = Query(default=None),
 ):
     try:
-        return await list_runs(dag_id, limit=limit, offset=offset, state=state)
+        parsed_state = [item.strip() for item in state.split(",")] if state else None
+        parsed_run_type = [item.strip() for item in run_type.split(",")] if run_type else None
+        triggered_by_filter = (triggered_by or "").strip().lower()
+
+        if triggered_by_filter:
+            # Airflow API does not consistently support triggered_by filtering.
+            # Scan pages server-side, then apply filter and paginate deterministically.
+            scan_limit = max(100, min(500, max(limit + offset, 100)))
+            scan_offset = 0
+            max_scan_rows = 5000
+            matched_runs: list[dict] = []
+            total_entries = 0
+
+            while scan_offset < max_scan_rows:
+                page = await list_runs(
+                    dag_id,
+                    limit=scan_limit,
+                    offset=scan_offset,
+                    state=parsed_state,
+                    run_type=parsed_run_type,
+                    order_by=order_by,
+                    run_after_gte=run_after_gte,
+                    run_after_lte=run_after_lte,
+                    logical_date_gte=logical_date_gte,
+                    logical_date_lte=logical_date_lte,
+                    start_date_gte=start_date_gte,
+                    start_date_lte=start_date_lte,
+                    end_date_gte=end_date_gte,
+                    end_date_lte=end_date_lte,
+                )
+                total_entries = int(page.get("total", 0) or 0)
+                page_runs = page.get("runs", [])
+                if not page_runs:
+                    break
+
+                matched_runs.extend(
+                    [
+                        run
+                        for run in page_runs
+                        if triggered_by_filter in str(run.get("triggered_by") or "").lower()
+                    ]
+                )
+
+                scan_offset += len(page_runs)
+                if scan_offset >= total_entries:
+                    break
+
+            return {
+                "runs": matched_runs[offset: offset + limit],
+                "total": len(matched_runs),
+            }
+
+        return await list_runs(
+            dag_id,
+            limit=limit,
+            offset=offset,
+            state=parsed_state,
+            run_type=parsed_run_type,
+            order_by=order_by,
+            run_after_gte=run_after_gte,
+            run_after_lte=run_after_lte,
+            logical_date_gte=logical_date_gte,
+            logical_date_lte=logical_date_lte,
+            start_date_gte=start_date_gte,
+            start_date_lte=start_date_lte,
+            end_date_gte=end_date_gte,
+            end_date_lte=end_date_lte,
+        )
     except HTTPException:
         raise
     except Exception as e:
@@ -508,8 +794,42 @@ async def get_tasks(dag_id: str, run_id: str):
 async def post_task_action(dag_id: str, run_id: str, task_id: str, request: TaskActionRequest):
     try:
         if request.action == "clear":
-            result = await clear_task_instances(dag_id, run_id, task_id)
+            result = await clear_task_instances(
+                dag_id,
+                run_id,
+                task_id,
+                include_upstream=request.include_upstream,
+                include_downstream=request.include_downstream,
+                include_future=request.include_future,
+                include_past=request.include_past,
+            )
             return {"message": "Task cleared", "result": result}
+
+        state_map = {
+            "mark_success": "success",
+            "mark_failed": "failed",
+            "mark_running": "running",
+            "mark_queued": "queued",
+        }
+        new_state = state_map.get(request.action, request.new_state)
+        if request.action == "set_state" and not new_state:
+            raise HTTPException(status_code=400, detail="new_state is required for set_state")
+
+        if new_state:
+            result = await patch_task_instance_state(
+                dag_id,
+                run_id,
+                task_id,
+                new_state=new_state,
+                map_index=request.map_index,
+                note=request.note,
+                include_upstream=request.include_upstream,
+                include_downstream=request.include_downstream,
+                include_future=request.include_future,
+                include_past=request.include_past,
+            )
+            return {"message": f"Task updated to {new_state}", "result": result}
+
         raise HTTPException(status_code=400, detail="Invalid action")
     except HTTPException:
         raise
@@ -517,11 +837,44 @@ async def post_task_action(dag_id: str, run_id: str, task_id: str, request: Task
         logger.error("[Orchestrator] POST /tasks/action error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
+
+# GET /api/orchestrator/dags/{dag_id}/runs/{run_id}/tasks/{task_id}/tries
+@router.get("/orchestrator/dags/{dag_id}/runs/{run_id}/tasks/{task_id}/tries")
+async def get_task_tries_route(
+    dag_id: str,
+    run_id: str,
+    task_id: str,
+    map_index: int = Query(default=-1),
+):
+    try:
+        return await get_task_instance_tries(dag_id, run_id, task_id, map_index=map_index)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("[Orchestrator] GET /tries error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
 # GET /api/orchestrator/dags/{dag_id}/runs/{run_id}/tasks/{task_id}/logs/{try_number}
 @router.get("/orchestrator/dags/{dag_id}/runs/{run_id}/tasks/{task_id}/logs/{try_number}")
-async def get_task_logs_route(dag_id: str, run_id: str, task_id: str, try_number: int):
+async def get_task_logs_route(
+    dag_id: str,
+    run_id: str,
+    task_id: str,
+    try_number: int,
+    map_index: int = Query(default=-1),
+    full_content: bool = Query(default=True),
+    continuation_token: Optional[str] = Query(default=None),
+):
     try:
-        result = await get_task_logs(dag_id, run_id, task_id, try_number)
+        result = await get_task_logs(
+            dag_id,
+            run_id,
+            task_id,
+            try_number,
+            map_index=map_index,
+            full_content=full_content,
+            continuation_token=continuation_token,
+        )
         return result
     except HTTPException:
         raise
@@ -580,8 +933,13 @@ async def orchestrator_health():
 async def get_notebook(request: NotebookRequest):
     try:
         # Step 1: Parse DAG files to find the application path
-        task_map = build_task_notebook_map()
+        task_map = build_task_notebook_map(request.dag_id)
         relative_path = task_map.get(request.task_id)
+
+        # Fallback: try a global map if scoped lookup did not find task_id.
+        if not relative_path and request.dag_id:
+            task_map = build_task_notebook_map()
+            relative_path = task_map.get(request.task_id)
 
         # Step 2: Fallback — scan notebooks directory
         if not relative_path:

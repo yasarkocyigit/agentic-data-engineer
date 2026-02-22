@@ -79,15 +79,13 @@ export default function AgentPage() {
     }, []);
 
     return (
-        <div className="flex h-screen bg-obsidian-bg text-foreground font-sans overflow-hidden">
+        <div className="flex h-screen bg-[#09090b] text-foreground font-sans overflow-hidden relative" style={{ fontFamily: "'Inter', -apple-system, sans-serif" }}>
             <Sidebar />
-            <main className="flex-1 flex flex-col min-w-0 overflow-hidden bg-obsidian-bg/50 backdrop-blur-xl relative">
+            <main className="flex-1 flex flex-col min-w-0 overflow-hidden bg-transparent relative z-10">
 
                 {/* Background ambient light */}
-                <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden">
-                    <div className="absolute -top-[15%] -right-[10%] w-[45%] h-[45%] bg-obsidian-purple/[0.04] blur-[120px] rounded-full" />
-                    <div className="absolute bottom-[10%] -left-[10%] w-[40%] h-[40%] bg-obsidian-info/[0.03] blur-[100px] rounded-full" />
-                </div>
+                <div className="absolute top-0 left-0 w-[800px] h-[800px] bg-purple-500/5 rounded-full blur-[120px] pointer-events-none -translate-x-1/4 -translate-y-1/4 z-0" />
+                <div className="absolute bottom-0 right-0 w-[600px] h-[600px] bg-sky-500/5 rounded-full blur-[100px] pointer-events-none translate-x-1/4 translate-y-1/4 z-0" />
 
                 {/* Header */}
                 <header className="flex items-center px-4 justify-between shrink-0 h-10 bg-black/60 border-b border-white/5 z-10 w-full relative">
@@ -116,7 +114,7 @@ export default function AgentPage() {
                 </header>
 
                 {/* ─── Overview Cards ─── */}
-                <div className="bg-obsidian-bg/60 backdrop-blur-md border-b border-white/5 shrink-0 z-10 relative">
+                <div className="bg-black/20 backdrop-blur-xl border-b border-white/5 shrink-0 z-10 relative">
                     <div className="grid grid-cols-5 divide-x divide-white/5">
                         {/* Agent Status */}
                         <div className="p-4">
@@ -285,7 +283,7 @@ export default function AgentPage() {
                     </div>
 
                     {/* Right Panel */}
-                    <div className="flex-[1.2] flex flex-col bg-black/20 backdrop-blur-md">
+                    <div className="flex-[1.2] flex flex-col bg-black/20 backdrop-blur-xl relative">
 
                         {/* Agent Capabilities */}
                         <div className="border-b border-white/5">
@@ -356,7 +354,7 @@ export default function AgentPage() {
                 </div>
 
                 {/* ─── Status Bar ─── */}
-                <div className="h-8 bg-obsidian-bg/80 backdrop-blur-xl border-t border-white/5 flex items-center px-4 text-[10px] text-obsidian-muted gap-5 shrink-0 z-10 relative">
+                <div className="h-8 bg-black/40 backdrop-blur-md border-t border-white/5 flex items-center px-4 text-[10px] text-obsidian-muted gap-5 shrink-0 z-10 relative">
                     <div className="flex items-center gap-1.5">
                         <Bot className="w-3 h-3 text-foreground/50" />
                         <span className="text-foreground/80 font-medium">ClawdBot</span> active

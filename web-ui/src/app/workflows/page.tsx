@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Sidebar } from '@/components/Sidebar';
 import DagGraph from '@/components/DagGraph';
 import {
@@ -7,7 +7,7 @@ import {
     LayoutPanelLeft, Clock, AlertCircle, CheckCircle2, XCircle,
     Loader2, Tag, User, Calendar, Zap,
     Activity, CircleStop, RotateCcw, Code2, FileText, Maximize2, Minimize2, GitBranch,
-    AlignLeft
+    AlignLeft, Download, SlidersHorizontal
 } from 'lucide-react';
 import clsx from 'clsx';
 import { getStateColor } from '@/lib/airflow/types';
@@ -39,6 +39,99 @@ function formatDuration(seconds: number | null | undefined): string {
     if (mins < 60) return `${mins}m ${secs}s`;
     const hrs = Math.floor(mins / 60);
     return `${hrs}h ${mins % 60}m`;
+}
+
+function normalizeLogContent(content: unknown): string {
+    if (typeof content === 'string') return content;
+    if (Array.isArray(content)) {
+        return content
+            .map((entry) => {
+                if (typeof entry === 'string') return entry;
+                if (entry && typeof entry === 'object') {
+                    const obj = entry as Record<string, unknown>;
+                    if (typeof obj.event === 'string') return obj.event;
+                    if (typeof obj.message === 'string') return obj.message;
+                    return JSON.stringify(obj);
+                }
+                return String(entry);
+            })
+            .join('');
+    }
+    if (content && typeof content === 'object') return JSON.stringify(content, null, 2);
+    return String(content ?? '');
+}
+
+function detailToMessage(detail: unknown): string {
+    if (typeof detail === 'string') return detail;
+    if (Array.isArray(detail)) {
+        return detail
+            .map((item) => {
+                if (typeof item === 'string') return item;
+                if (item && typeof item === 'object' && 'msg' in item) return String((item as { msg: unknown }).msg);
+                return JSON.stringify(item);
+            })
+            .join('; ');
+    }
+    if (detail && typeof detail === 'object') return JSON.stringify(detail);
+    return '';
+}
+
+function downloadTextFile(filename: string, content: string) {
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+}
+
+async function parseApiResponse<T>(res: Response): Promise<T> {
+    const raw = await res.text();
+    let data: unknown = {};
+
+    if (raw) {
+        try {
+            data = JSON.parse(raw);
+        } catch {
+            data = { text: raw };
+        }
+    }
+
+    if (!res.ok) {
+        const message =
+            detailToMessage((data as { detail?: unknown })?.detail) ||
+            detailToMessage((data as { error?: unknown })?.error) ||
+            `${res.status} ${res.statusText}`.trim();
+        throw new Error(message);
+    }
+
+    if (data && typeof data === 'object' && 'error' in data && (data as { error?: unknown }).error) {
+        throw new Error(detailToMessage((data as { error?: unknown }).error) || 'Request failed');
+    }
+
+    return data as T;
+}
+
+type RunsView = 'list' | 'calendar' | 'gantt' | 'task';
+
+function getStoredAirflowToken(): string | null {
+    const candidates = [
+        localStorage.getItem('openclaw-airflow-token'),
+        localStorage.getItem('openclaw-airflow-jwt'),
+        sessionStorage.getItem('openclaw-airflow-token'),
+        sessionStorage.getItem('openclaw-airflow-jwt'),
+    ];
+    for (const value of candidates) {
+        if (value && value.trim()) return value.trim();
+    }
+    return null;
+}
+
+function taskInstanceKey(taskId: string, mapIndex: number): string {
+    return `${taskId}:${mapIndex}`;
 }
 
 // ─── State badge ───
@@ -130,6 +223,8 @@ function highlightPython(line: string): string {
 // ─── Main Page ───
 
 export default function WorkflowsPage() {
+    const RUNS_PAGE_SIZE = 20;
+
     const [dags, setDags] = useState<PipelineDAG[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -138,11 +233,14 @@ export default function WorkflowsPage() {
     const [filterTag, setFilterTag] = useState<string | null>(null);
     const [selectedDag, setSelectedDag] = useState<string | null>(null);
     const [runs, setRuns] = useState<PipelineRun[]>([]);
+    const [runsTotal, setRunsTotal] = useState(0);
+    const [runsOffset, setRunsOffset] = useState(0);
     const [runsLoading, setRunsLoading] = useState(false);
     const [actionLoading, setActionLoading] = useState<string | null>(null);
     const [actionError, setActionError] = useState<string | null>(null);
     // Sidebar tabs
     const [sidebarTab, setSidebarTab] = useState<'runs' | 'code' | 'graph'>('runs');
+    const [runsView, setRunsView] = useState<RunsView>('list');
     const [dagSource, setDagSource] = useState<{ content: string; version: number } | null>(null);
     const [sourceLoading, setSourceLoading] = useState(false);
     // Expandable run details
@@ -155,22 +253,59 @@ export default function WorkflowsPage() {
     const [viewingTaskCode, setViewingTaskCode] = useState<string | null>(null);
     const [fullscreenCode, setFullscreenCode] = useState(false);
     const [fullscreenSidebar, setFullscreenSidebar] = useState(false);
+    const [urlStateReady, setUrlStateReady] = useState(false);
+    const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
 
     // Task Action Loading
     const [taskActionLoading, setTaskActionLoading] = useState<string | null>(null);
 
     // Task-level Logs Viewer
-    const [taskLogs, setTaskLogs] = useState<{ task_id: string; try_number: number; content: string } | null>(null);
+    const [taskLogs, setTaskLogs] = useState<{ task_id: string; map_index: number; try_number: number; content: string } | null>(null);
     const [taskLogsLoading, setTaskLogsLoading] = useState(false);
     const [viewingTaskLogs, setViewingTaskLogs] = useState<string | null>(null);
+    const [taskTryNumbers, setTaskTryNumbers] = useState<Record<string, number[]>>({});
+    const [selectedLogTry, setSelectedLogTry] = useState<Record<string, number>>({});
+    const [logAutoFollow, setLogAutoFollow] = useState(true);
+    const logsScrollRef = useRef<HTMLDivElement | null>(null);
+
+    // Run filters / trigger config / RBAC token
+    const [runStateFilter, setRunStateFilter] = useState<string>('all');
+    const [runTypeFilter, setRunTypeFilter] = useState<string>('all');
+    const [runTriggeredByFilter, setRunTriggeredByFilter] = useState('');
+    const [runStartFrom, setRunStartFrom] = useState('');
+    const [runStartTo, setRunStartTo] = useState('');
+    const [showFilters, setShowFilters] = useState(false);
+    const [showMappedOnly, setShowMappedOnly] = useState(false);
+
+    const [showTriggerDialog, setShowTriggerDialog] = useState(false);
+    const [triggerConfText, setTriggerConfText] = useState('{\n  \n}');
+    const [triggerConfError, setTriggerConfError] = useState<string | null>(null);
+    const [customTaskState, setCustomTaskState] = useState('running');
+    const [clearScope, setClearScope] = useState({
+        include_upstream: false,
+        include_downstream: false,
+        include_future: false,
+        include_past: false,
+    });
+
+    const [airflowToken, setAirflowToken] = useState('');
+
+    const apiFetch = useCallback((input: string, init: RequestInit = {}) => {
+        const headers = new Headers(init.headers || {});
+        const raw = airflowToken.trim() || getStoredAirflowToken();
+        if (raw) {
+            const value = raw.toLowerCase().startsWith('bearer ') ? raw : `Bearer ${raw}`;
+            headers.set('X-Airflow-Authorization', value);
+        }
+        return fetch(input, { ...init, headers });
+    }, [airflowToken]);
 
     // ─── Fetch DAGs ───
     const fetchDags = useCallback(async () => {
         setLoading(true);
         try {
-            const res = await fetch('/api/orchestrator/dags');
-            const data = await res.json();
-            if (data.error) throw new Error(data.error);
+            const res = await apiFetch('/api/orchestrator/dags');
+            const data = await parseApiResponse<{ dags?: PipelineDAG[] }>(res);
             setDags(data.dags || []);
             setError(null);
         } catch (err: unknown) {
@@ -179,84 +314,248 @@ export default function WorkflowsPage() {
         } finally {
             setLoading(false);
         }
-    }, []);
+    }, [apiFetch]);
 
     // ─── Fetch Health ───
     const fetchHealth = useCallback(async () => {
         try {
-            const res = await fetch('/api/orchestrator/health');
-            const data = await res.json();
+            const res = await apiFetch('/api/orchestrator/health');
+            const data = await parseApiResponse<HealthStatus>(res);
             setHealth(data);
         } catch { /* silent */ }
-    }, []);
+    }, [apiFetch]);
 
     // ─── Fetch Runs for selected DAG ───
-    const fetchRuns = useCallback(async (dagId: string) => {
-        setRunsLoading(true);
+    const fetchRuns = useCallback(async (
+        dagId: string,
+        opts: { offset?: number; silent?: boolean } = {}
+    ) => {
+        const offset = opts.offset ?? 0;
+        if (!opts.silent) setRunsLoading(true);
         try {
-            const res = await fetch(`/api/orchestrator/dags/${dagId}/runs?limit=10`);
-            const data = await res.json();
-            setRuns(data.runs || []);
-        } catch {
+            const params = new URLSearchParams({
+                limit: String(RUNS_PAGE_SIZE),
+                offset: String(offset),
+                order_by: '-start_date',
+            });
+            if (runStateFilter !== 'all') params.set('state', runStateFilter);
+            if (runTypeFilter !== 'all') params.set('run_type', runTypeFilter);
+            if (runTriggeredByFilter.trim()) params.set('triggered_by', runTriggeredByFilter.trim());
+            if (runStartFrom) params.set('start_date_gte', new Date(`${runStartFrom}T00:00:00`).toISOString());
+            if (runStartTo) params.set('start_date_lte', new Date(`${runStartTo}T23:59:59`).toISOString());
+            const res = await apiFetch(`/api/orchestrator/dags/${encodeURIComponent(dagId)}/runs?${params.toString()}`);
+            const data = await parseApiResponse<{ runs?: PipelineRun[]; total?: number }>(res);
+            const serverRuns = data.runs || [];
+            setRuns(serverRuns);
+            setRunsTotal(data.total || serverRuns.length);
+        } catch (err: unknown) {
             setRuns([]);
+            setRunsTotal(0);
+            if (!opts.silent) {
+                const message = err instanceof Error ? err.message : 'Failed to load runs';
+                setActionError(`Runs: ${message}`);
+            }
         } finally {
-            setRunsLoading(false);
+            if (!opts.silent) setRunsLoading(false);
         }
-    }, []);
+    }, [RUNS_PAGE_SIZE, apiFetch, runStateFilter, runTypeFilter, runStartFrom, runStartTo, runTriggeredByFilter]);
 
     // ─── Fetch Task Instances for a run ───
-    const fetchTaskInstances = useCallback(async (dagId: string, runId: string) => {
-        setTasksLoading(true);
+    const fetchTaskInstances = useCallback(async (
+        dagId: string,
+        runId: string,
+        opts: { silent?: boolean } = {}
+    ) => {
+        if (!opts.silent) setTasksLoading(true);
         try {
-            const res = await fetch(`/api/orchestrator/dags/${dagId}/runs/${encodeURIComponent(runId)}/tasks`);
-            const data = await res.json();
+            const res = await apiFetch(
+                `/api/orchestrator/dags/${encodeURIComponent(dagId)}/runs/${encodeURIComponent(runId)}/tasks`
+            );
+            const data = await parseApiResponse<{ task_instances?: AirflowTaskInstance[] }>(res);
             setTaskInstances(data.task_instances || []);
-        } catch {
+        } catch (err: unknown) {
             setTaskInstances([]);
+            if (!opts.silent) {
+                const message = err instanceof Error ? err.message : 'Failed to load task instances';
+                setActionError(`Tasks: ${message}`);
+            }
         } finally {
-            setTasksLoading(false);
+            if (!opts.silent) setTasksLoading(false);
         }
+    }, [apiFetch]);
+
+    const fetchTaskTries = useCallback(async (dagId: string, runId: string, taskId: string, mapIndex: number) => {
+        const params = new URLSearchParams();
+        if (mapIndex >= 0) params.set('map_index', String(mapIndex));
+        const suffix = params.toString() ? `?${params.toString()}` : '';
+        const res = await apiFetch(
+            `/api/orchestrator/dags/${encodeURIComponent(dagId)}/runs/${encodeURIComponent(runId)}/tasks/${encodeURIComponent(taskId)}/tries${suffix}`
+        );
+        const data = await parseApiResponse<{ task_instances?: Array<{ try_number?: number }> }>(res);
+        const tries = (data.task_instances || [])
+            .map((item) => item.try_number)
+            .filter((value): value is number => typeof value === 'number' && value > 0);
+        const uniqueSorted = [...new Set(tries)].sort((a, b) => b - a);
+        const key = taskInstanceKey(taskId, mapIndex);
+        setTaskTryNumbers((prev) => ({ ...prev, [key]: uniqueSorted }));
+        return uniqueSorted;
+    }, [apiFetch]);
+
+    const fetchTaskLogs = useCallback(async (
+        dagId: string,
+        runId: string,
+        taskId: string,
+        tryNumber: number,
+        mapIndex: number
+    ) => {
+        const params = new URLSearchParams({ full_content: 'true' });
+        if (mapIndex >= 0) params.set('map_index', String(mapIndex));
+        const res = await apiFetch(
+            `/api/orchestrator/dags/${encodeURIComponent(dagId)}/runs/${encodeURIComponent(runId)}/tasks/${encodeURIComponent(taskId)}/logs/${tryNumber}?${params.toString()}`
+        );
+        const data = await parseApiResponse<{ content?: unknown; text?: unknown }>(res);
+        const contentCandidate = data.content ?? data.text ?? '';
+        return normalizeLogContent(contentCandidate);
+    }, [apiFetch]);
+
+    // ─── Restore URL state on first load ───
+    useEffect(() => {
+        const params = new URLSearchParams(window.location.search);
+        const dag = params.get('dag');
+        const run = params.get('run');
+        const tab = params.get('tab');
+        const view = params.get('view');
+        const offsetParam = params.get('offset');
+        const qState = params.get('state');
+        const qType = params.get('type');
+        const qBy = params.get('by');
+        const qFrom = params.get('from');
+        const qTo = params.get('to');
+        const parsedOffset = Number.parseInt(offsetParam || '0', 10);
+
+        if (dag) setSelectedDag(dag);
+        if (run) setExpandedRun(run);
+        if (tab === 'runs' || tab === 'code' || tab === 'graph') setSidebarTab(tab);
+        if (view === 'list' || view === 'calendar' || view === 'gantt' || view === 'task') setRunsView(view);
+        if (Number.isFinite(parsedOffset) && parsedOffset >= 0) setRunsOffset(parsedOffset);
+        if (qState) setRunStateFilter(qState);
+        if (qType) setRunTypeFilter(qType);
+        if (qBy) setRunTriggeredByFilter(qBy);
+        if (qFrom) setRunStartFrom(qFrom);
+        if (qTo) setRunStartTo(qTo);
+
+        setUrlStateReady(true);
     }, []);
+
+    useEffect(() => {
+        const existingToken = getStoredAirflowToken();
+        if (existingToken) setAirflowToken(existingToken);
+    }, []);
+
+    // ─── Keep URL state in sync ───
+    useEffect(() => {
+        if (!urlStateReady) return;
+        const params = new URLSearchParams();
+        if (selectedDag) params.set('dag', selectedDag);
+        if (expandedRun) params.set('run', expandedRun);
+        if (sidebarTab !== 'runs') params.set('tab', sidebarTab);
+        if (runsView !== 'list') params.set('view', runsView);
+        if (runsOffset > 0) params.set('offset', String(runsOffset));
+        if (runStateFilter !== 'all') params.set('state', runStateFilter);
+        if (runTypeFilter !== 'all') params.set('type', runTypeFilter);
+        if (runTriggeredByFilter.trim()) params.set('by', runTriggeredByFilter.trim());
+        if (runStartFrom) params.set('from', runStartFrom);
+        if (runStartTo) params.set('to', runStartTo);
+
+        const query = params.toString();
+        const nextUrl = query ? `${window.location.pathname}?${query}` : window.location.pathname;
+        window.history.replaceState({}, '', nextUrl);
+    }, [
+        urlStateReady,
+        selectedDag,
+        expandedRun,
+        sidebarTab,
+        runsView,
+        runsOffset,
+        runStateFilter,
+        runTypeFilter,
+        runTriggeredByFilter,
+        runStartFrom,
+        runStartTo,
+    ]);
 
     // ─── Initial load + polling ───
     useEffect(() => {
         fetchDags();
         fetchHealth();
-        const dagInterval = setInterval(fetchDags, 15000);
+        const dagInterval = setInterval(fetchDags, 30000);
         const healthInterval = setInterval(fetchHealth, 30000);
         return () => { clearInterval(dagInterval); clearInterval(healthInterval); };
     }, [fetchDags, fetchHealth]);
 
-    // ─── Select DAG → load runs ───
+    // ─── Select DAG / runs page change → load runs ───
     useEffect(() => {
-        if (selectedDag) {
-            fetchRuns(selectedDag);
-            setExpandedRun(null);
+        if (!selectedDag) {
+            setRuns([]);
+            setRunsTotal(0);
             setTaskInstances([]);
-            setSidebarTab('graph');
-            setDagSource(null);
+            return;
         }
-    }, [selectedDag, fetchRuns]);
+        fetchRuns(selectedDag, { offset: runsOffset });
+    }, [selectedDag, runsOffset, fetchRuns]);
+
+    // ─── Expanded run → load task instances ───
+    useEffect(() => {
+        if (!selectedDag || !expandedRun) {
+            setTaskInstances([]);
+            return;
+        }
+        fetchTaskInstances(selectedDag, expandedRun);
+    }, [selectedDag, expandedRun, fetchTaskInstances]);
+
+    useEffect(() => {
+        if (!expandedRun) {
+            setSelectedTaskId(null);
+            setShowMappedOnly(false);
+        }
+    }, [expandedRun]);
+
+    // ─── Live polling for runs/task instances ───
+    useEffect(() => {
+        if (!selectedDag || sidebarTab !== 'runs') return;
+        const runsInterval = setInterval(() => {
+            fetchRuns(selectedDag, { offset: runsOffset, silent: true });
+        }, 10000);
+        return () => clearInterval(runsInterval);
+    }, [selectedDag, sidebarTab, runsOffset, fetchRuns]);
+
+    useEffect(() => {
+        if (!selectedDag || !expandedRun || sidebarTab !== 'runs') return;
+        const tasksInterval = setInterval(() => {
+            fetchTaskInstances(selectedDag, expandedRun, { silent: true });
+        }, 8000);
+        return () => clearInterval(tasksInterval);
+    }, [selectedDag, expandedRun, sidebarTab, fetchTaskInstances]);
 
     // ─── Fetch DAG Source Code ───
     const fetchDagSource = useCallback(async (dagId: string) => {
         setSourceLoading(true);
         try {
-            const res = await fetch('/api/orchestrator/dags', {
+            const res = await apiFetch('/api/orchestrator/dags', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ dag_id: dagId, action: 'source' }),
             });
-            const data = await res.json();
-            if (data.error) throw new Error(data.error);
+            const data = await parseApiResponse<{ content: string; version: number }>(res);
             setDagSource(data);
         } catch (err) {
-            console.error('Failed to load source:', err);
+            const message = err instanceof Error ? err.message : 'Failed to load source code';
+            setActionError(`Source: ${message}`);
             setDagSource({ content: '# Failed to load source code', version: 0 });
         } finally {
             setSourceLoading(false);
         }
-    }, []);
+    }, [apiFetch]);
 
     // Auto-fetch source when switching to code tab
     useEffect(() => {
@@ -266,20 +565,24 @@ export default function WorkflowsPage() {
     }, [sidebarTab, selectedDag, dagSource, fetchDagSource]);
 
     // ─── Actions ───
-    const handleAction = async (dagId: string, action: 'trigger' | 'pause' | 'unpause' | 'cancel', runId?: string) => {
+    const handleAction = async (
+        dagId: string,
+        action: 'trigger' | 'pause' | 'unpause' | 'cancel',
+        runId?: string,
+        conf?: Record<string, unknown>,
+    ) => {
         setActionLoading(`${dagId}-${action}`);
         setActionError(null);
         try {
-            const res = await fetch('/api/orchestrator/dags', {
+            const res = await apiFetch('/api/orchestrator/dags', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ dag_id: dagId, action, run_id: runId }),
+                body: JSON.stringify({ dag_id: dagId, action, run_id: runId, conf }),
             });
-            const data = await res.json();
-            if (data.error) throw new Error(data.error);
+            await parseApiResponse<Record<string, unknown>>(res);
             // Refresh immediately
             await fetchDags();
-            if (selectedDag === dagId) fetchRuns(dagId);
+            if (selectedDag === dagId) fetchRuns(dagId, { offset: runsOffset });
         } catch (err: unknown) {
             const message = err instanceof Error ? err.message : 'Action failed';
             setActionError(message);
@@ -289,21 +592,46 @@ export default function WorkflowsPage() {
         }
     };
 
-    const handleTaskAction = async (dagId: string, runId: string, taskId: string, action: 'clear') => {
+    const handleTaskAction = async (
+        dagId: string,
+        runId: string,
+        taskId: string,
+        action: 'clear' | 'mark_success' | 'mark_failed' | 'mark_running' | 'mark_queued' | 'set_state',
+        options: {
+            map_index?: number;
+            new_state?: string;
+            note?: string;
+            include_upstream?: boolean;
+            include_downstream?: boolean;
+            include_future?: boolean;
+            include_past?: boolean;
+        } = {},
+    ) => {
         setTaskActionLoading(`${taskId}-${action}`);
         try {
-            const res = await fetch(`/api/orchestrator/dags/${dagId}/runs/${runId}/tasks/${taskId}/action`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action }),
-            });
-            const data = await res.json();
-            if (data.error) throw new Error(data.error);
+            const res = await apiFetch(
+                `/api/orchestrator/dags/${encodeURIComponent(dagId)}/runs/${encodeURIComponent(runId)}/tasks/${encodeURIComponent(taskId)}/action`,
+                {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        action,
+                        map_index: options.map_index ?? -1,
+                        new_state: options.new_state,
+                        note: options.note,
+                        include_upstream: options.include_upstream ?? false,
+                        include_downstream: options.include_downstream ?? false,
+                        include_future: options.include_future ?? false,
+                        include_past: options.include_past ?? false,
+                    }),
+                });
+            await parseApiResponse<Record<string, unknown>>(res);
             // Refresh task instances and runs
             fetchTaskInstances(dagId, runId);
-            fetchRuns(dagId);
+            fetchRuns(dagId, { offset: runsOffset });
         } catch (err: unknown) {
-            console.error('Task action failed:', err);
+            const message = err instanceof Error ? err.message : 'Task action failed';
+            setActionError(`Task ${taskId}: ${message}`);
         } finally {
             setTaskActionLoading(null);
         }
@@ -314,9 +642,107 @@ export default function WorkflowsPage() {
         if (expandedRun === runId) {
             setExpandedRun(null);
             setTaskInstances([]);
+            setSelectedTaskId(null);
+            setViewingTaskCode(null);
+            setTaskCode(null);
+            setViewingTaskLogs(null);
+            setTaskLogs(null);
         } else {
             setExpandedRun(runId);
-            if (selectedDag) fetchTaskInstances(selectedDag, runId);
+            setSelectedTaskId(null);
+            setRunsView((prev) => (prev === 'task' ? 'list' : prev));
+            setTaskTryNumbers({});
+            setSelectedLogTry({});
+            setViewingTaskCode(null);
+            setTaskCode(null);
+            setViewingTaskLogs(null);
+            setTaskLogs(null);
+        }
+    };
+
+    const toggleTaskLogs = useCallback(async (ti: AirflowTaskInstance) => {
+        if (!selectedDag || !expandedRun) return;
+        const key = taskInstanceKey(ti.task_id, ti.map_index);
+        if (viewingTaskLogs === key) {
+            setViewingTaskLogs(null);
+            setTaskLogs(null);
+            return;
+        }
+
+        setViewingTaskLogs(key);
+        setTaskLogsLoading(true);
+        try {
+            let tries: number[] = [];
+            try {
+                tries = await fetchTaskTries(selectedDag, expandedRun, ti.task_id, ti.map_index);
+            } catch {
+                tries = [];
+            }
+            const activeTry = selectedLogTry[key] || tries[0] || ti.try_number || 1;
+            setSelectedLogTry((prev) => ({ ...prev, [key]: activeTry }));
+            const content = await fetchTaskLogs(selectedDag, expandedRun, ti.task_id, activeTry, ti.map_index);
+            setTaskLogs({ task_id: ti.task_id, map_index: ti.map_index, try_number: activeTry, content });
+        } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            setTaskLogs({ task_id: ti.task_id, map_index: ti.map_index, try_number: ti.try_number || 1, content: `Failed to load logs: ${msg}` });
+        } finally {
+            setTaskLogsLoading(false);
+        }
+    }, [expandedRun, fetchTaskLogs, fetchTaskTries, selectedDag, selectedLogTry, viewingTaskLogs]);
+
+    const changeTaskLogTry = useCallback(async (ti: AirflowTaskInstance, tryNumber: number) => {
+        if (!selectedDag || !expandedRun) return;
+        const key = taskInstanceKey(ti.task_id, ti.map_index);
+        setTaskLogsLoading(true);
+        setSelectedLogTry((prev) => ({ ...prev, [key]: tryNumber }));
+        try {
+            const content = await fetchTaskLogs(selectedDag, expandedRun, ti.task_id, tryNumber, ti.map_index);
+            setTaskLogs({ task_id: ti.task_id, map_index: ti.map_index, try_number: tryNumber, content });
+        } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            setTaskLogs({ task_id: ti.task_id, map_index: ti.map_index, try_number: tryNumber, content: `Failed to load logs: ${msg}` });
+        } finally {
+            setTaskLogsLoading(false);
+        }
+    }, [expandedRun, fetchTaskLogs, selectedDag]);
+
+    useEffect(() => {
+        if (!logAutoFollow || !taskLogs || !logsScrollRef.current) return;
+        const el = logsScrollRef.current;
+        el.scrollTop = el.scrollHeight;
+    }, [taskLogs, logAutoFollow]);
+
+    useEffect(() => {
+        if (!selectedDag || !expandedRun || !viewingTaskLogs || !taskLogs) return;
+        const interval = setInterval(async () => {
+            try {
+                const [taskId, mapRaw] = viewingTaskLogs.split(':');
+                const mapIndex = Number.parseInt(mapRaw ?? '-1', 10);
+                const content = await fetchTaskLogs(
+                    selectedDag,
+                    expandedRun,
+                    taskId,
+                    taskLogs.try_number,
+                    mapIndex,
+                );
+                setTaskLogs((prev) => prev ? { ...prev, content } : prev);
+            } catch {
+                // keep last successful logs
+            }
+        }, 5000);
+        return () => clearInterval(interval);
+    }, [selectedDag, expandedRun, viewingTaskLogs, taskLogs, fetchTaskLogs]);
+
+    const submitTriggerWithConf = async () => {
+        if (!selectedDag) return;
+        setTriggerConfError(null);
+        try {
+            const parsed = triggerConfText.trim() ? JSON.parse(triggerConfText) as Record<string, unknown> : {};
+            await handleAction(selectedDag, 'trigger', undefined, parsed);
+            setShowTriggerDialog(false);
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : 'Invalid JSON';
+            setTriggerConfError(message);
         }
     };
 
@@ -329,18 +755,92 @@ export default function WorkflowsPage() {
     });
 
     const selectedDagData = selectedDag ? dags.find(d => d.dag_id === selectedDag) : null;
+    const visibleTaskInstances = showMappedOnly
+        ? taskInstances.filter((item) => item.map_index >= 0)
+        : taskInstances;
+    const selectedTaskInstance = selectedTaskId
+        ? visibleTaskInstances.find((item) => taskInstanceKey(item.task_id, item.map_index) === selectedTaskId) || null
+        : null;
+
+    useEffect(() => {
+        if (!expandedRun) return;
+        if (!visibleTaskInstances.length) {
+            setSelectedTaskId(null);
+            return;
+        }
+        if (!selectedTaskId) {
+            const first = visibleTaskInstances[0];
+            setSelectedTaskId(taskInstanceKey(first.task_id, first.map_index));
+            return;
+        }
+        const exists = visibleTaskInstances.some((item) => taskInstanceKey(item.task_id, item.map_index) === selectedTaskId);
+        if (!exists) {
+            const first = visibleTaskInstances[0];
+            setSelectedTaskId(taskInstanceKey(first.task_id, first.map_index));
+        }
+    }, [expandedRun, visibleTaskInstances, selectedTaskId]);
+
+    const runsByDay = useMemo(() => {
+        const grouped = new Map<string, PipelineRun[]>();
+        for (const run of runs) {
+            const dateCandidate = run.start_date || run.logical_date || run.queued_at || run.run_after;
+            if (!dateCandidate) continue;
+            const key = new Date(dateCandidate).toISOString().slice(0, 10);
+            const existing = grouped.get(key) || [];
+            existing.push(run);
+            grouped.set(key, existing);
+        }
+        return Array.from(grouped.entries())
+            .sort((a, b) => (a[0] < b[0] ? 1 : -1))
+            .map(([day, items]) => ({ day, items }));
+    }, [runs]);
+
+    const ganttRows = useMemo(() => {
+        if (!taskInstances.length) return [];
+        const startTimes = taskInstances
+            .map((ti) => ti.start_date ? new Date(ti.start_date).getTime() : null)
+            .filter((value): value is number => value !== null);
+        const minStart = startTimes.length ? Math.min(...startTimes) : null;
+        return taskInstances
+            .map((ti) => {
+                const start = ti.start_date ? new Date(ti.start_date).getTime() : null;
+                const end = ti.end_date ? new Date(ti.end_date).getTime() : null;
+                if (minStart === null || start === null || end === null || end < start) {
+                    return {
+                        key: `${ti.task_id}:${ti.map_index}`,
+                        label: ti.task_id,
+                        offsetPct: 0,
+                        widthPct: 0,
+                        state: ti.state,
+                        duration: ti.duration,
+                    };
+                }
+                const total = Math.max(1, (Math.max(...taskInstances
+                    .map((row) => row.end_date ? new Date(row.end_date).getTime() : null)
+                    .filter((value): value is number => value !== null)) - minStart));
+                return {
+                    key: `${ti.task_id}:${ti.map_index}`,
+                    label: ti.task_id,
+                    offsetPct: ((start - minStart) / total) * 100,
+                    widthPct: Math.max(2, ((end - start) / total) * 100),
+                    state: ti.state,
+                    duration: ti.duration,
+                };
+            });
+    }, [taskInstances]);
 
     return (
-        <div className="flex h-screen bg-[#09090b] text-foreground font-sans overflow-hidden">
-            <Sidebar />
+        <div className="flex h-screen bg-[#09090b] text-foreground font-sans overflow-hidden relative" style={{ fontFamily: "'Inter', -apple-system, sans-serif" }}>
 
-            {/* Background ambient light */}
-            <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden">
-                <div className="absolute -top-[15%] -right-[10%] w-[45%] h-[45%] bg-obsidian-purple/[0.04] blur-[120px] rounded-full" />
-                <div className="absolute top-[30%] -left-[10%] w-[40%] h-[40%] bg-obsidian-info/[0.03] blur-[100px] rounded-full" />
+            {/* Ambient Lighting */}
+            <div className="absolute top-0 left-0 w-[800px] h-[800px] bg-purple-500/5 rounded-full blur-[120px] pointer-events-none -translate-x-1/4 -translate-y-1/4 z-0" />
+            <div className="absolute bottom-0 right-0 w-[600px] h-[600px] bg-sky-500/5 rounded-full blur-[100px] pointer-events-none translate-x-1/4 -translate-y-1/4 z-0" />
+
+            <div className="relative z-10 shrink-0">
+                <Sidebar />
             </div>
 
-            <main className="flex-1 flex flex-col min-w-0 overflow-hidden bg-transparent backdrop-blur-xl relative z-10">
+            <main className="flex-1 flex flex-col min-w-0 bg-transparent relative z-10">
 
                 {/* ─── Top Toolbar ─── */}
                 <header className="flex items-center px-4 justify-between shrink-0 h-10 bg-black/40 backdrop-blur-md border-b border-white/5 z-10 w-full relative">
@@ -417,7 +917,101 @@ export default function WorkflowsPage() {
                             </button>
                         ))}
                     </div>
+                    <button
+                        onClick={() => setShowFilters((prev) => !prev)}
+                        className={clsx(
+                            "inline-flex items-center gap-1.5 px-2 py-1 rounded border text-[10px] transition-colors",
+                            showFilters
+                                ? "border-obsidian-info/40 text-obsidian-info bg-obsidian-info/10"
+                                : "border-white/10 text-obsidian-muted hover:text-foreground hover:bg-white/[0.04]"
+                        )}
+                    >
+                        <SlidersHorizontal className="w-3.5 h-3.5" />
+                        Filters
+                    </button>
+                    <div className="flex items-center gap-1.5 ml-auto">
+                        <input
+                            type="password"
+                            placeholder="Airflow token (optional)"
+                            value={airflowToken}
+                            onChange={(e) => setAirflowToken(e.target.value)}
+                            className="h-7 w-56 bg-black/40 border border-white/10 rounded px-2 text-[10px] text-foreground placeholder:text-obsidian-muted outline-none focus:border-obsidian-info/60"
+                        />
+                        <button
+                            onClick={() => {
+                                if (airflowToken.trim()) {
+                                    localStorage.setItem('openclaw-airflow-token', airflowToken.trim());
+                                } else {
+                                    localStorage.removeItem('openclaw-airflow-token');
+                                }
+                            }}
+                            className="px-2 py-1 rounded border border-white/10 text-[10px] text-obsidian-muted hover:text-foreground hover:bg-white/[0.04]"
+                        >
+                            Save Token
+                        </button>
+                    </div>
                 </div>
+
+                {showFilters && (
+                    <div className="px-4 py-2 border-b border-white/5 bg-black/30 grid grid-cols-5 gap-2 text-[10px]">
+                        <select
+                            value={runStateFilter}
+                            onChange={(e) => { setRunsOffset(0); setRunStateFilter(e.target.value); }}
+                            className="h-8 bg-black/40 border border-white/10 rounded px-2 text-foreground"
+                        >
+                            <option value="all">State: all</option>
+                            <option value="queued">queued</option>
+                            <option value="running">running</option>
+                            <option value="success">success</option>
+                            <option value="failed">failed</option>
+                        </select>
+                        <select
+                            value={runTypeFilter}
+                            onChange={(e) => { setRunsOffset(0); setRunTypeFilter(e.target.value); }}
+                            className="h-8 bg-black/40 border border-white/10 rounded px-2 text-foreground"
+                        >
+                            <option value="all">Type: all</option>
+                            <option value="manual">manual</option>
+                            <option value="scheduled">scheduled</option>
+                            <option value="backfill">backfill</option>
+                            <option value="asset_triggered">asset_triggered</option>
+                        </select>
+                        <input
+                            type="text"
+                            placeholder="Triggered by..."
+                            value={runTriggeredByFilter}
+                            onChange={(e) => { setRunsOffset(0); setRunTriggeredByFilter(e.target.value); }}
+                            className="h-8 bg-black/40 border border-white/10 rounded px-2 text-foreground placeholder:text-obsidian-muted"
+                        />
+                        <input
+                            type="date"
+                            value={runStartFrom}
+                            onChange={(e) => { setRunsOffset(0); setRunStartFrom(e.target.value); }}
+                            className="h-8 bg-black/40 border border-white/10 rounded px-2 text-foreground"
+                        />
+                        <div className="flex items-center gap-2">
+                            <input
+                                type="date"
+                                value={runStartTo}
+                                onChange={(e) => { setRunsOffset(0); setRunStartTo(e.target.value); }}
+                                className="h-8 flex-1 bg-black/40 border border-white/10 rounded px-2 text-foreground"
+                            />
+                            <button
+                                onClick={() => {
+                                    setRunStateFilter('all');
+                                    setRunTypeFilter('all');
+                                    setRunTriggeredByFilter('');
+                                    setRunStartFrom('');
+                                    setRunStartTo('');
+                                    setRunsOffset(0);
+                                }}
+                                className="h-8 px-2 rounded border border-white/10 text-obsidian-muted hover:text-foreground hover:bg-white/[0.04]"
+                            >
+                                Reset
+                            </button>
+                        </div>
+                    </div>
+                )}
 
                 {/* ─── Error Toast ─── */}
                 {actionError && (
@@ -475,7 +1069,33 @@ export default function WorkflowsPage() {
                                         return (
                                             <tr
                                                 key={dag.dag_id}
-                                                onClick={() => setSelectedDag(isSelected ? null : dag.dag_id)}
+                                                onClick={() => {
+                                                    if (isSelected) {
+                                                        setSelectedDag(null);
+                                                        setExpandedRun(null);
+                                                        setRuns([]);
+                                                        setRunsTotal(0);
+                                                        setTaskInstances([]);
+                                                        setViewingTaskCode(null);
+                                                        setTaskCode(null);
+                                                        setViewingTaskLogs(null);
+                                                        setTaskLogs(null);
+                                                        setRunsOffset(0);
+                                                        return;
+                                                    }
+                                                    setSelectedDag(dag.dag_id);
+                                                    setExpandedRun(null);
+                                                    setTaskInstances([]);
+                                                    setTaskTryNumbers({});
+                                                    setSelectedLogTry({});
+                                                    setViewingTaskCode(null);
+                                                    setTaskCode(null);
+                                                    setViewingTaskLogs(null);
+                                                    setTaskLogs(null);
+                                                    setRunsOffset(0);
+                                                    setSidebarTab('graph');
+                                                    setDagSource(null);
+                                                }}
                                                 className={clsx(
                                                     "border-b border-white/5 group cursor-pointer transition-colors",
                                                     isSelected ? "bg-white/[0.04]" : "hover:bg-white/[0.02]"
@@ -636,7 +1256,21 @@ export default function WorkflowsPage() {
                                         }
                                     </button>
                                     <button
-                                        onClick={() => { setSelectedDag(null); setFullscreenSidebar(false); }}
+                                        onClick={() => {
+                                            setSelectedDag(null);
+                                            setExpandedRun(null);
+                                            setRuns([]);
+                                            setRunsTotal(0);
+                                            setTaskInstances([]);
+                                            setTaskTryNumbers({});
+                                            setSelectedLogTry({});
+                                            setViewingTaskCode(null);
+                                            setTaskCode(null);
+                                            setViewingTaskLogs(null);
+                                            setTaskLogs(null);
+                                            setRunsOffset(0);
+                                            setFullscreenSidebar(false);
+                                        }}
                                         className="p-1 hover:bg-obsidian-panel-hover rounded text-obsidian-muted hover:text-foreground text-[12px]"
                                     >
                                         ✕
@@ -721,16 +1355,73 @@ export default function WorkflowsPage() {
 
                             {/* Runs List header */}
                             {sidebarTab === 'runs' && (
-                                <div className="px-4 py-2 border-b border-white/5 flex items-center justify-between shrink-0">
-                                    <span className="text-[10px] text-obsidian-muted uppercase font-semibold tracking-wider">Recent Runs</span>
-                                    <button
-                                        onClick={() => handleAction(selectedDag, 'trigger')}
-                                        disabled={!!actionLoading}
-                                        className="flex items-center gap-1 px-2 py-1 bg-obsidian-success/15 text-obsidian-success rounded text-[10px]
-                             font-medium hover:bg-obsidian-success/25 border border-obsidian-success/20 transition-colors disabled:opacity-50 active:scale-95"
-                                    >
-                                        <Play className="w-3.5 h-3.5" /> Trigger New Run
-                                    </button>
+                                <div className="px-4 py-2 border-b border-white/5 flex flex-col gap-2 shrink-0">
+                                    <div className="flex items-center justify-between gap-2">
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-[10px] text-obsidian-muted uppercase font-semibold tracking-wider">Recent Runs</span>
+                                            <span className="text-[9px] text-obsidian-muted/80">
+                                                {runsTotal > 0
+                                                    ? `${runsOffset + 1}-${Math.min(runsOffset + RUNS_PAGE_SIZE, runsTotal)} / ${runsTotal}`
+                                                    : '0 / 0'}
+                                            </span>
+                                            <div className="flex items-center gap-1">
+                                                <button
+                                                    onClick={() => setRunsOffset((prev) => Math.max(0, prev - RUNS_PAGE_SIZE))}
+                                                    disabled={runsOffset === 0 || runsLoading}
+                                                    className="px-1.5 py-0.5 rounded border border-white/10 text-[9px] text-obsidian-muted hover:text-foreground hover:bg-white/[0.04] disabled:opacity-30"
+                                                >
+                                                    Prev
+                                                </button>
+                                                <button
+                                                    onClick={() => setRunsOffset((prev) => prev + RUNS_PAGE_SIZE)}
+                                                    disabled={runsOffset + RUNS_PAGE_SIZE >= runsTotal || runsLoading}
+                                                    className="px-1.5 py-0.5 rounded border border-white/10 text-[9px] text-obsidian-muted hover:text-foreground hover:bg-white/[0.04] disabled:opacity-30"
+                                                >
+                                                    Next
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <div className="flex items-center gap-1.5">
+                                            <button
+                                                onClick={() => handleAction(selectedDag, 'trigger')}
+                                                disabled={!!actionLoading}
+                                                className="flex items-center gap-1 px-2 py-1 bg-obsidian-success/15 text-obsidian-success rounded text-[10px]
+                                font-medium hover:bg-obsidian-success/25 border border-obsidian-success/20 transition-colors disabled:opacity-50 active:scale-95"
+                                            >
+                                                <Play className="w-3.5 h-3.5" /> Quick Run
+                                            </button>
+                                            <button
+                                                onClick={() => {
+                                                    setTriggerConfError(null);
+                                                    setShowTriggerDialog(true);
+                                                }}
+                                                className="flex items-center gap-1 px-2 py-1 rounded text-[10px] border border-obsidian-info/30 text-obsidian-info hover:bg-obsidian-info/15 transition-colors"
+                                            >
+                                                <Code2 className="w-3.5 h-3.5" /> Run + Conf
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center gap-1.5">
+                                        {(['list', 'calendar', 'gantt', 'task'] as RunsView[]).map((view) => (
+                                            <button
+                                                key={view}
+                                                onClick={() => setRunsView(view)}
+                                                className={clsx(
+                                                    "px-2 py-0.5 rounded border text-[9px] uppercase tracking-wide",
+                                                    runsView === view
+                                                        ? "border-obsidian-info/40 text-obsidian-info bg-obsidian-info/10"
+                                                        : "border-white/10 text-obsidian-muted hover:text-foreground hover:bg-white/[0.04]"
+                                                )}
+                                            >
+                                                {view}
+                                            </button>
+                                        ))}
+                                        {expandedRun && (
+                                            <span className="ml-auto text-[9px] text-obsidian-muted font-mono">
+                                                Run: {expandedRun}
+                                            </span>
+                                        )}
+                                    </div>
                                 </div>
                             )}
 
@@ -743,6 +1434,225 @@ export default function WorkflowsPage() {
                                         </div>
                                     ) : runs.length === 0 ? (
                                         <div className="text-center py-8 text-obsidian-muted text-[11px]">No runs yet</div>
+                                    ) : runsView === 'calendar' ? (
+                                        <div className="p-3 space-y-3">
+                                            {runsByDay.map((group) => (
+                                                <div key={group.day} className="border border-white/10 rounded-md overflow-hidden">
+                                                    <div className="px-3 py-1.5 bg-white/[0.03] text-[10px] text-obsidian-muted font-mono">
+                                                        {new Date(group.day).toLocaleDateString()}
+                                                    </div>
+                                                    <div className="divide-y divide-white/5">
+                                                        {group.items.map((run) => (
+                                                            <button
+                                                                key={run.run_id}
+                                                                onClick={() => {
+                                                                    setRunsView('list');
+                                                                    toggleRunExpand(run.run_id);
+                                                                }}
+                                                                className="w-full text-left px-3 py-2 hover:bg-white/[0.03] transition-colors"
+                                                            >
+                                                                <div className="flex items-center justify-between">
+                                                                    <div className="flex items-center gap-2">
+                                                                        <StateBadge state={run.state} />
+                                                                        <span className="text-[10px] text-foreground font-mono">{run.run_id}</span>
+                                                                    </div>
+                                                                    <span className="text-[9px] text-obsidian-muted">
+                                                                        {timeAgo(run.end_date || run.start_date || run.logical_date || null)}
+                                                                    </span>
+                                                                </div>
+                                                                <div className="mt-1 text-[9px] text-obsidian-muted font-mono">
+                                                                    {run.run_type} • {run.triggered_by || 'system'}
+                                                                </div>
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    ) : runsView === 'gantt' ? (
+                                        <div className="p-3 space-y-3">
+                                            {!expandedRun ? (
+                                                <div className="text-center py-8 text-obsidian-muted text-[11px]">
+                                                    Select a run in List/Calendar view to render task timeline.
+                                                </div>
+                                            ) : tasksLoading ? (
+                                                <div className="flex items-center justify-center py-8">
+                                                    <Loader2 className="w-5 h-5 text-obsidian-info animate-spin" />
+                                                </div>
+                                            ) : visibleTaskInstances.length === 0 ? (
+                                                <div className="text-center py-8 text-obsidian-muted text-[11px]">
+                                                    No task instances for selected run.
+                                                </div>
+                                            ) : (
+                                                <div className="space-y-2">
+                                                    {ganttRows
+                                                        .filter((row) => !showMappedOnly || row.key.split(':')[1] !== '-1')
+                                                        .map((row) => (
+                                                            <div key={row.key} className="grid grid-cols-[160px_1fr_56px] items-center gap-2">
+                                                                <span className="text-[10px] text-foreground font-mono truncate">{row.label}</span>
+                                                                <div className="relative h-4 bg-white/[0.05] rounded overflow-hidden">
+                                                                    <div
+                                                                        className="absolute top-0 h-full rounded"
+                                                                        style={{
+                                                                            left: `${row.offsetPct}%`,
+                                                                            width: `${row.widthPct}%`,
+                                                                            backgroundColor: getStateColor(row.state).text,
+                                                                            opacity: 0.8,
+                                                                        }}
+                                                                    />
+                                                                </div>
+                                                                <span className="text-[9px] text-obsidian-muted font-mono">
+                                                                    {formatDuration(row.duration)}
+                                                                </span>
+                                                            </div>
+                                                        ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                    ) : runsView === 'task' ? (
+                                        <div className="p-3 space-y-3">
+                                            {!expandedRun ? (
+                                                <div className="text-center py-8 text-obsidian-muted text-[11px]">
+                                                    Select a run and a task to open task detail view.
+                                                </div>
+                                            ) : !selectedTaskInstance ? (
+                                                <div className="text-center py-8 text-obsidian-muted text-[11px]">
+                                                    Choose a task from List view.
+                                                </div>
+                                            ) : (
+                                                <div className="border border-white/10 rounded-md p-3 space-y-2">
+                                                    <div className="flex items-center justify-between">
+                                                        <div className="flex items-center gap-2">
+                                                            <span className="text-[12px] font-semibold text-foreground font-mono">
+                                                                {selectedTaskInstance.task_id}
+                                                            </span>
+                                                            {selectedTaskInstance.map_index >= 0 && (
+                                                                <span className="text-[9px] px-1.5 py-0.5 rounded bg-obsidian-info/15 text-obsidian-info font-mono">
+                                                                    map[{selectedTaskInstance.map_index}]
+                                                                </span>
+                                                            )}
+                                                            <StateBadge state={selectedTaskInstance.state} />
+                                                        </div>
+                                                        <span className="text-[10px] text-obsidian-muted font-mono">
+                                                            {formatDuration(selectedTaskInstance.duration)}
+                                                        </span>
+                                                    </div>
+                                                    <div className="text-[10px] text-obsidian-muted grid grid-cols-2 gap-2 font-mono">
+                                                        <span>Operator: {selectedTaskInstance.operator}</span>
+                                                        <span>Try: {selectedTaskInstance.try_number}/{selectedTaskInstance.max_tries}</span>
+                                                        <span>Queue: {selectedTaskInstance.queue}</span>
+                                                        <span>Host: {selectedTaskInstance.hostname || '—'}</span>
+                                                    </div>
+                                                    <div className="grid grid-cols-2 gap-2 rounded border border-white/10 bg-black/20 p-2 text-[10px] text-obsidian-muted">
+                                                        <label className="flex items-center gap-1.5">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={clearScope.include_upstream}
+                                                                onChange={(e) => setClearScope((prev) => ({ ...prev, include_upstream: e.target.checked }))}
+                                                            />
+                                                            clear upstream
+                                                        </label>
+                                                        <label className="flex items-center gap-1.5">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={clearScope.include_downstream}
+                                                                onChange={(e) => setClearScope((prev) => ({ ...prev, include_downstream: e.target.checked }))}
+                                                            />
+                                                            clear downstream
+                                                        </label>
+                                                        <label className="flex items-center gap-1.5">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={clearScope.include_past}
+                                                                onChange={(e) => setClearScope((prev) => ({ ...prev, include_past: e.target.checked }))}
+                                                            />
+                                                            include past
+                                                        </label>
+                                                        <label className="flex items-center gap-1.5">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={clearScope.include_future}
+                                                                onChange={(e) => setClearScope((prev) => ({ ...prev, include_future: e.target.checked }))}
+                                                            />
+                                                            include future
+                                                        </label>
+                                                    </div>
+                                                    <div className="flex items-center gap-2 pt-1">
+                                                        <button
+                                                            onClick={() => handleTaskAction(selectedDag!, expandedRun, selectedTaskInstance.task_id, 'clear', {
+                                                                map_index: selectedTaskInstance.map_index,
+                                                                ...clearScope,
+                                                            })}
+                                                            disabled={!!taskActionLoading}
+                                                            className="px-2 py-1 rounded text-[10px] border border-obsidian-warning/30 text-obsidian-warning hover:bg-obsidian-warning/15 disabled:opacity-40"
+                                                        >
+                                                            Clear
+                                                        </button>
+                                                        <button
+                                                            onClick={() => handleTaskAction(selectedDag!, expandedRun, selectedTaskInstance.task_id, 'mark_success', {
+                                                                map_index: selectedTaskInstance.map_index,
+                                                            })}
+                                                            disabled={!!taskActionLoading}
+                                                            className="px-2 py-1 rounded text-[10px] border border-obsidian-success/30 text-obsidian-success hover:bg-obsidian-success/15 disabled:opacity-40"
+                                                        >
+                                                            Mark Success
+                                                        </button>
+                                                        <button
+                                                            onClick={() => handleTaskAction(selectedDag!, expandedRun, selectedTaskInstance.task_id, 'mark_failed', {
+                                                                map_index: selectedTaskInstance.map_index,
+                                                            })}
+                                                            disabled={!!taskActionLoading}
+                                                            className="px-2 py-1 rounded text-[10px] border border-obsidian-danger/30 text-obsidian-danger hover:bg-obsidian-danger/15 disabled:opacity-40"
+                                                        >
+                                                            Mark Failed
+                                                        </button>
+                                                        <button
+                                                            onClick={() => handleTaskAction(selectedDag!, expandedRun, selectedTaskInstance.task_id, 'mark_running', {
+                                                                map_index: selectedTaskInstance.map_index,
+                                                            })}
+                                                            disabled={!!taskActionLoading}
+                                                            className="px-2 py-1 rounded text-[10px] border border-obsidian-info/30 text-obsidian-info hover:bg-obsidian-info/15 disabled:opacity-40"
+                                                        >
+                                                            Mark Running
+                                                        </button>
+                                                        <button
+                                                            onClick={() => handleTaskAction(selectedDag!, expandedRun, selectedTaskInstance.task_id, 'mark_queued', {
+                                                                map_index: selectedTaskInstance.map_index,
+                                                            })}
+                                                            disabled={!!taskActionLoading}
+                                                            className="px-2 py-1 rounded text-[10px] border border-white/20 text-obsidian-muted hover:text-foreground hover:bg-white/[0.08] disabled:opacity-40"
+                                                        >
+                                                            Mark Queued
+                                                        </button>
+                                                    </div>
+                                                    <div className="flex items-center gap-2 pt-1">
+                                                        <select
+                                                            value={customTaskState}
+                                                            onChange={(e) => setCustomTaskState(e.target.value)}
+                                                            className="h-8 bg-black/40 border border-white/10 rounded px-2 text-[10px] text-foreground"
+                                                        >
+                                                            <option value="queued">queued</option>
+                                                            <option value="running">running</option>
+                                                            <option value="success">success</option>
+                                                            <option value="failed">failed</option>
+                                                            <option value="skipped">skipped</option>
+                                                            <option value="upstream_failed">upstream_failed</option>
+                                                            <option value="removed">removed</option>
+                                                        </select>
+                                                        <button
+                                                            onClick={() => handleTaskAction(selectedDag!, expandedRun, selectedTaskInstance.task_id, 'set_state', {
+                                                                map_index: selectedTaskInstance.map_index,
+                                                                new_state: customTaskState,
+                                                            })}
+                                                            disabled={!!taskActionLoading}
+                                                            className="px-2 py-1 rounded text-[10px] border border-obsidian-info/30 text-obsidian-info hover:bg-obsidian-info/15 disabled:opacity-40"
+                                                        >
+                                                            Set State
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
                                     ) : (
                                         <div>
                                             {runs.map((run) => {
@@ -795,23 +1705,42 @@ export default function WorkflowsPage() {
                                                                     <div className="flex items-center justify-center py-4">
                                                                         <Loader2 className="w-4 h-4 text-obsidian-info animate-spin" />
                                                                     </div>
-                                                                ) : taskInstances.length === 0 ? (
+                                                                ) : visibleTaskInstances.length === 0 ? (
                                                                     <div className="text-center py-4 text-obsidian-muted text-[10px]">No task details available</div>
                                                                 ) : (
                                                                     <div className="py-1">
-                                                                        <div className="px-4 py-1.5 text-[9px] text-obsidian-muted uppercase font-semibold tracking-wider flex items-center gap-1">
+                                                                        <div className="px-4 py-1.5 text-[9px] text-obsidian-muted uppercase font-semibold tracking-wider flex items-center gap-2">
                                                                             <Activity className="w-2.5 h-2.5" />
-                                                                            Task Details
+                                                                            <span>Task Details</span>
+                                                                            <span className="text-[8px] normal-case tracking-normal font-mono text-obsidian-muted/90">
+                                                                                {visibleTaskInstances.length} items
+                                                                            </span>
+                                                                            <button
+                                                                                onClick={() => setShowMappedOnly((prev) => !prev)}
+                                                                                className={clsx(
+                                                                                    "ml-auto px-1.5 py-0.5 rounded border text-[8px] normal-case tracking-normal",
+                                                                                    showMappedOnly
+                                                                                        ? "border-obsidian-info/30 text-obsidian-info bg-obsidian-info/10"
+                                                                                        : "border-white/10 text-obsidian-muted hover:text-foreground hover:bg-white/[0.04]"
+                                                                                )}
+                                                                            >
+                                                                                mapped only
+                                                                            </button>
                                                                         </div>
-                                                                        {taskInstances.map((ti) => {
+                                                                        {visibleTaskInstances.map((ti) => {
                                                                             const taskColor = getStateColor(ti.state);
                                                                             const isFailed = ti.state === 'failed';
                                                                             return (
                                                                                 <div
                                                                                     key={ti.id}
+                                                                                    onClick={() => {
+                                                                                        setSelectedTaskId(taskInstanceKey(ti.task_id, ti.map_index));
+                                                                                        setRunsView('task');
+                                                                                    }}
                                                                                     className={clsx(
-                                                                                        "px-4 py-2 flex items-start gap-2 text-[11px]",
-                                                                                        isFailed && "bg-obsidian-danger/5"
+                                                                                        "px-4 py-2 flex items-start gap-2 text-[11px] cursor-pointer transition-colors",
+                                                                                        isFailed && "bg-obsidian-danger/5",
+                                                                                        selectedTaskId === taskInstanceKey(ti.task_id, ti.map_index) && "bg-obsidian-info/10 ring-1 ring-obsidian-info/20"
                                                                                     )}
                                                                                 >
                                                                                     {/* State icon */}
@@ -832,17 +1761,24 @@ export default function WorkflowsPage() {
                                                                                     {/* Task info */}
                                                                                     <div className="flex-1 min-w-0">
                                                                                         <div className="flex items-center justify-between">
-                                                                                            <span className={clsx(
-                                                                                                "font-mono font-medium truncate",
-                                                                                                isFailed ? "text-obsidian-danger" : "text-foreground"
-                                                                                            )}>
-                                                                                                {ti.task_display_name}
-                                                                                            </span>
+                                                                                            <div className="flex items-center gap-1.5 min-w-0">
+                                                                                                <span className={clsx(
+                                                                                                    "font-mono font-medium truncate",
+                                                                                                    isFailed ? "text-obsidian-danger" : "text-foreground"
+                                                                                                )}>
+                                                                                                    {ti.task_display_name}
+                                                                                                </span>
+                                                                                                {ti.map_index >= 0 && (
+                                                                                                    <span className="text-[8px] px-1.5 py-0.5 rounded bg-obsidian-info/15 text-obsidian-info font-mono shrink-0">
+                                                                                                        map[{ti.map_index}]
+                                                                                                    </span>
+                                                                                                )}
+                                                                                            </div>
                                                                                             <span className="text-[10px] text-obsidian-muted font-mono ml-2 shrink-0">
                                                                                                 {formatDuration(ti.duration)}
                                                                                             </span>
                                                                                         </div>
-                                                                                        <div className="text-[9px] text-obsidian-muted mt-0.5 flex items-center gap-2">
+                                                                                        <div className="text-[9px] text-obsidian-muted mt-0.5 flex items-center gap-2 flex-wrap">
                                                                                             <span>
                                                                                                 {ti.operator}
                                                                                                 {ti.try_number > 1 && (
@@ -853,7 +1789,7 @@ export default function WorkflowsPage() {
                                                                                             </span>
                                                                                             {/* Clear / Retry Task button */}
                                                                                             <button
-                                                                                                onClick={(e) => { e.stopPropagation(); handleTaskAction(selectedDag!, expandedRun!, ti.task_id, 'clear'); }}
+                                                                                                onClick={(e) => { e.stopPropagation(); handleTaskAction(selectedDag!, expandedRun!, ti.task_id, 'clear', { map_index: ti.map_index }); }}
                                                                                                 disabled={!!taskActionLoading}
                                                                                                 className="flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[8px] font-semibold border transition-colors bg-obsidian-warning/10 text-obsidian-warning border-obsidian-warning/20 hover:bg-obsidian-warning/25 disabled:opacity-30 active:scale-95"
                                                                                                 title="Clear Task (Retry)"
@@ -862,95 +1798,81 @@ export default function WorkflowsPage() {
                                                                                                 Clear
                                                                                             </button>
 
+                                                                                            {/* Mark Success */}
+                                                                                            <button
+                                                                                                onClick={(e) => { e.stopPropagation(); handleTaskAction(selectedDag!, expandedRun!, ti.task_id, 'mark_success', { map_index: ti.map_index }); }}
+                                                                                                disabled={!!taskActionLoading}
+                                                                                                className="flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[8px] font-semibold border transition-colors bg-obsidian-success/10 text-obsidian-success border-obsidian-success/20 hover:bg-obsidian-success/25 disabled:opacity-30 active:scale-95"
+                                                                                                title="Mark Success"
+                                                                                            >
+                                                                                                {taskActionLoading === `${ti.task_id}-mark_success` ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <CheckCircle2 className="w-2.5 h-2.5" />}
+                                                                                                Success
+                                                                                            </button>
+
+                                                                                            {/* Mark Failed */}
+                                                                                            <button
+                                                                                                onClick={(e) => { e.stopPropagation(); handleTaskAction(selectedDag!, expandedRun!, ti.task_id, 'mark_failed', { map_index: ti.map_index }); }}
+                                                                                                disabled={!!taskActionLoading}
+                                                                                                className="flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[8px] font-semibold border transition-colors bg-obsidian-danger/10 text-obsidian-danger border-obsidian-danger/20 hover:bg-obsidian-danger/25 disabled:opacity-30 active:scale-95"
+                                                                                                title="Mark Failed"
+                                                                                            >
+                                                                                                {taskActionLoading === `${ti.task_id}-mark_failed` ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <XCircle className="w-2.5 h-2.5" />}
+                                                                                                Failed
+                                                                                            </button>
+
                                                                                             {/* View Logs button */}
                                                                                             <button
-                                                                                                onClick={async (e) => {
-                                                                                                    e.stopPropagation();
-                                                                                                    if (viewingTaskLogs === ti.task_id) {
-                                                                                                        setViewingTaskLogs(null);
-                                                                                                        setTaskLogs(null);
-                                                                                                        return;
-                                                                                                    }
-                                                                                                    setViewingTaskLogs(ti.task_id);
-                                                                                                    setTaskLogsLoading(true);
-                                                                                                    try {
-                                                                                                        const res = await fetch(`/api/orchestrator/dags/${selectedDag}/runs/${expandedRun}/tasks/${ti.task_id}/logs/${ti.try_number}`);
-                                                                                                        const data = await res.json();
-                                                                                                        if (data.error || data.detail) {
-                                                                                                            const errMsg = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail);
-                                                                                                            setTaskLogs({ task_id: ti.task_id, try_number: ti.try_number, content: `Error: ${data.error || errMsg}` });
-                                                                                                        } else {
-                                                                                                            let parsedContent = data.content || data.text || 'No logs found';
-                                                                                                            if (typeof parsedContent !== 'string') {
-                                                                                                                parsedContent = JSON.stringify(parsedContent, null, 2);
-                                                                                                            }
-                                                                                                            setTaskLogs({ task_id: ti.task_id, try_number: ti.try_number, content: parsedContent });
-                                                                                                        }
-                                                                                                    } catch (err) {
-                                                                                                        const msg = err instanceof Error ? err.message : String(err);
-                                                                                                        setTaskLogs({ task_id: ti.task_id, try_number: ti.try_number, content: `Failed to load logs: ${msg}` });
-                                                                                                    } finally {
-                                                                                                        setTaskLogsLoading(false);
-                                                                                                    }
-                                                                                                }}
+                                                                                                onClick={(e) => { e.stopPropagation(); void toggleTaskLogs(ti); }}
                                                                                                 className={clsx(
                                                                                                     "flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[8px] font-semibold border transition-colors active:scale-95",
-                                                                                                    viewingTaskLogs === ti.task_id
+                                                                                                    viewingTaskLogs === taskInstanceKey(ti.task_id, ti.map_index)
                                                                                                         ? "bg-obsidian-info/20 text-obsidian-info border-obsidian-info/30"
                                                                                                         : "bg-obsidian-panel/30 text-obsidian-muted hover:text-foreground hover:bg-obsidian-panel/50 border-obsidian-border/50"
                                                                                                 )}
                                                                                             >
                                                                                                 <AlignLeft className="w-2.5 h-2.5" />
-                                                                                                {viewingTaskLogs === ti.task_id ? 'Hide Logs' : 'Logs'}
+                                                                                                {viewingTaskLogs === taskInstanceKey(ti.task_id, ti.map_index) ? 'Hide Logs' : 'Logs'}
                                                                                             </button>
 
-                                                                                            {/* View Code button for tasks that run scripts */}
-                                                                                            {(ti.operator === 'SparkSubmitOperator' || ti.operator === 'PythonOperator') && (
-                                                                                                <button
-                                                                                                    onClick={async (e) => {
-                                                                                                        e.stopPropagation();
-                                                                                                        if (viewingTaskCode === ti.task_id) {
-                                                                                                            setViewingTaskCode(null);
-                                                                                                            setTaskCode(null);
-                                                                                                            return;
-                                                                                                        }
-                                                                                                        setViewingTaskCode(ti.task_id);
-                                                                                                        setTaskCodeLoading(true);
-                                                                                                        try {
-                                                                                                            const res = await fetch('/api/orchestrator/notebooks', {
-                                                                                                                method: 'POST',
-                                                                                                                headers: { 'Content-Type': 'application/json' },
-                                                                                                                body: JSON.stringify({ task_id: ti.task_id }),
-                                                                                                            });
-                                                                                                            const data = await res.json();
-                                                                                                            if (data.error || data.detail) {
-                                                                                                                const errMsg = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail);
-                                                                                                                setTaskCode({ task_id: ti.task_id, filename: 'Error', content: `# ${data.error || errMsg}` });
-                                                                                                            } else {
-                                                                                                                let contentStr = data.content || '';
-                                                                                                                if (typeof contentStr !== 'string') {
-                                                                                                                    contentStr = JSON.stringify(contentStr, null, 2);
-                                                                                                                }
-                                                                                                                setTaskCode({ ...data, task_id: ti.task_id, content: contentStr });
-                                                                                                            }
-                                                                                                        } catch (err) {
-                                                                                                            const msg = err instanceof Error ? err.message : String(err);
-                                                                                                            setTaskCode({ task_id: ti.task_id, filename: 'Error', content: `# Failed to load source: ${msg}` });
-                                                                                                        } finally {
-                                                                                                            setTaskCodeLoading(false);
-                                                                                                        }
-                                                                                                    }}
-                                                                                                    className={clsx(
-                                                                                                        "flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[8px] font-semibold border transition-colors active:scale-95",
-                                                                                                        viewingTaskCode === ti.task_id
-                                                                                                            ? "bg-obsidian-info/20 text-obsidian-info border-obsidian-info/30"
-                                                                                                            : "bg-obsidian-panel/30 text-obsidian-muted hover:text-foreground hover:bg-obsidian-panel/50 border-obsidian-border/50"
-                                                                                                    )}
-                                                                                                >
-                                                                                                    <Code2 className="w-2.5 h-2.5" />
-                                                                                                    {viewingTaskCode === ti.task_id ? 'Hide Code' : 'Code'}
-                                                                                                </button>
-                                                                                            )}
+                                                                                            {/* View Code button */}
+                                                                                            <button
+                                                                                                onClick={async (e) => {
+                                                                                                    e.stopPropagation();
+                                                                                                    if (viewingTaskCode === ti.task_id) {
+                                                                                                        setViewingTaskCode(null);
+                                                                                                        setTaskCode(null);
+                                                                                                        return;
+                                                                                                    }
+                                                                                                    setViewingTaskCode(ti.task_id);
+                                                                                                    setTaskCodeLoading(true);
+                                                                                                    try {
+                                                                                                        const res = await apiFetch('/api/orchestrator/notebooks', {
+                                                                                                            method: 'POST',
+                                                                                                            headers: { 'Content-Type': 'application/json' },
+                                                                                                            body: JSON.stringify({ dag_id: selectedDag, task_id: ti.task_id }),
+                                                                                                        });
+                                                                                                        const data = await parseApiResponse<{ task_id: string; filename: string; content: unknown }>(res);
+                                                                                                        const contentStr = typeof data.content === 'string'
+                                                                                                            ? data.content
+                                                                                                            : JSON.stringify(data.content ?? '', null, 2);
+                                                                                                        setTaskCode({ ...data, task_id: ti.task_id, content: contentStr });
+                                                                                                    } catch (err) {
+                                                                                                        const msg = err instanceof Error ? err.message : String(err);
+                                                                                                        setTaskCode({ task_id: ti.task_id, filename: 'Error', content: `# Failed to load source: ${msg}` });
+                                                                                                    } finally {
+                                                                                                        setTaskCodeLoading(false);
+                                                                                                    }
+                                                                                                }}
+                                                                                                className={clsx(
+                                                                                                    "flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[8px] font-semibold border transition-colors active:scale-95",
+                                                                                                    viewingTaskCode === ti.task_id
+                                                                                                        ? "bg-obsidian-info/20 text-obsidian-info border-obsidian-info/30"
+                                                                                                        : "bg-obsidian-panel/30 text-obsidian-muted hover:text-foreground hover:bg-obsidian-panel/50 border-obsidian-border/50"
+                                                                                                )}
+                                                                                            >
+                                                                                                <Code2 className="w-2.5 h-2.5" />
+                                                                                                {viewingTaskCode === ti.task_id ? 'Hide Code' : 'Code'}
+                                                                                            </button>
                                                                                         </div>
                                                                                         {/* Inline Task Code Viewer */}
                                                                                         {viewingTaskCode === ti.task_id && (
@@ -1033,7 +1955,7 @@ export default function WorkflowsPage() {
                                                                                             </div>
                                                                                         )}
                                                                                         {/* Inline Task Logs Viewer */}
-                                                                                        {viewingTaskLogs === ti.task_id && (
+                                                                                        {viewingTaskLogs === taskInstanceKey(ti.task_id, ti.map_index) && (
                                                                                             <div className="mt-2 rounded border border-obsidian-border overflow-hidden bg-[#111113]">
                                                                                                 {taskLogsLoading ? (
                                                                                                     <div className="flex items-center justify-center py-4 text-obsidian-muted text-[10px]">
@@ -1046,8 +1968,42 @@ export default function WorkflowsPage() {
                                                                                                                 <AlignLeft className="w-3 h-3 text-obsidian-info" />
                                                                                                                 <span className="text-foreground font-mono font-medium text-[9px]">Log Output (Try {taskLogs.try_number})</span>
                                                                                                             </div>
+                                                                                                            <div className="flex items-center gap-2">
+                                                                                                                <label className="flex items-center gap-1 text-[8px] text-obsidian-muted uppercase tracking-wider">
+                                                                                                                    <input
+                                                                                                                        type="checkbox"
+                                                                                                                        checked={logAutoFollow}
+                                                                                                                        onChange={(e) => setLogAutoFollow(e.target.checked)}
+                                                                                                                        className="w-3 h-3 accent-cyan-500"
+                                                                                                                    />
+                                                                                                                    follow
+                                                                                                                </label>
+                                                                                                                <span className="text-[8px] text-obsidian-muted uppercase tracking-wider">Try</span>
+                                                                                                                <select
+                                                                                                                    className="bg-[#0f1013] border border-white/10 rounded px-1.5 py-0.5 text-[9px] text-foreground"
+                                                                                                                    value={selectedLogTry[taskInstanceKey(ti.task_id, ti.map_index)] || taskLogs.try_number}
+                                                                                                                    onChange={(e) => void changeTaskLogTry(ti, Number(e.target.value))}
+                                                                                                                >
+                                                                                                                    {(taskTryNumbers[taskInstanceKey(ti.task_id, ti.map_index)]?.length
+                                                                                                                        ? taskTryNumbers[taskInstanceKey(ti.task_id, ti.map_index)]
+                                                                                                                        : [taskLogs.try_number]
+                                                                                                                    ).map((num) => (
+                                                                                                                        <option key={`${ti.task_id}-try-${num}`} value={num}>
+                                                                                                                            {num}
+                                                                                                                        </option>
+                                                                                                                    ))}
+                                                                                                                </select>
+                                                                                                                <button
+                                                                                                                    onClick={() => downloadTextFile(`${selectedDag}-${expandedRun}-${ti.task_id}-${ti.map_index}-try${taskLogs.try_number}.log`, taskLogs.content)}
+                                                                                                                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-white/10 text-[8px] text-obsidian-muted hover:text-foreground hover:bg-white/[0.05]"
+                                                                                                                    title="Download log"
+                                                                                                                >
+                                                                                                                    <Download className="w-2.5 h-2.5" />
+                                                                                                                    save
+                                                                                                                </button>
+                                                                                                            </div>
                                                                                                         </div>
-                                                                                                        <div className="overflow-auto max-h-[400px] p-2 bg-[#0c0c0e]">
+                                                                                                        <div ref={logsScrollRef} className="overflow-auto max-h-[400px] p-2 bg-[#0c0c0e]">
                                                                                                             <pre className="text-[10px] text-obsidian-muted font-mono whitespace-pre-wrap break-all leading-[14px]">
                                                                                                                 {taskLogs.content}
                                                                                                             </pre>
@@ -1123,6 +2079,61 @@ export default function WorkflowsPage() {
                         </div>
                     )}
                 </div>
+
+                {showTriggerDialog && (
+                    <div
+                        className="fixed inset-0 z-[120] bg-black/70 backdrop-blur-sm flex items-center justify-center"
+                        onClick={() => setShowTriggerDialog(false)}
+                    >
+                        <div
+                            className="w-[640px] max-w-[95vw] border border-white/10 rounded-lg bg-[#0f1013] shadow-2xl"
+                            onClick={(e) => e.stopPropagation()}
+                        >
+                            <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                    <Code2 className="w-4 h-4 text-obsidian-info" />
+                                    <span className="text-[12px] font-semibold text-foreground">Trigger DAG with JSON conf</span>
+                                </div>
+                                <button
+                                    onClick={() => setShowTriggerDialog(false)}
+                                    className="text-obsidian-muted hover:text-foreground text-[12px]"
+                                >
+                                    ✕
+                                </button>
+                            </div>
+                            <div className="p-4 space-y-3">
+                                <div className="text-[10px] text-obsidian-muted font-mono">
+                                    DAG: {selectedDag || '—'}
+                                </div>
+                                <textarea
+                                    value={triggerConfText}
+                                    onChange={(e) => setTriggerConfText(e.target.value)}
+                                    className="w-full h-56 bg-black/40 border border-white/10 rounded px-3 py-2 text-[11px] text-foreground font-mono outline-none focus:border-obsidian-info/50"
+                                    spellCheck={false}
+                                />
+                                {triggerConfError && (
+                                    <div className="text-[10px] text-obsidian-danger bg-obsidian-danger/10 border border-obsidian-danger/30 rounded px-2 py-1">
+                                        {triggerConfError}
+                                    </div>
+                                )}
+                            </div>
+                            <div className="px-4 py-3 border-t border-white/10 flex items-center justify-end gap-2">
+                                <button
+                                    onClick={() => setShowTriggerDialog(false)}
+                                    className="px-3 py-1.5 rounded border border-white/10 text-[11px] text-obsidian-muted hover:text-foreground hover:bg-white/[0.04]"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={() => void submitTriggerWithConf()}
+                                    className="px-3 py-1.5 rounded border border-obsidian-success/30 text-[11px] text-obsidian-success hover:bg-obsidian-success/15"
+                                >
+                                    Trigger Run
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
             </main >
         </div >
     );

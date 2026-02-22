@@ -125,6 +125,8 @@ export interface PipelineDAG {
 
 export interface PipelineRun {
     run_id: string;
+    logical_date?: string | null;
+    run_after?: string | null;
     state: DAGRunState;
     run_type: string;
     triggered_by: string;

@@ -637,9 +637,9 @@ const Sidebar = () => {
     };
 
     return (
-        <aside className="h-full shrink-0 z-40 relative flex select-none" style={{ background: 'rgba(9,9,11,0.96)', borderRight: '1px solid rgba(255,255,255,0.06)' }}>
+        <aside className="h-full shrink-0 z-40 relative flex select-none bg-black/20 backdrop-blur-xl border-r border-white/5">
             {/* Activity Bar */}
-            <div className="w-[52px] flex flex-col items-center py-2 shrink-0" style={{ borderRight: '1px solid rgba(255,255,255,0.06)', background: 'rgba(0,0,0,0.25)' }}>
+            <div className="w-[52px] flex flex-col items-center py-2 shrink-0 bg-black/40 border-r border-white/5 backdrop-blur-md">
                 {navItems.map((item) => {
                     const Icon = item.icon;
                     const isActive = pathname === item.path || (item.path !== '/' && pathname.startsWith(item.path));
@@ -699,9 +699,9 @@ const Sidebar = () => {
 
             {/* Sidebar Content */}
             {pathname !== '/data' && pathname !== '/notebooks' && isOpen && (
-                <div className="w-[220px] flex flex-col h-full text-[12px] font-sans select-none" style={{ background: 'transparent' }}>
+                <div className="w-[220px] flex flex-col h-full text-[12px] font-sans select-none bg-transparent">
                     {/* Header */}
-                    <div className="h-9 flex items-center px-3 justify-between shrink-0" style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                    <div className="h-10 flex items-center px-4 justify-between shrink-0 border-b border-white/5">
                         <span className="font-semibold tracking-tight" style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
                             {pathname === '/data' ? 'Explorer' :
                                 pathname === '/workflows' ? 'Structure' :

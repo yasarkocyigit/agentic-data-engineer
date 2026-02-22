@@ -407,13 +407,17 @@ export default function ComputePage() {
     };
 
     return (
-        <div className="flex h-screen bg-[#09090b] text-foreground font-sans overflow-hidden relative">
-            <Sidebar />
-            <main className="flex-1 flex flex-col min-w-0 overflow-hidden relative z-10">
+        <div className="flex h-screen bg-[#09090b] text-foreground font-sans overflow-hidden relative" style={{ fontFamily: "'Inter', -apple-system, sans-serif" }}>
 
-                {/* Background ambient light */}
-                <div className="absolute top-0 left-0 w-[800px] h-[800px] bg-obsidian-purple/[0.04] rounded-full blur-[120px] pointer-events-none -translate-x-1/4 -translate-y-1/4 z-0" />
-                <div className="absolute bottom-0 right-0 w-[600px] h-[600px] bg-obsidian-info/[0.03] rounded-full blur-[100px] pointer-events-none translate-x-1/4 translate-y-1/4 z-0" />
+            {/* Ambient Lighting */}
+            <div className="absolute top-0 left-0 w-[800px] h-[800px] bg-purple-500/5 rounded-full blur-[120px] pointer-events-none -translate-x-1/4 -translate-y-1/4 z-0" />
+            <div className="absolute bottom-0 right-0 w-[600px] h-[600px] bg-sky-500/5 rounded-full blur-[100px] pointer-events-none translate-x-1/4 -translate-y-1/4 z-0" />
+
+            <div className="relative z-10 shrink-0">
+                <Sidebar />
+            </div>
+
+            <main className="flex-1 flex flex-col min-w-0 bg-transparent relative z-10">
 
                 <header className="flex items-center px-4 justify-between shrink-0 h-10 bg-black/40 backdrop-blur-md border-b border-white/5 z-10 w-full relative">
                     <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-obsidian-info/30 to-transparent opacity-50"></div>
@@ -453,7 +457,7 @@ export default function ComputePage() {
                 </header>
 
                 {/* ─── Overview Cards ─── */}
-                <div className="bg-transparent border-b border-white/5 shrink-0 z-10 relative">
+                <div className="bg-black/20 backdrop-blur-xl border-b border-white/5 shrink-0 z-10 relative">
                     <div className="grid grid-cols-6 divide-x divide-white/5">
                         {/* Total Services */}
                         <div className="p-4">
@@ -568,7 +572,7 @@ export default function ComputePage() {
                 </div>
 
                 {/* ─── Service Groups ─── */}
-                <div className="flex-1 overflow-auto z-10 relative">
+                <div className="flex-1 overflow-auto bg-transparent z-10 relative custom-scrollbar">
                     {categoryGroups.map(({ key, info, services: catServices }) => (
                         <div key={key} className="border-b border-white/5">
                             {/* Category Header */}
@@ -608,7 +612,7 @@ export default function ComputePage() {
                             {/* Services Table */}
                             {expandedCategories[key] && (
                                 <table className="w-full text-left border-collapse">
-                                    <thead className="bg-black/20 backdrop-blur-md">
+                                    <thead className="bg-black/20 border-b border-white/5">
                                         <tr>
                                             <th className="p-2 px-4 border-b border-white/5 w-10 text-center text-[10px] text-obsidian-muted/50">
                                                 <Activity className="w-3.5 h-3.5 inline" />
