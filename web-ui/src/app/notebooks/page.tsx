@@ -597,6 +597,7 @@ function NotebookCell({
     onMoveUp,
     onMoveDown,
     onRun,
+    onRunAndAdvance,
     onAddBelow,
     sqlSuggestionItems,
     loadSqlColumns,
@@ -614,6 +615,7 @@ function NotebookCell({
     onMoveUp: () => void;
     onMoveDown: () => void;
     onRun: () => void;
+    onRunAndAdvance: () => void;
     onAddBelow: (type: 'code' | 'markdown') => void;
     sqlSuggestionItems: NotebookSqlSuggestionItem[];
     loadSqlColumns: (tableFqn: string) => Promise<NotebookSqlSuggestionItem[]>;
@@ -623,6 +625,10 @@ function NotebookCell({
 }) {
     const editorRef = useRef<any>(null);
     const monacoRef = useRef<any>(null);
+    const onRunRef = useRef(onRun);
+    onRunRef.current = onRun;
+    const onRunAndAdvanceRef = useRef(onRunAndAdvance);
+    onRunAndAdvanceRef.current = onRunAndAdvance;
     const lineCount = cell.source.split('\n').length;
     const initialHeight = Math.max(40, Math.min(lineCount * 18 + 16, 500));
     const [editorHeight, setEditorHeight] = useState(initialHeight);
@@ -798,12 +804,18 @@ function NotebookCell({
         editorRef.current = editor;
         monacoRef.current = monaco;
         monaco.editor.setTheme('obsidian');
-        editor.onKeyDown((e: any) => {
-            // Shift+Enter OR Cmd/Ctrl+Enter
-            if ((e.shiftKey || e.metaKey || e.ctrlKey) && (e.keyCode === 3 || e.keyCode === 13)) {
-                e.preventDefault();
-                onRun();
-            }
+        // Use Monaco's addAction with ref to avoid stale closure
+        editor.addAction({
+            id: `run-cell-and-advance-${cell.id}`,
+            label: 'Run Cell and Advance (Shift+Enter)',
+            keybindings: [monaco.KeyMod.Shift | monaco.KeyCode.Enter],
+            run: () => { onRunAndAdvanceRef.current(); },
+        });
+        editor.addAction({
+            id: `run-cell-cmd-enter-${cell.id}`,
+            label: 'Run Cell (Cmd/Ctrl+Enter)',
+            keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter],
+            run: () => { onRunRef.current(); },
         });
 
         if (selectedLang === 'sql' || selectedLang === 'python') {
@@ -2331,6 +2343,15 @@ export default function NotebooksPage() {
                                     onMoveUp={() => moveCell(cell.id, 'up')}
                                     onMoveDown={() => moveCell(cell.id, 'down')}
                                     onRun={() => runCell(cell.id)}
+                                    onRunAndAdvance={() => {
+                                        runCell(cell.id);
+                                        const idx = cells.findIndex(c => c.id === cell.id);
+                                        if (idx < cells.length - 1) {
+                                            setActiveCell(cells[idx + 1].id);
+                                        } else {
+                                            addCell(cell.id, 'code');
+                                        }
+                                    }}
                                     onAddBelow={(type) => addCell(cell.id, type)}
                                     sqlSuggestionItems={sqlSuggestionItems}
                                     loadSqlColumns={loadSqlColumns}
