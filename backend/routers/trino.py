@@ -39,7 +39,7 @@ except ValueError:
 
 # Pre-compiled regex for checking if query already has a LIMIT clause
 _LIMIT_PATTERN = re.compile(r"\bLIMIT\s+\d+", re.IGNORECASE)
-_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9_]+$")
+_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$")
 _TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 _ROLE_PATTERN = re.compile(r"^[A-Za-z0-9_.:,\-=]{1,256}$")
 _SESSION_KEY_PATTERN = re.compile(r"^[A-Za-z0-9_]+$")
@@ -139,6 +139,9 @@ def _normalize_identifier(value: Optional[str], field_name: str) -> Optional[str
     if value is None:
         return None
     ident = value.strip()
+    # Accept quoted identifiers from clients and normalize to raw token.
+    if ident.startswith('"') and ident.endswith('"') and len(ident) >= 2:
+        ident = ident[1:-1].replace('""', '"')
     if not ident:
         raise HTTPException(status_code=400, detail=f"{field_name} cannot be empty")
     if not _IDENTIFIER_PATTERN.match(ident):

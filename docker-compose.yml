@@ -40,6 +40,7 @@ services:
       - SPARK_MASTER_UI_PUBLIC_URL=http://localhost:8082
       - SPARK_EXTRA_JARS=/workspace/jars/hadoop-aws-3.4.1.jar,/workspace/jars/bundle-2.31.1.jar
       - SPARK_DELTA_PACKAGE=io.delta:delta-spark_2.13:4.0.0
+      - SPARK_DELTA_WAREHOUSE=${SPARK_DELTA_WAREHOUSE:-s3a://deltalake/warehouse/}
       - SPARK_EXTRA_PACKAGES=org.apache.iceberg:iceberg-spark-runtime-4.0_2.13:1.10.1,org.postgresql:postgresql:42.7.5
       - SPARK_ICEBERG_ENABLED=true
       - SPARK_ICEBERG_CATALOG=lakehouse
@@ -126,6 +127,7 @@ services:
       --packages io.delta:delta-spark_2.13:4.0.0,org.apache.iceberg:iceberg-spark-runtime-4.0_2.13:1.10.1,org.postgresql:postgresql:42.7.5,org.apache.hadoop:hadoop-aws:3.4.1,software.amazon.awssdk:bundle:2.31.1
       --conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension
       --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog
+      --conf spark.sql.warehouse.dir=${SPARK_DELTA_WAREHOUSE:-s3a://deltalake/warehouse/}
       --conf spark.sql.catalog.lakehouse=org.apache.iceberg.spark.SparkCatalog
       --conf spark.sql.catalog.lakehouse.type=jdbc
       --conf spark.sql.catalog.lakehouse.uri=${ICEBERG_CATALOG_URI:-jdbc:postgresql://host.docker.internal:5433/controldb}

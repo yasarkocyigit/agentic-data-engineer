@@ -606,36 +606,39 @@ const Sidebar = () => {
     };
 
     return (
-        <aside className="h-full shrink-0 z-40 relative flex select-none bg-black/20 backdrop-blur-xl border-r border-white/5">
+        <aside className="h-full shrink-0 z-40 relative flex select-none bg-black/20 backdrop-blur-xl">
             {/* Activity Bar */}
-            <div className="w-[52px] flex flex-col items-center py-2 shrink-0 bg-black/40 border-r border-white/5 backdrop-blur-md">
+            <div className="w-[56px] flex flex-col items-center py-3 shrink-0 bg-transparent backdrop-blur-md z-10"
+                style={{ borderRight: '1px solid rgba(255,255,255,0.02)' }}
+            >
                 {navItems.map((item) => {
                     const Icon = item.icon;
                     const isActive = pathname === item.path || (item.path !== '/' && pathname.startsWith(item.path));
                     return (
                         <Link to={item.path} key={item.path} title={item.name}>
                             <div
-                                className="w-10 h-10 flex items-center justify-center rounded-lg mb-0.5 cursor-pointer transition-all relative group"
+                                className="w-[44px] h-[44px] flex items-center justify-center rounded-xl mb-1.5 cursor-pointer transition-all duration-200 relative group"
                                 style={{
-                                    background: isActive ? 'rgba(99,102,241,0.18)' : 'transparent',
+                                    background: isActive ? 'rgba(255,255,255,0.06)' : 'transparent',
+                                    boxShadow: isActive ? 'inset 0 1px 1px rgba(255,255,255,0.05), inset 0 -1px 1px rgba(0,0,0,0.2)' : 'none'
                                 }}
-                                onMouseEnter={(e) => { if (!isActive) (e.currentTarget as HTMLDivElement).style.background = 'rgba(255,255,255,0.06)'; }}
+                                onMouseEnter={(e) => { if (!isActive) (e.currentTarget as HTMLDivElement).style.background = 'rgba(255,255,255,0.08)'; }}
                                 onMouseLeave={(e) => { if (!isActive) (e.currentTarget as HTMLDivElement).style.background = 'transparent'; }}
                             >
                                 <Icon
                                     className="transition-colors"
                                     style={{
-                                        width: 20,
-                                        height: 20,
-                                        color: isActive ? '#a5b4fc' : 'rgba(255,255,255,0.4)',
-                                        strokeWidth: 1.25,
+                                        width: 22,
+                                        height: 22,
+                                        color: isActive ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.45)', // Lighter active color, whiteish
+                                        strokeWidth: isActive ? 1.5 : 1.25, // Bolder when active
                                     }}
                                 />
                                 {/* Active left indicator */}
                                 {isActive && (
                                     <div
-                                        className="absolute left-0 top-[8px] bottom-[8px] w-[2.5px] rounded-r-full"
-                                        style={{ background: 'linear-gradient(180deg, #818cf8, #67e8f9)' }}
+                                        className="absolute left-[1px] top-[10px] bottom-[10px] w-[1px] rounded-full"
+                                        style={{ background: 'linear-gradient(180deg, rgba(255,255,255,0.0), rgba(255,255,255,0.4), rgba(255,255,255,0.0))' }}
                                     />
                                 )}
                                 {/* Tooltip */}
@@ -652,12 +655,12 @@ const Sidebar = () => {
                         </Link>
                     );
                 })}
-                <div className="mt-auto pb-2">
-                    <div className="w-10 h-10 flex items-center justify-center rounded-lg cursor-pointer transition-all group relative"
-                        onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = 'rgba(255,255,255,0.06)'; }}
+                <div className="mt-auto pb-4">
+                    <div className="w-[44px] h-[44px] flex items-center justify-center rounded-xl cursor-pointer transition-all duration-200 group relative"
+                        onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = 'rgba(255,255,255,0.08)'; }}
                         onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = 'transparent'; }}
                     >
-                        <Settings style={{ width: 20, height: 20, color: 'rgba(255,255,255,0.35)', strokeWidth: 1.25 }} />
+                        <Settings style={{ width: 22, height: 22, color: 'rgba(255,255,255,0.45)', strokeWidth: 1.25 }} className="group-hover:rotate-45 transition-transform duration-300" />
                         <div className="absolute left-full ml-3 px-2.5 py-1 rounded-md text-[11px] whitespace-nowrap pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity z-50 font-medium active:scale-95"
                             style={{ background: '#18181c', border: '1px solid rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.8)', boxShadow: '0 4px 12px rgba(0,0,0,0.4)' }}>
                             Settings

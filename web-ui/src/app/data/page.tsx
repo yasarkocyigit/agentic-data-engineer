@@ -85,6 +85,15 @@ type QueryApiResponse = {
     warnings?: string[];
 };
 
+type ConfirmDialogState = {
+    title: string;
+    message: string;
+    confirmLabel?: string;
+    cancelLabel?: string;
+    danger?: boolean;
+    onConfirm: () => void;
+};
+
 type TrinoQueryStage = {
     stageId: string;
     state: string;
@@ -105,7 +114,7 @@ type StatementExecution = {
 
 const TRANSACTION_CONTROL_PATTERN = /\b(BEGIN|START\s+TRANSACTION|COMMIT|ROLLBACK|SAVEPOINT|RELEASE\s+SAVEPOINT)\b/i;
 const SCHEMA_MUTATION_PATTERN = /\b(CREATE|ALTER|DROP|TRUNCATE|COMMENT\s+ON|RENAME)\b/i;
-const ENGINE_ORDER: Engine[] = ['trino', 'postgres'];
+const ENGINE_ORDER: Engine[] = ['trino', 'postgres', 'spark'];
 const ENGINE_LABELS: Record<Engine, string> = {
     trino: 'Trino',
     spark: 'Spark',
@@ -113,7 +122,8 @@ const ENGINE_LABELS: Record<Engine, string> = {
 };
 
 const normalizeEngine = (value: string | Engine | undefined | null): Engine => {
-    return value === 'postgres' ? 'postgres' : 'trino';
+    if (value === 'postgres' || value === 'spark') return value;
+    return 'trino';
 };
 
 const hasExplicitTransactionControl = (sql: string) => TRANSACTION_CONTROL_PATTERN.test(sql);
@@ -121,6 +131,7 @@ const isSchemaMutationStatement = (sql: string) => SCHEMA_MUTATION_PATTERN.test(
 
 const escapeSqlLiteral = (value: string) => value.replace(/'/g, "''");
 const quoteTrinoIdentifier = (value: string) => `"${String(value).replace(/"/g, '""')}"`;
+const quotePostgresIdentifier = (value: string) => `"${String(value).replace(/"/g, '""')}"`;
 const readTrinoCatalogName = (row: any): string => {
     const value = row?.Catalog ?? row?.catalog ?? row?.CATALOG ?? row?.catalog_name ?? row?.CATALOG_NAME;
     return typeof value === 'string' ? value.trim() : '';
@@ -438,6 +449,7 @@ export default function DataExplorer() {
     const [selectedObject, setSelectedObject] = useState<{ schema: string; name: string; database: string; type: string } | null>(null);
     const [propertiesData, setPropertiesData] = useState<Record<string, any>>({});
     const [propertiesLoading, setPropertiesLoading] = useState(false);
+    const [propertiesError, setPropertiesError] = useState<string | null>(null);
 
     // ─── Virtual Scroll State ───
     const ROW_HEIGHT = 28;
@@ -463,6 +475,7 @@ export default function DataExplorer() {
     // ─── Trino Queries & Cluster Info State ───
     const [trinoQueries, setTrinoQueries] = useState<any[]>([]);
     const [trinoQueriesLoading, setTrinoQueriesLoading] = useState(false);
+    const [queriesPanelError, setQueriesPanelError] = useState<string | null>(null);
     const [trinoInfo, setTrinoInfo] = useState<{ version?: string; uptime?: string; state?: string } | null>(null);
     const [selectedTrinoQueryId, setSelectedTrinoQueryId] = useState<string | null>(null);
     const [trinoQueryDetail, setTrinoQueryDetail] = useState<any | null>(null);
@@ -479,6 +492,7 @@ export default function DataExplorer() {
     const [savedQueries, setSavedQueries] = useState<SavedQuery[]>([]);
     const [showSaveDialog, setShowSaveDialog] = useState(false);
     const [saveQueryName, setSaveQueryName] = useState('');
+    const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null);
     const [currentExecution, setCurrentExecution] = useState<{
         engine: Engine;
         queryTag: string;
@@ -868,23 +882,27 @@ export default function DataExplorer() {
             try {
                 if (executing.engine === 'trino') {
                     const res = await fetch('/api/trino/queries');
-                    const data = await res.json();
+                    const data = await parseApiResponse(res, 'Failed to fetch Trino queries for cancellation');
                     const matched = (data.queries || []).find((q: any) => q?.source === `openclaw:${executing.queryTag}`);
                     if (matched?.queryId) {
-                        await fetch(`/api/trino/queries/${matched.queryId}`, { method: 'DELETE' });
+                        const killRes = await fetch(`/api/trino/queries/${matched.queryId}`, { method: 'DELETE' });
+                        await parseApiResponse(killRes, `Failed to cancel Trino query ${matched.queryId}`);
                     }
                 } else if (executing.engine === 'spark') {
                     // Spark query cancellation is engine/deployment specific.
                     // Request abortion above already stops waiting on the client side.
                 } else {
                     const res = await fetch(`/api/postgres/queries?database=${encodeURIComponent(pgDatabase)}`);
-                    const data = await res.json();
+                    const data = await parseApiResponse(res, 'Failed to fetch PostgreSQL queries for cancellation');
                     const matched = (data.queries || []).find((q: any) => q?.queryTag === executing.queryTag);
                     if (matched?.pid) {
-                        await fetch(`/api/postgres/queries/${matched.pid}?database=${encodeURIComponent(pgDatabase)}`, { method: 'DELETE' });
+                        const killRes = await fetch(`/api/postgres/queries/${matched.pid}?database=${encodeURIComponent(pgDatabase)}`, { method: 'DELETE' });
+                        await parseApiResponse(killRes, `Failed to cancel PostgreSQL PID ${matched.pid}`);
                     }
                 }
-            } catch { }
+            } catch (err) {
+                console.error('Failed to cancel running query', err);
+            }
         }
 
         setCurrentExecution(null);
@@ -912,6 +930,29 @@ export default function DataExplorer() {
     const updateQuery = useCallback((val: string | undefined) => {
         setTabs(prev => prev.map(t => t.active ? { ...t, query: val || '' } : t));
     }, []);
+
+    const parseApiResponse = useCallback(async (res: Response, fallbackMessage: string) => {
+        const payload = await res.json().catch(() => ({} as Record<string, any>));
+        if (!res.ok) {
+            const detail =
+                (typeof payload?.detail === 'string' && payload.detail) ||
+                (typeof payload?.error === 'string' && payload.error) ||
+                `${fallbackMessage} (HTTP ${res.status})`;
+            throw new Error(detail);
+        }
+        return payload;
+    }, []);
+
+    const requestConfirmation = useCallback((dialog: ConfirmDialogState) => {
+        setConfirmDialog(dialog);
+    }, []);
+
+    const runConfirmedAction = useCallback(() => {
+        if (!confirmDialog) return;
+        const action = confirmDialog.onConfirm;
+        setConfirmDialog(null);
+        action();
+    }, [confirmDialog]);
 
     const toggleSort = (column: string) => {
         setSortConfig(prev => {
@@ -986,8 +1027,7 @@ export default function DataExplorer() {
         const isPostgres = engine === 'postgres';
         const isSpark = engine === 'spark';
 
-        // Build fully qualified name from parentNames
-        const buildFQN = (names: string[]) => names.join('.');
+        const buildTrinoFqn = (names: string[]) => names.map(quoteTrinoIdentifier).join('.');
 
         if (isSpark) {
             if (['table', 'view', 'materialized_view'].includes(node.type)) {
@@ -1019,35 +1059,45 @@ export default function DataExplorer() {
         }
 
         if (['table', 'view', 'materialized_view', 'function', 'procedure'].includes(node.type)) {
-            const fqn = buildFQN(parentNames);
             const isRoutine = ['function', 'procedure'].includes(node.type);
+            const trinoFqn = buildTrinoFqn(parentNames);
 
             // For Postgres, hierarchy is [database, schema, folder, object]
             const pgDb = parentNames[0] || 'controldb';
             const pgSchema = parentNames.length > 1 ? parentNames[1] : 'public';
             const pgObject = node.sqlName || parentNames[parentNames.length - 1];
             const pgRoutineOid = typeof node.routineOid === 'number' ? node.routineOid : undefined;
-            const pgFQN = `${pgSchema}.${pgObject}`;
+            const quotedPgSchema = quotePostgresIdentifier(pgSchema);
+            const quotedPgObject = quotePostgresIdentifier(pgObject);
+            const pgFQN = `${quotedPgSchema}.${quotedPgObject}`;
+            const escapedPgSchema = escapeSqlLiteral(pgSchema);
+            const escapedPgObject = escapeSqlLiteral(pgObject);
 
             if (isPostgres) {
                 let actions: any[] = [
                     {
                         label: 'Script as CREATE', icon: <FileCode className="w-3.5 h-3.5" />, action: async () => {
-                            const res = await fetch('/api/postgres', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({
-                                    action: 'explore',
-                                    type: 'ddl',
-                                    schema: pgSchema,
-                                    table: pgObject,
-                                    database: pgDb,
-                                    ...(isRoutine && pgRoutineOid ? { routine_oid: pgRoutineOid } : {})
-                                })
-                            });
-                            const data = await res.json();
-                            if (data.data?.definition) {
-                                updateQuery(data.data.definition);
+                            try {
+                                const res = await fetch('/api/postgres', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({
+                                        action: 'explore',
+                                        type: 'ddl',
+                                        schema: pgSchema,
+                                        table: pgObject,
+                                        database: pgDb,
+                                        ...(isRoutine && pgRoutineOid ? { routine_oid: pgRoutineOid } : {})
+                                    })
+                                });
+                                const data = await parseApiResponse(res, 'Failed to load PostgreSQL DDL');
+                                if (data.data?.definition) {
+                                    updateQuery(data.data.definition);
+                                }
+                            } catch (err) {
+                                const message = err instanceof Error ? err.message : 'Failed to load PostgreSQL DDL';
+                                setTabs(prev => prev.map(t => t.active ? { ...t, error: message } : t));
+                                setBottomPanel('results');
                             }
                         }
                     }
@@ -1059,10 +1109,10 @@ export default function DataExplorer() {
                         ...actions,
                         { label: 'Table Size', icon: <BarChart3 className="w-3.5 h-3.5" />, action: () => { updateQuery(`SELECT pg_size_pretty(pg_total_relation_size('${pgFQN}')) AS total_size,\n       pg_size_pretty(pg_relation_size('${pgFQN}')) AS table_size,\n       pg_size_pretty(pg_indexes_size('${pgFQN}')) AS index_size`); setTimeout(() => executeRef.current(), 100); } },
                         { label: 'Row Count', icon: <Columns className="w-3.5 h-3.5" />, action: () => { updateQuery(`SELECT count(*) AS total_rows FROM ${pgFQN}`); setTimeout(() => executeRef.current(), 100); } },
-                        { label: 'Show Grants', icon: <Shield className="w-3.5 h-3.5" />, action: () => { updateQuery(`SELECT grantee, privilege_type, is_grantable\nFROM information_schema.role_table_grants\nWHERE table_schema = '${pgSchema}' AND table_name = '${pgObject}'`); setTimeout(() => executeRef.current(), 100); } },
-                        { label: 'Show Indexes', icon: <Layers className="w-3.5 h-3.5" />, action: () => { updateQuery(`SELECT indexname, indexdef\nFROM pg_indexes\nWHERE schemaname = '${pgSchema}' AND tablename = '${pgObject}'`); setTimeout(() => executeRef.current(), 100); } },
+                        { label: 'Show Grants', icon: <Shield className="w-3.5 h-3.5" />, action: () => { updateQuery(`SELECT grantee, privilege_type, is_grantable\nFROM information_schema.role_table_grants\nWHERE table_schema = '${escapedPgSchema}' AND table_name = '${escapedPgObject}'`); setTimeout(() => executeRef.current(), 100); } },
+                        { label: 'Show Indexes', icon: <Layers className="w-3.5 h-3.5" />, action: () => { updateQuery(`SELECT indexname, indexdef\nFROM pg_indexes\nWHERE schemaname = '${escapedPgSchema}' AND tablename = '${escapedPgObject}'`); setTimeout(() => executeRef.current(), 100); } },
                         { divider: true },
-                        { label: 'Show Triggers', icon: <Activity className="w-3.5 h-3.5" />, action: () => { updateQuery(`SELECT trigger_name, event_manipulation, action_timing, action_statement\nFROM information_schema.triggers\nWHERE event_object_schema = '${pgSchema}' AND event_object_table = '${pgObject}'`); setTimeout(() => executeRef.current(), 100); } },
+                        { label: 'Show Triggers', icon: <Activity className="w-3.5 h-3.5" />, action: () => { updateQuery(`SELECT trigger_name, event_manipulation, action_timing, action_statement\nFROM information_schema.triggers\nWHERE event_object_schema = '${escapedPgSchema}' AND event_object_table = '${escapedPgObject}'`); setTimeout(() => executeRef.current(), 100); } },
                         { label: 'Vacuum Analyze', icon: <Zap className="w-3.5 h-3.5" />, action: () => { updateQuery(`VACUUM ANALYZE ${pgFQN}`); setTimeout(() => executeRef.current(), 100); } },
                     ];
                 } else {
@@ -1077,7 +1127,20 @@ export default function DataExplorer() {
                 actions.push(
                     { divider: true },
                     { label: 'Insert Name', icon: <Plus className="w-3.5 h-3.5" />, action: () => { insertIntoEditor(pgFQN); } },
-                    { label: `Drop ${node.type}`, icon: <Trash2 className="w-3.5 h-3.5" />, danger: true, action: () => { if (confirm(`Drop ${node.type} ${pgFQN}? This cannot be undone.`)) { updateQuery(`DROP ${node.type.toUpperCase().replace('_', ' ')} ${pgFQN}`); setTimeout(() => executeRef.current(), 100); } } }
+                    {
+                        label: `Drop ${node.type}`, icon: <Trash2 className="w-3.5 h-3.5" />, danger: true, action: () => {
+                            requestConfirmation({
+                                title: `Drop ${node.type}`,
+                                message: `Drop ${node.type} ${pgFQN}? This cannot be undone.`,
+                                confirmLabel: `Drop ${node.type}`,
+                                danger: true,
+                                onConfirm: () => {
+                                    updateQuery(`DROP ${node.type.toUpperCase().replace('_', ' ')} ${pgFQN}`);
+                                    setTimeout(() => executeRef.current(), 100);
+                                }
+                            });
+                        }
+                    }
                 );
                 return actions;
             } else {
@@ -1086,37 +1149,68 @@ export default function DataExplorer() {
                 const trinoCatalogName = parentNames[0] || trinoCatalog;
                 const trinoSchemaName = parentNames[1] || trinoSchema;
                 const trinoObjectName = parentNames[parentNames.length - 1];
+                const isIcebergCatalog = trinoCatalogName.toLowerCase() === 'iceberg';
+                const isDeltaLakeCatalog = ['deltalake', 'delta_lake', 'delta'].includes(trinoCatalogName.toLowerCase());
                 const quotedCatalog = quoteTrinoIdentifier(trinoCatalogName);
                 const quotedSchema = quoteTrinoIdentifier(trinoSchemaName);
+                const escapedSchemaName = escapeSqlLiteral(trinoSchemaName);
+                const escapedObjectName = escapeSqlLiteral(trinoObjectName);
                 const trinoMetadataFqn = (suffix: string) =>
                     `${quotedCatalog}.${quotedSchema}.${quoteTrinoIdentifier(`${trinoObjectName}${suffix}`)}`;
+                const storageLocationQuery = isIcebergCatalog
+                    ? `SELECT value AS storage_location\nFROM ${trinoMetadataFqn('$properties')}\nWHERE key = 'location'`
+                    : isDeltaLakeCatalog
+                        ? `SELECT\n  COALESCE(regexp_replace(min("$path"), '/[^/]+$', ''), 'N/A (table has no data files yet)') AS storage_location,\n  min("$path") AS sample_file_path\nFROM ${trinoFqn}`
+                        : null;
                 let actions: any[] = [
-                    { label: 'Script as CREATE', icon: <FileCode className="w-3.5 h-3.5" />, action: () => { updateQuery(`SHOW CREATE ${trinoType} ${fqn}`); setTimeout(() => executeRef.current(), 100); } },
+                    { label: 'Script as CREATE', icon: <FileCode className="w-3.5 h-3.5" />, action: () => { updateQuery(`SHOW CREATE ${trinoType} ${trinoFqn}`); setTimeout(() => executeRef.current(), 100); } },
                 ];
 
                 if (!isRoutine) {
                     actions = [
-                        { label: 'Preview Top 100', icon: <Eye className="w-3.5 h-3.5" />, action: () => { updateQuery(`SELECT * FROM ${fqn} LIMIT 100`); setTimeout(() => executeRef.current(), 100); } },
+                        { label: 'Preview Top 100', icon: <Eye className="w-3.5 h-3.5" />, action: () => { updateQuery(`SELECT * FROM ${trinoFqn} LIMIT 100`); setTimeout(() => executeRef.current(), 100); } },
                         ...actions,
-                        { label: 'Show Stats', icon: <BarChart3 className="w-3.5 h-3.5" />, action: () => { updateQuery(`SHOW STATS FROM ${fqn}`); setTimeout(() => executeRef.current(), 100); } },
-                        { label: 'Row Count', icon: <Columns className="w-3.5 h-3.5" />, action: () => { updateQuery(`SELECT count(*) AS total_rows FROM ${fqn}`); setTimeout(() => executeRef.current(), 100); } },
-                        { label: 'Show Grants', icon: <Shield className="w-3.5 h-3.5" />, action: () => { updateQuery(`SHOW GRANTS ON ${trinoType} ${fqn}`); setTimeout(() => executeRef.current(), 100); } },
-                        { label: 'Show Privileges (IS)', icon: <Shield className="w-3.5 h-3.5" />, action: () => { updateQuery(`SELECT *\nFROM ${quotedCatalog}.information_schema.table_privileges\nWHERE table_schema = '${escapeSqlLiteral(trinoSchemaName)}'\n  AND table_name = '${escapeSqlLiteral(trinoObjectName)}'\nORDER BY grantee`); setTimeout(() => executeRef.current(), 100); } },
-                        ...(node.type === 'table' ? [
+                        { label: 'Show Stats', icon: <BarChart3 className="w-3.5 h-3.5" />, action: () => { updateQuery(`SHOW STATS FROM ${trinoFqn}`); setTimeout(() => executeRef.current(), 100); } },
+                        { label: 'Row Count', icon: <Columns className="w-3.5 h-3.5" />, action: () => { updateQuery(`SELECT count(*) AS total_rows FROM ${trinoFqn}`); setTimeout(() => executeRef.current(), 100); } },
+                        ...(node.type === 'table' && storageLocationQuery ? [
+                            { label: 'Show Storage Location', icon: <Database className="w-3.5 h-3.5" />, action: () => { updateQuery(storageLocationQuery); setTimeout(() => executeRef.current(), 100); } },
+                        ] : []),
+                        { label: 'Show Grants', icon: <Shield className="w-3.5 h-3.5" />, action: () => { updateQuery(`SHOW GRANTS ON ${trinoType} ${trinoFqn}`); setTimeout(() => executeRef.current(), 100); } },
+                        { label: 'Show Privileges (IS)', icon: <Shield className="w-3.5 h-3.5" />, action: () => { updateQuery(`SELECT *\nFROM ${quotedCatalog}.information_schema.table_privileges\nWHERE table_schema = '${escapedSchemaName}'\n  AND table_name = '${escapedObjectName}'\nORDER BY grantee`); setTimeout(() => executeRef.current(), 100); } },
+                        ...(node.type === 'table' && isDeltaLakeCatalog ? [
+                            { label: 'Show Table Info (Delta)', icon: <Info className="w-3.5 h-3.5" />, action: () => { updateQuery(`SELECT\n  table_catalog,\n  table_schema,\n  table_name,\n  table_type\nFROM ${quotedCatalog}.information_schema.tables\nWHERE table_schema = '${escapedSchemaName}'\n  AND table_name = '${escapedObjectName}'`); setTimeout(() => executeRef.current(), 100); } },
+                            { label: 'Show Properties (Delta)', icon: <SlidersHorizontal className="w-3.5 h-3.5" />, action: () => { updateQuery(`SELECT key, value\nFROM ${trinoMetadataFqn('$properties')}\nORDER BY key`); setTimeout(() => executeRef.current(), 100); } },
+                            { label: 'Show History (Delta)', icon: <History className="w-3.5 h-3.5" />, action: () => { updateQuery(`SELECT version, timestamp, operation, user_name, isolation_level, is_blind_append\nFROM ${trinoMetadataFqn('$history')}\nORDER BY version DESC`); setTimeout(() => executeRef.current(), 100); } },
+                            { label: 'Describe Columns (Delta)', icon: <ClipboardList className="w-3.5 h-3.5" />, action: () => { updateQuery(`DESCRIBE ${trinoFqn}`); setTimeout(() => executeRef.current(), 100); } },
+                        ] : []),
+                        ...(node.type === 'table' && isIcebergCatalog ? [
                             { label: 'Show Partitions (Iceberg)', icon: <ListTree className="w-3.5 h-3.5" />, action: () => { updateQuery(`SELECT * FROM ${trinoMetadataFqn('$partitions')} LIMIT 200`); setTimeout(() => executeRef.current(), 100); } },
                             { label: 'Show Files (Iceberg)', icon: <FileSpreadsheet className="w-3.5 h-3.5" />, action: () => { updateQuery(`SELECT * FROM ${trinoMetadataFqn('$files')} LIMIT 200`); setTimeout(() => executeRef.current(), 100); } },
                             { label: 'Show Snapshots (Iceberg)', icon: <Clock className="w-3.5 h-3.5" />, action: () => { updateQuery(`SELECT * FROM ${trinoMetadataFqn('$snapshots')} ORDER BY committed_at DESC LIMIT 200`); setTimeout(() => executeRef.current(), 100); } },
                             { label: 'Show Manifests (Iceberg)', icon: <Layers className="w-3.5 h-3.5" />, action: () => { updateQuery(`SELECT * FROM ${trinoMetadataFqn('$manifests')} LIMIT 200`); setTimeout(() => executeRef.current(), 100); } },
                         ] : []),
                         { divider: true },
-                        { label: 'Analyze Table', icon: <Zap className="w-3.5 h-3.5" />, action: () => { updateQuery(`ANALYZE ${fqn}`); setTimeout(() => executeRef.current(), 100); } }
+                        { label: 'Analyze Table', icon: <Zap className="w-3.5 h-3.5" />, action: () => { updateQuery(`ANALYZE ${trinoFqn}`); setTimeout(() => executeRef.current(), 100); } }
                     ];
                 }
 
                 actions.push(
                     { divider: true },
-                    { label: 'Insert Name', icon: <Plus className="w-3.5 h-3.5" />, action: () => { insertIntoEditor(fqn); } },
-                    { label: `Drop ${node.type}`, icon: <Trash2 className="w-3.5 h-3.5" />, danger: true, action: () => { if (confirm(`Drop ${trinoType} ${fqn}? This cannot be undone.`)) { updateQuery(`DROP ${trinoType} ${fqn}`); setTimeout(() => executeRef.current(), 100); } } }
+                    { label: 'Insert Name', icon: <Plus className="w-3.5 h-3.5" />, action: () => { insertIntoEditor(trinoFqn); } },
+                    {
+                        label: `Drop ${node.type}`, icon: <Trash2 className="w-3.5 h-3.5" />, danger: true, action: () => {
+                            requestConfirmation({
+                                title: `Drop ${node.type}`,
+                                message: `Drop ${trinoType} ${trinoFqn}? This cannot be undone.`,
+                                confirmLabel: `Drop ${node.type}`,
+                                danger: true,
+                                onConfirm: () => {
+                                    updateQuery(`DROP ${trinoType} ${trinoFqn}`);
+                                    setTimeout(() => executeRef.current(), 100);
+                                }
+                            });
+                        }
+                    }
                 );
                 return actions;
             }
@@ -1125,32 +1219,60 @@ export default function DataExplorer() {
         if (node.type === 'schema') {
             if (isPostgres) {
                 const schemaName = parentNames[parentNames.length - 1] || node.name;
+                const quotedSchemaName = quotePostgresIdentifier(schemaName);
+                const escapedSchemaName = escapeSqlLiteral(schemaName);
                 return [
-                    { label: 'Create Table...', icon: <Plus className="w-3.5 h-3.5" />, action: () => { updateQuery(`CREATE TABLE ${schemaName}.new_table (\n    id SERIAL PRIMARY KEY,\n    name VARCHAR(255),\n    created_at TIMESTAMP DEFAULT NOW()\n)`); } },
-                    { label: 'Create View...', icon: <Eye className="w-3.5 h-3.5" />, action: () => { updateQuery(`CREATE VIEW ${schemaName}.new_view AS\nSELECT * FROM ${schemaName}.`); } },
-                    { label: 'Create Materialized View...', icon: <Eye className="w-3.5 h-3.5" />, action: () => { updateQuery(`CREATE MATERIALIZED VIEW ${schemaName}.mv_name AS\nSELECT *\nFROM ${schemaName}.source_table\nWITH DATA`); } },
-                    { label: 'Create Function...', icon: <Code2 className="w-3.5 h-3.5" />, action: () => { updateQuery(`CREATE OR REPLACE FUNCTION ${schemaName}.my_function(param1 INTEGER, param2 TEXT)\nRETURNS TABLE(id INTEGER, result TEXT) AS $$\nBEGIN\n    RETURN QUERY\n    SELECT 1 AS id, 'hello' AS result;\nEND;\n$$ LANGUAGE plpgsql`); } },
-                    { label: 'Create Procedure...', icon: <Wrench className="w-3.5 h-3.5" />, action: () => { updateQuery(`CREATE OR REPLACE PROCEDURE ${schemaName}.my_procedure(param1 INTEGER)\nLANGUAGE plpgsql AS $$\nBEGIN\n    -- procedure logic here\n    RAISE NOTICE 'Processing %', param1;\nEND;\n$$`); } },
-                    { label: 'Create Index...', icon: <Wrench className="w-3.5 h-3.5" />, action: () => { updateQuery(`CREATE INDEX idx_name\nON ${schemaName}.table_name (column_name)`); } },
-                    { label: 'Create Trigger...', icon: <Activity className="w-3.5 h-3.5" />, action: () => { updateQuery(`CREATE OR REPLACE FUNCTION ${schemaName}.trigger_fn()\nRETURNS TRIGGER AS $$\nBEGIN\n    -- trigger logic\n    RETURN NEW;\nEND;\n$$ LANGUAGE plpgsql;\n\nCREATE TRIGGER trg_name\nBEFORE INSERT ON ${schemaName}.table_name\nFOR EACH ROW EXECUTE FUNCTION ${schemaName}.trigger_fn()`); } },
-                    { label: 'Create Type...', icon: <Code2 className="w-3.5 h-3.5" />, action: () => { updateQuery(`CREATE TYPE ${schemaName}.status_type AS ENUM (\n    'active', 'inactive', 'pending'\n)`); } },
+                    { label: 'Create Table...', icon: <Plus className="w-3.5 h-3.5" />, action: () => { updateQuery(`CREATE TABLE ${quotedSchemaName}.new_table (\n    id SERIAL PRIMARY KEY,\n    name VARCHAR(255),\n    created_at TIMESTAMP DEFAULT NOW()\n)`); } },
+                    { label: 'Create View...', icon: <Eye className="w-3.5 h-3.5" />, action: () => { updateQuery(`CREATE VIEW ${quotedSchemaName}.new_view AS\nSELECT * FROM ${quotedSchemaName}.`); } },
+                    { label: 'Create Materialized View...', icon: <Eye className="w-3.5 h-3.5" />, action: () => { updateQuery(`CREATE MATERIALIZED VIEW ${quotedSchemaName}.mv_name AS\nSELECT *\nFROM ${quotedSchemaName}.source_table\nWITH DATA`); } },
+                    { label: 'Create Function...', icon: <Code2 className="w-3.5 h-3.5" />, action: () => { updateQuery(`CREATE OR REPLACE FUNCTION ${quotedSchemaName}.my_function(param1 INTEGER, param2 TEXT)\nRETURNS TABLE(id INTEGER, result TEXT) AS $$\nBEGIN\n    RETURN QUERY\n    SELECT 1 AS id, 'hello' AS result;\nEND;\n$$ LANGUAGE plpgsql`); } },
+                    { label: 'Create Procedure...', icon: <Wrench className="w-3.5 h-3.5" />, action: () => { updateQuery(`CREATE OR REPLACE PROCEDURE ${quotedSchemaName}.my_procedure(param1 INTEGER)\nLANGUAGE plpgsql AS $$\nBEGIN\n    -- procedure logic here\n    RAISE NOTICE 'Processing %', param1;\nEND;\n$$`); } },
+                    { label: 'Create Index...', icon: <Wrench className="w-3.5 h-3.5" />, action: () => { updateQuery(`CREATE INDEX idx_name\nON ${quotedSchemaName}.table_name (column_name)`); } },
+                    { label: 'Create Trigger...', icon: <Activity className="w-3.5 h-3.5" />, action: () => { updateQuery(`CREATE OR REPLACE FUNCTION ${quotedSchemaName}.trigger_fn()\nRETURNS TRIGGER AS $$\nBEGIN\n    -- trigger logic\n    RETURN NEW;\nEND;\n$$ LANGUAGE plpgsql;\n\nCREATE TRIGGER trg_name\nBEFORE INSERT ON ${quotedSchemaName}.table_name\nFOR EACH ROW EXECUTE FUNCTION ${quotedSchemaName}.trigger_fn()`); } },
+                    { label: 'Create Type...', icon: <Code2 className="w-3.5 h-3.5" />, action: () => { updateQuery(`CREATE TYPE ${quotedSchemaName}.status_type AS ENUM (\n    'active', 'inactive', 'pending'\n)`); } },
                     { divider: true },
-                    { label: 'Show Tables', icon: <Layers className="w-3.5 h-3.5" />, action: () => { updateQuery(`SELECT table_name, table_type\nFROM information_schema.tables\nWHERE table_schema = '${schemaName}'\nORDER BY table_name`); setTimeout(() => executeRef.current(), 100); } },
-                    { label: 'Show Views', icon: <Eye className="w-3.5 h-3.5" />, action: () => { updateQuery(`SELECT table_name AS view_name, view_definition\nFROM information_schema.views\nWHERE table_schema = '${schemaName}'\nORDER BY table_name`); setTimeout(() => executeRef.current(), 100); } },
-                    { label: 'Show Functions', icon: <Code2 className="w-3.5 h-3.5" />, action: () => { updateQuery(`SELECT routine_name, routine_type, data_type AS return_type\nFROM information_schema.routines\nWHERE routine_schema = '${schemaName}'\nORDER BY routine_name`); setTimeout(() => executeRef.current(), 100); } },
-                    { label: 'Show Sequences', icon: <Hash className="w-3.5 h-3.5" />, action: () => { updateQuery(`SELECT sequence_name, data_type, start_value, increment\nFROM information_schema.sequences\nWHERE sequence_schema = '${schemaName}'\nORDER BY sequence_name`); setTimeout(() => executeRef.current(), 100); } },
+                    { label: 'Show Tables', icon: <Layers className="w-3.5 h-3.5" />, action: () => { updateQuery(`SELECT table_name, table_type\nFROM information_schema.tables\nWHERE table_schema = '${escapedSchemaName}'\nORDER BY table_name`); setTimeout(() => executeRef.current(), 100); } },
+                    { label: 'Show Views', icon: <Eye className="w-3.5 h-3.5" />, action: () => { updateQuery(`SELECT table_name AS view_name, view_definition\nFROM information_schema.views\nWHERE table_schema = '${escapedSchemaName}'\nORDER BY table_name`); setTimeout(() => executeRef.current(), 100); } },
+                    { label: 'Show Functions', icon: <Code2 className="w-3.5 h-3.5" />, action: () => { updateQuery(`SELECT routine_name, routine_type, data_type AS return_type\nFROM information_schema.routines\nWHERE routine_schema = '${escapedSchemaName}'\nORDER BY routine_name`); setTimeout(() => executeRef.current(), 100); } },
+                    { label: 'Show Sequences', icon: <Hash className="w-3.5 h-3.5" />, action: () => { updateQuery(`SELECT sequence_name, data_type, start_value, increment\nFROM information_schema.sequences\nWHERE sequence_schema = '${escapedSchemaName}'\nORDER BY sequence_name`); setTimeout(() => executeRef.current(), 100); } },
                     { divider: true },
-                    { label: 'Drop Schema', icon: <Trash2 className="w-3.5 h-3.5" />, danger: true, action: () => { if (confirm(`Drop schema ${schemaName}? This cannot be undone.`)) { updateQuery(`DROP SCHEMA ${schemaName} CASCADE`); setTimeout(() => executeRef.current(), 100); } } },
+                    {
+                        label: 'Drop Schema', icon: <Trash2 className="w-3.5 h-3.5" />, danger: true, action: () => {
+                            requestConfirmation({
+                                title: 'Drop schema',
+                                message: `Drop schema ${schemaName}? This cannot be undone.`,
+                                confirmLabel: 'Drop schema',
+                                danger: true,
+                                onConfirm: () => {
+                                    updateQuery(`DROP SCHEMA ${quotedSchemaName} CASCADE`);
+                                    setTimeout(() => executeRef.current(), 100);
+                                }
+                            });
+                        }
+                    },
                 ];
             } else {
                 const catalogName = parentNames[0];
                 const schemaName = parentNames[1] || node.name;
-                const fqn = `${catalogName}.${schemaName}`;
+                const fqn = `${quoteTrinoIdentifier(catalogName)}.${quoteTrinoIdentifier(schemaName)}`;
                 return [
                     { label: 'Create Table...', icon: <Plus className="w-3.5 h-3.5" />, action: () => { updateQuery(`CREATE TABLE ${fqn}.new_table (\n    id BIGINT,\n    name VARCHAR,\n    created_at TIMESTAMP\n)\nWITH (\n    format = 'PARQUET'\n)`); } },
                     { label: 'Create View...', icon: <Eye className="w-3.5 h-3.5" />, action: () => { updateQuery(`CREATE VIEW ${fqn}.new_view AS\nSELECT * FROM ${fqn}.`); } },
                     { divider: true },
-                    { label: 'Drop Schema', icon: <Trash2 className="w-3.5 h-3.5" />, danger: true, action: () => { if (confirm(`Drop schema ${fqn}? This cannot be undone.`)) { updateQuery(`DROP SCHEMA ${fqn}`); setTimeout(() => executeRef.current(), 100); } } },
+                    {
+                        label: 'Drop Schema', icon: <Trash2 className="w-3.5 h-3.5" />, danger: true, action: () => {
+                            requestConfirmation({
+                                title: 'Drop schema',
+                                message: `Drop schema ${fqn}? This cannot be undone.`,
+                                confirmLabel: 'Drop schema',
+                                danger: true,
+                                onConfirm: () => {
+                                    updateQuery(`DROP SCHEMA ${fqn}`);
+                                    setTimeout(() => executeRef.current(), 100);
+                                }
+                            });
+                        }
+                    },
                 ];
             }
         }
@@ -1171,9 +1293,9 @@ export default function DataExplorer() {
                 ];
             } else {
                 return [
-                    { label: 'Create Schema...', icon: <Plus className="w-3.5 h-3.5" />, action: () => { updateQuery(`CREATE SCHEMA ${name}.new_schema`); } },
-                    { label: 'Show Schemas', icon: <Layers className="w-3.5 h-3.5" />, action: () => { updateQuery(`SHOW SCHEMAS FROM ${name}`); setTimeout(() => executeRef.current(), 100); } },
-                    { label: 'Show Functions', icon: <Code2 className="w-3.5 h-3.5" />, action: () => { updateQuery(`SHOW FUNCTIONS FROM ${name}`); setTimeout(() => executeRef.current(), 100); } },
+                    { label: 'Create Schema...', icon: <Plus className="w-3.5 h-3.5" />, action: () => { updateQuery(`CREATE SCHEMA ${quoteTrinoIdentifier(name)}.new_schema`); } },
+                    { label: 'Show Schemas', icon: <Layers className="w-3.5 h-3.5" />, action: () => { updateQuery(`SHOW SCHEMAS FROM ${quoteTrinoIdentifier(name)}`); setTimeout(() => executeRef.current(), 100); } },
+                    { label: 'Show Functions', icon: <Code2 className="w-3.5 h-3.5" />, action: () => { updateQuery(`SHOW FUNCTIONS FROM ${quoteTrinoIdentifier(name)}`); setTimeout(() => executeRef.current(), 100); } },
                     { label: 'Show Session', icon: <SlidersHorizontal className="w-3.5 h-3.5" />, action: () => { updateQuery(`SHOW SESSION`); setTimeout(() => executeRef.current(), 100); } },
                 ];
             }
@@ -1187,25 +1309,29 @@ export default function DataExplorer() {
         }
 
         return [];
-    }, [contextMenu, engine, updateQuery, insertIntoEditor, trinoCatalog, trinoSchema, sparkDatabase]);
+    }, [contextMenu, engine, updateQuery, insertIntoEditor, parseApiResponse, requestConfirmation, trinoCatalog, trinoSchema, sparkDatabase]);
 
     // ─── Properties Panel Fetch ───
     const fetchProperties = useCallback(async (obj: { schema: string; name: string; database: string; type: string }, tab: string) => {
         if (engine !== 'postgres') return;
         setPropertiesLoading(true);
+        setPropertiesError(null);
         try {
             const res = await fetch('/api/postgres', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ action: 'explore', type: tab, schema: obj.schema, table: obj.name, database: obj.database })
             });
-            const data = await res.json();
+            const data = await parseApiResponse(res, `Failed to load PostgreSQL ${tab}`);
             setPropertiesData(prev => ({ ...prev, [tab]: data.data }));
         } catch (err) {
             console.error('Failed to fetch properties:', err);
+            setPropertiesData(prev => ({ ...prev, [tab]: [] }));
+            setPropertiesError(err instanceof Error ? err.message : 'Failed to load object properties');
+        } finally {
+            setPropertiesLoading(false);
         }
-        setPropertiesLoading(false);
-    }, [engine]);
+    }, [engine, parseApiResponse]);
 
     // Trigger properties fetch when object or tab changes
     useEffect(() => {
@@ -1218,13 +1344,19 @@ export default function DataExplorer() {
     const fetchTrinoQueries = useCallback(async () => {
         if (engine !== 'trino') return;
         setTrinoQueriesLoading(true);
+        setQueriesPanelError(null);
         try {
             const res = await fetch('/api/trino/queries');
-            const data = await res.json();
+            const data = await parseApiResponse(res, 'Failed to load Trino queries');
             setTrinoQueries(data.queries || []);
-        } catch { }
-        setTrinoQueriesLoading(false);
-    }, [engine]);
+        } catch (err) {
+            console.error('Failed to load Trino queries', err);
+            setTrinoQueries([]);
+            setQueriesPanelError(err instanceof Error ? err.message : 'Failed to load Trino queries');
+        } finally {
+            setTrinoQueriesLoading(false);
+        }
+    }, [engine, parseApiResponse]);
 
     const fetchTrinoQueryDetail = useCallback(async (queryId: string) => {
         if (!queryId) return;
@@ -1232,10 +1364,7 @@ export default function DataExplorer() {
         setTrinoQueryDetailLoading(true);
         try {
             const res = await fetch(`/api/trino/queries/${encodeURIComponent(queryId)}`);
-            const data = await res.json();
-            if (!res.ok) {
-                throw new Error(data?.detail || `Failed to load detail (${res.status})`);
-            }
+            const data = await parseApiResponse(res, `Failed to load query detail (${queryId})`);
             setTrinoQueryDetail(data);
             const stageId = String(data?.outputStage?.stageId ?? data?.stageInfo?.stageId ?? '');
             setSelectedTrinoStageId(stageId || null);
@@ -1246,33 +1375,47 @@ export default function DataExplorer() {
         } finally {
             setTrinoQueryDetailLoading(false);
         }
-    }, []);
+    }, [parseApiResponse]);
 
     const killTrinoQuery = useCallback(async (queryId: string) => {
         try {
-            await fetch(`/api/trino/queries/${queryId}`, { method: 'DELETE' });
+            const res = await fetch(`/api/trino/queries/${queryId}`, { method: 'DELETE' });
+            await parseApiResponse(res, `Failed to kill Trino query ${queryId}`);
             fetchTrinoQueries();
-        } catch { }
-    }, [fetchTrinoQueries]);
+        } catch (err) {
+            console.error('Failed to kill Trino query', err);
+            setQueriesPanelError(err instanceof Error ? err.message : 'Failed to kill Trino query');
+        }
+    }, [fetchTrinoQueries, parseApiResponse]);
 
     // ─── PostgreSQL Queries Fetch ───
     const fetchPgQueries = useCallback(async () => {
         if (engine !== 'postgres') return;
         setPgQueriesLoading(true);
+        setQueriesPanelError(null);
         try {
             const res = await fetch(`/api/postgres/queries?database=${encodeURIComponent(pgDatabase)}`);
-            const data = await res.json();
+            const data = await parseApiResponse(res, 'Failed to load PostgreSQL queries');
             setPgQueries(data.queries || []);
-        } catch { }
-        setPgQueriesLoading(false);
-    }, [engine, pgDatabase]);
+        } catch (err) {
+            console.error('Failed to load PostgreSQL queries', err);
+            setPgQueries([]);
+            setQueriesPanelError(err instanceof Error ? err.message : 'Failed to load PostgreSQL queries');
+        } finally {
+            setPgQueriesLoading(false);
+        }
+    }, [engine, pgDatabase, parseApiResponse]);
 
     const killPgQuery = useCallback(async (pid: number) => {
         try {
-            await fetch(`/api/postgres/queries/${pid}?database=${encodeURIComponent(pgDatabase)}`, { method: 'DELETE' });
+            const res = await fetch(`/api/postgres/queries/${pid}?database=${encodeURIComponent(pgDatabase)}`, { method: 'DELETE' });
+            await parseApiResponse(res, `Failed to cancel PostgreSQL PID ${pid}`);
             fetchPgQueries();
-        } catch { }
-    }, [fetchPgQueries, pgDatabase]);
+        } catch (err) {
+            console.error('Failed to kill PostgreSQL query', err);
+            setQueriesPanelError(err instanceof Error ? err.message : 'Failed to kill PostgreSQL query');
+        }
+    }, [fetchPgQueries, pgDatabase, parseApiResponse]);
 
     // Fetch cluster info on mount (engine-aware)
     useEffect(() => {
@@ -1280,15 +1423,18 @@ export default function DataExplorer() {
             (async () => {
                 try {
                     const res = await fetch('/api/trino/info');
-                    const data = await res.json();
+                    const data = await parseApiResponse(res, 'Failed to load Trino cluster info');
                     setTrinoInfo({ version: data.nodeVersion?.version, uptime: data.uptime, state: data.state });
-                } catch { }
+                } catch (err) {
+                    console.error('Failed to load Trino info', err);
+                    setTrinoInfo(null);
+                }
             })();
         } else if (engine === 'spark') {
             (async () => {
                 try {
                     const res = await fetch('/api/spark/info');
-                    const data = await res.json();
+                    const data = await parseApiResponse(res, 'Failed to load Spark cluster info');
                     setSparkInfo({
                         version: data.version,
                         master: data.master,
@@ -1296,18 +1442,24 @@ export default function DataExplorer() {
                         defaultDatabase: data.defaultDatabase,
                         state: data.state,
                     });
-                } catch { }
+                } catch (err) {
+                    console.error('Failed to load Spark info', err);
+                    setSparkInfo(null);
+                }
             })();
         } else {
             (async () => {
                 try {
                     const res = await fetch('/api/postgres/info');
-                    const data = await res.json();
+                    const data = await parseApiResponse(res, 'Failed to load PostgreSQL cluster info');
                     setPgInfo({ version: data.version, uptime: data.uptime, activeConnections: data.activeConnections, databaseSize: data.databaseSize, state: data.state });
-                } catch { }
+                } catch (err) {
+                    console.error('Failed to load PostgreSQL info', err);
+                    setPgInfo(null);
+                }
             })();
         }
-    }, [engine]);
+    }, [engine, parseApiResponse]);
 
     // Auto-refresh queries when Queries tab is active (engine-aware)
     useEffect(() => {
@@ -1803,7 +1955,7 @@ export default function DataExplorer() {
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ action: 'explore', type: 'schemas', database: dbName })
                     });
-                    const data = await res.json();
+                    const data = await parseApiResponse(res, `Failed to load PostgreSQL schemas for ${dbName}`);
                     if (data.data) {
                         newChildren = data.data.map((s: any) => ({
                             id: `${nodeId}_${s.name}`, name: s.name, type: 'schema', isOpen: false, children: []
@@ -1839,7 +1991,7 @@ export default function DataExplorer() {
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ action: 'explore', type: exploreType, schema: schemaName, database: dbName })
                     });
-                    const data = await res.json();
+                    const data = await parseApiResponse(res, `Failed to load PostgreSQL ${exploreType} in ${schemaName}`);
                     if (data.data) {
                         const defaultType = nodeTypeMap[folderName] || 'table';
                         newChildren = data.data.map((item: any) => ({
@@ -1868,7 +2020,7 @@ export default function DataExplorer() {
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ action: 'explore', type: 'columns', schema: schemaName, table: tableName, database: dbName })
                     });
-                    const data = await res.json();
+                    const data = await parseApiResponse(res, `Failed to load PostgreSQL columns for ${schemaName}.${tableName}`);
                     if (data.data) {
                         newChildren = data.data.map((c: any) => ({
                             id: `${nodeId}_${c.name}`, name: c.name, type: 'column' as const, dataType: c.data_type
@@ -1884,7 +2036,7 @@ export default function DataExplorer() {
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ action: 'explore', type: 'tables', schema: dbName, database: dbName })
                     });
-                    const data = await res.json();
+                    const data = await parseApiResponse(res, `Failed to load Spark tables for ${dbName}`);
                     if (data.data) {
                         newChildren = data.data.map((item: any) => ({
                             id: `${nodeId}_${item.name}`,
@@ -1902,7 +2054,7 @@ export default function DataExplorer() {
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ action: 'explore', type: 'columns', schema: dbName, table: tableName, database: dbName })
                     });
-                    const data = await res.json();
+                    const data = await parseApiResponse(res, `Failed to load Spark columns for ${dbName}.${tableName}`);
                     if (data.data) {
                         newChildren = data.data.map((c: any) => ({
                             id: `${nodeId}_${c.name}`,
@@ -1921,7 +2073,7 @@ export default function DataExplorer() {
                         method: 'POST', headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ query: `SHOW SCHEMAS FROM ${quoteTrinoIdentifier(catalogName)}`, catalog: catalogName })
                     });
-                    const data = await res.json();
+                    const data = await parseApiResponse(res, `Failed to load Trino schemas for ${catalogName}`);
                     if (data.data) {
                         newChildren = data.data.filter((s: any) => s.Schema !== 'information_schema').map((s: any) => ({
                             id: `${nodeId}_${s.Schema}`, name: s.Schema, type: 'schema', isOpen: false, children: []
@@ -1936,11 +2088,11 @@ export default function DataExplorer() {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
-                            query: `SELECT table_name AS name, table_type FROM ${catalogName}.information_schema.tables WHERE table_schema = '${escapedSchemaName}' ORDER BY table_name`,
+                            query: `SELECT table_name AS name, table_type FROM ${quoteTrinoIdentifier(catalogName)}.information_schema.tables WHERE table_schema = '${escapedSchemaName}' ORDER BY table_name`,
                             catalog: catalogName
                         })
                     });
-                    let data = await res.json();
+                    let data = await res.json().catch(() => ({}));
                     if (!res.ok || !data.data) {
                         // Fallback for catalogs/connectors where information_schema.tables is restricted.
                         res = await fetch('/api/trino', {
@@ -1951,7 +2103,7 @@ export default function DataExplorer() {
                                 catalog: catalogName
                             })
                         });
-                        data = await res.json();
+                        data = await parseApiResponse(res, `Failed to load Trino tables for ${catalogName}.${schemaName}`);
                     }
                     if (data.data) {
                         newChildren = data.data.map((t: any) => {
@@ -1974,9 +2126,9 @@ export default function DataExplorer() {
                         const fnRes = await fetch('/api/trino', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ query: `SHOW FUNCTIONS FROM ${catalogName}.${schemaName}`, catalog: catalogName })
+                            body: JSON.stringify({ query: `SHOW FUNCTIONS FROM ${quoteTrinoIdentifier(catalogName)}.${quoteTrinoIdentifier(schemaName)}`, catalog: catalogName })
                         });
-                        const fnData = await fnRes.json();
+                        const fnData = await fnRes.json().catch(() => ({}));
                         if (fnRes.ok && fnData.data) {
                             const seen = new Set(newChildren.map(node => node.name.toLowerCase()));
                             const fnNodes = fnData.data
@@ -1996,7 +2148,9 @@ export default function DataExplorer() {
                                 }));
                             newChildren = [...newChildren, ...fnNodes];
                         }
-                    } catch { }
+                    } catch (err) {
+                        console.warn('Failed to load Trino functions for schema explorer', err);
+                    }
                 } else if (['table', 'view', 'materialized_view'].includes(nodeType)) {
                     const catalogName = parentNames[0];
                     const schemaName = parentNames[1];
@@ -2009,7 +2163,7 @@ export default function DataExplorer() {
                             catalog: catalogName
                         })
                     });
-                    const data = await res.json();
+                    const data = await parseApiResponse(res, `Failed to load Trino columns for ${catalogName}.${schemaName}.${tableName}`);
                     if (data.data) {
                         newChildren = data.data.map((c: any) => ({
                             id: `${nodeId}_${c.Column}`, name: c.Column, type: 'column', dataType: c.Type
@@ -2445,6 +2599,11 @@ export default function DataExplorer() {
         }
         return <span style={{ color: 'rgba(255,255,255,0.55)' }}>{str}</span>;
     };
+
+    const connectedHost = useMemo(() => {
+        if (typeof window === 'undefined') return 'unknown-host';
+        return window.location.hostname || 'localhost';
+    }, []);
 
     return (
         <div className="flex h-screen bg-[#09090b] text-foreground font-sans overflow-hidden relative" style={{ fontFamily: "'Inter', -apple-system, sans-serif" }}>
@@ -3135,7 +3294,19 @@ export default function DataExplorer() {
                                     </>
                                 )}
                                 {bottomPanel === 'history' && (
-                                    <button onClick={clearHistory} className="p-1.5 hover:bg-red-500/10 rounded-md text-obsidian-muted hover:text-red-400 transition-colors" title="Clear History">
+                                    <button
+                                        onClick={() => {
+                                            requestConfirmation({
+                                                title: 'Clear query history',
+                                                message: 'Clear query history?',
+                                                confirmLabel: 'Clear history',
+                                                danger: true,
+                                                onConfirm: () => clearHistory()
+                                            });
+                                        }}
+                                        className="p-1.5 hover:bg-red-500/10 rounded-md text-obsidian-muted hover:text-red-400 transition-colors"
+                                        title="Clear History"
+                                    >
                                         <Trash2 className="w-3.5 h-3.5" />
                                     </button>
                                 )}
@@ -3330,7 +3501,15 @@ export default function DataExplorer() {
                                             />
                                         </div>
                                         <button
-                                            onClick={() => { if (confirm('Clear query history?')) setQueryHistory([]); }}
+                                            onClick={() => {
+                                                requestConfirmation({
+                                                    title: 'Clear query history',
+                                                    message: 'Clear query history?',
+                                                    confirmLabel: 'Clear history',
+                                                    danger: true,
+                                                    onConfirm: () => clearHistory()
+                                                });
+                                            }}
                                             className="text-xs flex items-center gap-1.5 text-red-400 hover:text-red-300 hover:bg-red-500/10 px-2 py-1.5 rounded transition-colors"
                                         >
                                             <Trash2 className="w-3.5 h-3.5" /> Clear
@@ -3407,6 +3586,11 @@ export default function DataExplorer() {
                                         </button>
                                     </div>
                                     <div className="flex-1 overflow-auto custom-scrollbar">
+                                        {queriesPanelError && (
+                                            <div className="m-3 rounded-md border border-red-400/25 bg-red-500/10 px-3 py-2 text-[11px] text-red-200/90">
+                                                {queriesPanelError}
+                                            </div>
+                                        )}
                                         {engine === 'trino' ? (
                                             /* ── Trino Queries ── */
                                             trinoQueries.length === 0 ? (
@@ -3755,6 +3939,12 @@ export default function DataExplorer() {
                                             <div className="flex items-center justify-center h-full text-obsidian-muted text-[11px]">
                                                 <Loader2 className="w-4 h-4 mr-2 animate-spin" /> Loading...
                                             </div>
+                                        ) : propertiesError ? (
+                                            <div className="p-4">
+                                                <div className="rounded-md border border-red-400/25 bg-red-500/10 px-3 py-2 text-[11px] text-red-200/90">
+                                                    {propertiesError}
+                                                </div>
+                                            </div>
                                         ) : propertiesTab === 'ddl' ? (
                                             <pre className="p-4 text-[11px] font-mono text-white/70 whitespace-pre-wrap leading-relaxed">
                                                 {propertiesData.ddl?.definition || '-- No DDL available'}
@@ -3816,7 +4006,7 @@ export default function DataExplorer() {
                 {/* ─── Status Bar ─── */}
                 <div className="absolute bottom-0 left-0 right-0 flex items-center px-5 justify-between h-8 bg-black/40 backdrop-blur-xl text-[10px] text-white/40 font-mono select-none z-10 border-t border-white/5">
                     <div className="flex items-center gap-4">
-                        <span>Connected to <span className="text-white/80">{ENGINE_LABELS[engine]}</span> @ localhost</span>
+                        <span>Connected to <span className="text-white/80">{ENGINE_LABELS[engine]}</span> @ {connectedHost}</span>
                         <div className="w-[1px] h-3 bg-white/10" />
                         {engine === 'trino' && activeTab.results && activeTab.results.stats ? (
                             <span className="flex items-center gap-1 text-sky-400/60">
@@ -3887,6 +4077,43 @@ export default function DataExplorer() {
                         <div className="flex gap-2 justify-end">
                             <button onClick={() => setShowSaveDialog(false)} className="px-3 py-1.5 text-xs text-white/50 hover:text-white hover:bg-white/5 rounded-lg transition-colors">Cancel</button>
                             <button onClick={saveCurrentQuery} className="px-3 py-1.5 text-xs bg-obsidian-info/20 text-obsidian-info border border-obsidian-info/30 hover:bg-obsidian-info/30 rounded-lg transition-colors font-medium">Save</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {confirmDialog && (
+                <div className="fixed inset-0 z-[9998] flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setConfirmDialog(null)}>
+                    <div
+                        className="bg-[#1a1a2e]/95 border border-white/10 rounded-xl shadow-2xl p-5 w-[420px] backdrop-blur-xl"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <h3 className={clsx(
+                            "text-sm font-semibold mb-2 flex items-center gap-2",
+                            confirmDialog.danger ? "text-red-200" : "text-white"
+                        )}>
+                            {confirmDialog.danger ? <AlertTriangle className="w-4 h-4 text-red-300" /> : <Info className="w-4 h-4 text-sky-300" />}
+                            {confirmDialog.title}
+                        </h3>
+                        <p className="text-[12px] text-white/70 leading-relaxed">{confirmDialog.message}</p>
+                        <div className="flex justify-end gap-2 mt-5">
+                            <button
+                                onClick={() => setConfirmDialog(null)}
+                                className="px-3 py-1.5 text-xs text-white/60 hover:text-white hover:bg-white/5 rounded-lg transition-colors"
+                            >
+                                {confirmDialog.cancelLabel || 'Cancel'}
+                            </button>
+                            <button
+                                onClick={runConfirmedAction}
+                                className={clsx(
+                                    "px-3 py-1.5 text-xs rounded-lg transition-colors font-medium border",
+                                    confirmDialog.danger
+                                        ? "bg-red-500/20 text-red-200 border-red-400/30 hover:bg-red-500/30"
+                                        : "bg-sky-500/20 text-sky-200 border-sky-400/30 hover:bg-sky-500/30"
+                                )}
+                            >
+                                {confirmDialog.confirmLabel || 'Confirm'}
+                            </button>
                         </div>
                     </div>
                 </div>

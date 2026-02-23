@@ -74,6 +74,10 @@ SPARK_DELTA_ENABLED = (os.getenv("SPARK_DELTA_ENABLED", "true") or "true").strip
     "on",
 }
 SPARK_DELTA_PACKAGE = os.getenv("SPARK_DELTA_PACKAGE", "io.delta:delta-spark_2.13:4.0.1")
+SPARK_DELTA_WAREHOUSE = (
+    os.getenv("SPARK_DELTA_WAREHOUSE", os.getenv("DELTA_WAREHOUSE", "s3a://deltalake/warehouse/"))
+    or "s3a://deltalake/warehouse/"
+).strip()
 SPARK_EXTRA_PACKAGES = os.getenv("SPARK_EXTRA_PACKAGES", "")
 SPARK_JARS_REPOSITORIES = os.getenv("SPARK_JARS_REPOSITORIES", "")
 SPARK_REMOTE_URL = (os.getenv("SPARK_REMOTE_URL", "") or "").strip()
@@ -95,7 +99,7 @@ SPARK_ICEBERG_CATALOG_ALIASES = tuple(
     sorted(
         {
             alias.strip().lower()
-            for alias in (os.getenv("SPARK_ICEBERG_CATALOG_ALIASES", "iceberg") or "iceberg").split(",")
+            for alias in (os.getenv("SPARK_ICEBERG_CATALOG_ALIASES", "") or "").split(",")
             if alias and alias.strip()
         }
     )
@@ -171,6 +175,8 @@ _spark_query_lock = threading.Lock()
 _spark_sessions: dict[str, Any] = {}
 _cluster_runtime_state: dict[str, dict[str, Any]] = {}
 _capacity_cache: dict[str, dict[str, Any]] = {}
+_catalog_cache_lock = threading.Lock()
+_spark_catalog_cache: dict[str, dict[str, Any]] = {}
 
 
 # ─── Helpers ───
@@ -1037,6 +1043,219 @@ def _normalize_spark_iceberg_catalog_alias(sql_text: str) -> str:
     return normalized
 
 
+def _prepare_spark_sql_text(statement: str) -> str:
+    return _sanitize_sql(_normalize_spark_iceberg_catalog_alias(_strip_sql_magic_prefix(statement)))
+
+
+def _discover_spark_catalogs(spark: Any, cluster_id: Optional[str] = None) -> list[str]:
+    resolved_cluster_id = _resolve_cluster_id(cluster_id)
+    cache_key = resolved_cluster_id
+    now_ts = _now_utc().timestamp()
+    with _catalog_cache_lock:
+        cached = _spark_catalog_cache.get(cache_key)
+        if cached and (now_ts - float(cached.get("ts", 0))) < float(cached.get("ttl", 20)):
+            data = cached.get("catalogs")
+            if isinstance(data, list):
+                return [str(x) for x in data if str(x).strip()]
+
+    catalogs: list[str] = []
+    discovery_ok = True
+    try:
+        rows = spark.sql("SHOW CATALOGS").collect()
+        for row in rows:
+            name = ""
+            if hasattr(row, "asDict"):
+                row_dict = row.asDict()
+                name = str(row_dict.get("catalog") or row_dict.get("namespace") or row[0] or "").strip()
+            else:
+                name = str(row[0] if row else "").strip()
+            if name and name not in catalogs:
+                catalogs.append(name)
+    except Exception:
+        discovery_ok = False
+        catalogs = []
+
+    if SPARK_ICEBERG_ENABLED and SPARK_ICEBERG_CATALOG:
+        configured = str(SPARK_ICEBERG_CATALOG).strip()
+        if configured and configured not in catalogs:
+            catalogs.insert(0, configured)
+
+    if "spark_catalog" not in [c.lower() for c in catalogs]:
+        catalogs.append("spark_catalog")
+
+    with _catalog_cache_lock:
+        _spark_catalog_cache[cache_key] = {
+            "ts": now_ts,
+            "ttl": 20 if discovery_ok else 2,
+            "catalogs": list(catalogs),
+        }
+    return catalogs
+
+
+def _extract_invalid_namespace_catalog(exc: Exception) -> Optional[str]:
+    message = str(exc or "")
+    if "REQUIRES_SINGLE_PART_NAMESPACE" not in message:
+        return None
+
+    match = re.search(r"got\s+`([^`]+)`\.`([^`]+)`", message, flags=re.IGNORECASE)
+    if match:
+        catalog = str(match.group(1) or "").strip()
+        return catalog or None
+
+    match = re.search(r"got\s+([A-Za-z0-9_]+)\.([A-Za-z0-9_]+)", message, flags=re.IGNORECASE)
+    if match:
+        catalog = str(match.group(1) or "").strip()
+        return catalog or None
+
+    return None
+
+
+def _extract_three_part_prefixes(sql_text: str) -> list[str]:
+    text = str(sql_text or "")
+    if not text:
+        return []
+    pattern = re.compile(
+        r"(?i)(?<![A-Za-z0-9_`])`?([A-Za-z_][A-Za-z0-9_]*)`?\.`?([A-Za-z_][A-Za-z0-9_]*)`?\.`?([A-Za-z_][A-Za-z0-9_]*)`?"
+    )
+    seen: list[str] = []
+    for match in pattern.finditer(text):
+        prefix = str(match.group(1) or "").strip()
+        if prefix and prefix not in seen:
+            seen.append(prefix)
+    return seen
+
+
+def _rewrite_catalog_prefix(sql_text: str, old_catalog: str, new_catalog: str) -> str:
+    old = str(old_catalog or "").strip()
+    new = str(new_catalog or "").strip()
+    text = str(sql_text or "")
+    if not old or not new or old.lower() == new.lower():
+        return text
+
+    rewritten = re.sub(
+        rf"(?i)(?<![A-Za-z0-9_`]){re.escape(old)}\.",
+        f"{new}.",
+        text,
+    )
+    rewritten = re.sub(
+        rf"(?i)`{re.escape(old)}`\.",
+        f"`{new}`.",
+        rewritten,
+    )
+    return rewritten
+
+
+def _catalog_rewrite_targets(
+    sql_text: str,
+    spark: Any,
+    cluster_id: Optional[str],
+    exc: Exception,
+) -> list[tuple[str, str]]:
+    error_message = str(exc or "")
+    discovered_catalogs = _discover_spark_catalogs(spark, cluster_id)
+    discovered_lower = {str(c).strip().lower() for c in discovered_catalogs}
+
+    preferred_targets: list[str] = []
+    if SPARK_ICEBERG_ENABLED and SPARK_ICEBERG_CATALOG:
+        configured = str(SPARK_ICEBERG_CATALOG).strip()
+        if configured:
+            preferred_targets.append(configured)
+    preferred_targets.extend([str(c) for c in discovered_catalogs if str(c).strip().lower() != "spark_catalog"])
+    preferred_targets.extend([str(c) for c in discovered_catalogs if str(c).strip().lower() == "spark_catalog"])
+    # preserve order while removing duplicates
+    normalized_targets: list[str] = []
+    seen_targets: set[str] = set()
+    for target in preferred_targets:
+        key = str(target).strip().lower()
+        if not key or key in seen_targets:
+            continue
+        seen_targets.add(key)
+        normalized_targets.append(str(target).strip())
+    preferred_targets = normalized_targets
+
+    source_catalogs: list[str] = []
+    unresolved_catalog = _extract_invalid_namespace_catalog(exc)
+    if unresolved_catalog:
+        source_catalogs.append(unresolved_catalog)
+
+    if "TABLE_OR_VIEW_NOT_FOUND" in error_message:
+        for prefix in _extract_three_part_prefixes(sql_text):
+            if prefix.lower() not in discovered_lower and prefix not in source_catalogs:
+                source_catalogs.append(prefix)
+
+    if not source_catalogs:
+        return []
+
+    candidates: list[tuple[str, str]] = []
+    for source in source_catalogs:
+        for target in preferred_targets:
+            target_name = str(target).strip()
+            if not target_name or target_name.lower() == source.lower():
+                continue
+            candidates.append((source, target_name))
+    return candidates
+
+
+class _SparkSessionProxy:
+    """Wrap SparkSession to normalize/retry SQL while keeping native API access."""
+
+    def __init__(self, cluster_id: str):
+        self._cluster_id = _resolve_cluster_id(cluster_id)
+
+    def sql(self, statement: str, *args, **kwargs):
+        sql_text = _prepare_spark_sql_text(statement)
+        if not sql_text:
+            raise RuntimeError("Spark SQL statement is empty")
+
+        sql_candidates: list[str] = [sql_text]
+        session_retry_done = False
+        rewrites_generated = False
+        last_exception: Optional[Exception] = None
+
+        while sql_candidates:
+            current_sql = sql_candidates.pop(0)
+            try:
+                spark = _get_spark_session(self._cluster_id)
+                return spark.sql(current_sql, *args, **kwargs)
+            except Exception as exc:
+                last_exception = exc
+                if not session_retry_done and _is_spark_session_closed_error(exc):
+                    logger.warning(
+                        "Spark session handle closed for cluster '%s' in SparkSessionProxy.sql; recreating session.",
+                        self._cluster_id,
+                    )
+                    _invalidate_spark_session(self._cluster_id, reason=str(exc))
+                    session_retry_done = True
+                    sql_candidates.insert(0, current_sql)
+                    continue
+                if not rewrites_generated:
+                    try:
+                        spark = _get_spark_session(self._cluster_id)
+                        rewrite_targets = _catalog_rewrite_targets(current_sql, spark, self._cluster_id, exc)
+                        if rewrite_targets:
+                            sql_candidates.extend(
+                                [_rewrite_catalog_prefix(current_sql, old, target) for old, target in rewrite_targets]
+                            )
+                            rewrites_generated = True
+                            logger.info(
+                                "Detected unresolved Spark catalog prefix in SparkSessionProxy.sql; retrying with discovered catalogs. cluster=%s options=%s",
+                                self._cluster_id,
+                                [target for _, target in rewrite_targets],
+                            )
+                            continue
+                    except Exception:
+                        pass
+                continue
+
+        if last_exception is not None:
+            raise last_exception
+        raise RuntimeError("Spark SQL execution failed")
+
+    def __getattr__(self, name: str):
+        spark = _get_spark_session(self._cluster_id)
+        return getattr(spark, name)
+
+
 def _split_sql_statements(sql_text: str) -> list[str]:
     sql = _sanitize_sql(sql_text)
     if not sql:
@@ -1438,6 +1657,7 @@ def _get_spark_session(cluster_id: Optional[str] = None):
             .config("spark.sql.session.timeZone", "UTC")
             .config("spark.sql.shuffle.partitions", SPARK_SQL_SHUFFLE_PARTITIONS)
             .config("spark.ui.showConsoleProgress", "false")
+            .config("spark.sql.warehouse.dir", SPARK_DELTA_WAREHOUSE)
             .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
             .config("spark.hadoop.fs.s3a.endpoint", SPARK_S3_ENDPOINT)
             .config("spark.hadoop.fs.s3a.path.style.access", str(SPARK_S3_PATH_STYLE_ACCESS).lower())
@@ -1693,7 +1913,8 @@ def _install_local_helpers(namespace: dict[str, Any], session_id: str) -> None:
     cluster_id = _session_cluster_id(session_id)
     if namespace.get("__openclaw_helpers_loaded__") and namespace.get("__openclaw_cluster_id__") == cluster_id:
         try:
-            namespace["spark"] = _get_spark_session(cluster_id)
+            # Keep proxy semantics on refresh so spark.sql(...) always gets retry/catalog-rewrite behavior.
+            namespace["spark"] = _SparkSessionProxy(cluster_id)
         except Exception:
             pass
         return
@@ -1730,29 +1951,59 @@ def _install_local_helpers(namespace: dict[str, Any], session_id: str) -> None:
         limit: Optional[int] = default_limit,
     ):
         _require_module("pyspark.sql", "pyspark")
-        sql_text = _sanitize_sql(_normalize_spark_iceberg_catalog_alias(_strip_sql_magic_prefix(statement)))
+        sql_text = _prepare_spark_sql_text(statement)
         if not sql_text:
             raise RuntimeError("Spark SQL statement is empty")
 
         target_db = str(database).strip() or SPARK_DEFAULT_DATABASE
-        for attempt in range(2):
+        sql_candidates: list[str] = [sql_text]
+        session_retry_done = False
+        rewrites_generated = False
+        last_exception: Optional[Exception] = None
+
+        while sql_candidates:
+            current_sql = sql_candidates.pop(0)
             try:
                 spark = _get_spark_session(cluster_id)
                 with _spark_query_lock:
                     spark.catalog.setCurrentDatabase(target_db)
-                    df = spark.sql(sql_text)
+                    df = spark.sql(current_sql)
                     if limit is not None and int(limit) > 0:
                         df = df.limit(int(limit))
                     return df
             except Exception as exc:
-                if attempt == 0 and _is_spark_session_closed_error(exc):
+                last_exception = exc
+                if not session_retry_done and _is_spark_session_closed_error(exc):
                     logger.warning(
                         "Spark session handle closed for cluster '%s' in query_spark; recreating session.",
                         cluster_id,
                     )
                     _invalidate_spark_session(cluster_id, reason=str(exc))
+                    session_retry_done = True
+                    sql_candidates.insert(0, current_sql)
                     continue
-                raise
+                if not rewrites_generated:
+                    try:
+                        spark = _get_spark_session(cluster_id)
+                        rewrites = _catalog_rewrite_targets(current_sql, spark, cluster_id, exc)
+                        if rewrites:
+                            sql_candidates.extend(
+                                [_rewrite_catalog_prefix(current_sql, old, target) for old, target in rewrites]
+                            )
+                            logger.info(
+                                "Detected unresolved Spark catalog prefix; retrying with discovered catalogs. cluster=%s options=%s",
+                                cluster_id,
+                                [target for _, target in rewrites],
+                            )
+                            rewrites_generated = True
+                            continue
+                    except Exception:
+                        pass
+                continue
+
+        if last_exception is not None:
+            raise last_exception
+        raise RuntimeError("Spark query failed")
 
     def query(
         statement: str,
@@ -1792,7 +2043,7 @@ def _install_local_helpers(namespace: dict[str, Any], session_id: str) -> None:
     spark_sql_module = _require_module("pyspark.sql", "pyspark")
     spark_functions = _require_module("pyspark.sql.functions", "pyspark")
     spark_types = _require_module("pyspark.sql.types", "pyspark")
-    spark = _get_spark_session(cluster_id)
+    spark = _SparkSessionProxy(cluster_id)
 
     namespace["query_trino"] = query_trino
     namespace["query_spark"] = query_spark
@@ -1897,7 +2148,7 @@ def _execute_spark_sql(
     database: str = SPARK_DEFAULT_DATABASE,
 ) -> dict[str, Any]:
     outputs: list[dict[str, Any]] = []
-    statements = _split_sql_statements(_normalize_spark_iceberg_catalog_alias(_strip_sql_magic_prefix(raw_sql)))
+    statements = _split_sql_statements(_prepare_spark_sql_text(raw_sql))
     if not statements:
         return {
             "status": "error",
@@ -1928,14 +2179,19 @@ def _execute_spark_sql(
     max_rows = int(_cluster_profile(cluster_id).get("limits", {}).get("max_rows", NOTEBOOK_TABLE_ROW_LIMIT))
     target_db = str(database).strip() or SPARK_DEFAULT_DATABASE
 
+    pending_statement_sets: list[list[str]] = [list(statements)]
+    rewrites_generated = False
+    session_retry_done = False
     last_exception: Optional[Exception] = None
-    for attempt in range(2):
+
+    while pending_statement_sets:
+        active_statements = pending_statement_sets.pop(0)
         try:
             spark = _get_spark_session(cluster_id)
             attempt_outputs: list[dict[str, Any]] = []
             with _spark_query_lock:
                 spark.catalog.setCurrentDatabase(target_db)
-                for idx, statement in enumerate(statements):
+                for idx, statement in enumerate(active_statements):
                     df = spark.sql(statement)
                     columns = [str(c) for c in df.columns]
 
@@ -1955,8 +2211,8 @@ def _execute_spark_sql(
                         attempt_outputs.append({
                             "output_type": "stream",
                             "name": "stdout",
-                            "text": f"Statement {idx + 1}/{len(statements)} executed successfully.\\n"
-                            if len(statements) > 1
+                            "text": f"Statement {idx + 1}/{len(active_statements)} executed successfully.\\n"
+                            if len(active_statements) > 1
                             else "Statement executed successfully.\\n",
                         })
 
@@ -1968,14 +2224,38 @@ def _execute_spark_sql(
             }
         except Exception as exc:
             last_exception = exc
-            if attempt == 0 and _is_spark_session_closed_error(exc):
+            if not session_retry_done and _is_spark_session_closed_error(exc):
                 logger.warning(
                     "Spark session handle closed for cluster '%s' in %%sql; recreating session.",
                     cluster_id,
                 )
                 _invalidate_spark_session(cluster_id, reason=str(exc))
+                session_retry_done = True
+                pending_statement_sets.insert(0, active_statements)
                 continue
-            break
+            if not rewrites_generated:
+                try:
+                    spark = _get_spark_session(cluster_id)
+                    rewrite_targets = _catalog_rewrite_targets("\n".join(active_statements), spark, cluster_id, exc)
+                    if rewrite_targets:
+                        rewritten_sets: list[list[str]] = []
+                        for old_catalog, target_catalog in rewrite_targets:
+                            rewritten = [
+                                _rewrite_catalog_prefix(statement, old_catalog, target_catalog)
+                                for statement in active_statements
+                            ]
+                            rewritten_sets.append(rewritten)
+                        if rewritten_sets:
+                            pending_statement_sets.extend(rewritten_sets)
+                            rewrites_generated = True
+                            logger.info(
+                                "Detected unresolved Spark catalog prefix in %%sql; retrying with discovered catalogs. cluster=%s options=%s",
+                                cluster_id,
+                                [target for _, target in rewrite_targets],
+                            )
+                            continue
+                except Exception:
+                    pass
 
     exc = last_exception or RuntimeError("Spark SQL execution failed")
     return {

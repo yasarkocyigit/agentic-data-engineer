@@ -800,7 +800,7 @@ function NotebookCell({
         monaco.editor.setTheme('obsidian');
         editor.onKeyDown((e: any) => {
             // Shift+Enter OR Cmd/Ctrl+Enter
-            if ((e.shiftKey || e.metaKey || e.ctrlKey) && e.keyCode === 3) {
+            if ((e.shiftKey || e.metaKey || e.ctrlKey) && (e.keyCode === 3 || e.keyCode === 13)) {
                 e.preventDefault();
                 onRun();
             }
@@ -834,9 +834,9 @@ function NotebookCell({
                 {/* 2. Main Box: Unified bordered container for Play Button + Editor + Right Actions */}
                 <div
                     className={clsx(
-                        "flex-1 flex min-w-0 transition-all duration-150 rounded-lg border",
+                        "flex-1 flex min-w-0 transition-all duration-200 rounded-md border",
                         cell.cell_type === 'markdown' && isActive ? "flex-col" : "flex-row",
-                        isActive ? "border-white/20 bg-white/[0.03] shadow-md" : "border-white/5 hover:border-white/10 bg-white/[0.01] hover:bg-white/[0.02]"
+                        isActive ? "border-white/10 bg-black/20 shadow-sm" : "border-transparent hover:border-white/5 bg-transparent"
                     )}
                     onClick={onActivate}
                 >
@@ -876,24 +876,25 @@ function NotebookCell({
                     )}
 
                     <div className="flex-1 flex min-w-0 relative">
-                        {/* Play Button - Minimal inline (Only for Code) */}
-                        {cell.cell_type === 'code' && (
-                            <div className="shrink-0 flex items-center pl-1.5 pr-0.5 relative z-10">
-                                <button
-                                    onClick={(e) => { e.stopPropagation(); onRun(); }}
-                                    disabled={cell.running}
-                                    className={clsx(
-                                        "w-6 h-6 flex items-center justify-center rounded-full transition-all",
-                                        cell.running
-                                            ? "text-white/60"
-                                            : "text-foreground/40 hover:text-white hover:bg-white/10"
-                                    )}
-                                    title="Run cell (⇧↵)"
-                                >
-                                    {cell.running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5 fill-current" />}
-                                </button>
-                            </div>
-                        )}
+                        {/* Play Button - Fixed Top Left (Visible for code, or active markdown) */}
+                        <div className={clsx(
+                            "shrink-0 flex items-start pt-2 pl-2 pr-1 relative z-10 w-9 transition-opacity",
+                            cell.cell_type === 'markdown' && !isActive ? "opacity-0 pointer-events-none" : "opacity-100"
+                        )}>
+                            <button
+                                onClick={(e) => { e.stopPropagation(); onRun(); }}
+                                disabled={cell.running}
+                                className={clsx(
+                                    "w-6 h-6 flex items-center justify-center rounded-md transition-all",
+                                    cell.running
+                                        ? "text-white/60"
+                                        : "text-obsidian-muted hover:text-white hover:bg-white/10"
+                                )}
+                                title="Run cell (⌘↵ or ⇧↵)"
+                            >
+                                {cell.running ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4 fill-current" />}
+                            </button>
+                        </div>
 
                         {/* Editor / Content */}
                         <div className="flex-1 min-w-0 flex flex-col pt-0.5 relative">
@@ -985,10 +986,9 @@ function NotebookCell({
                             )}
                         </div>
 
-                        {/* Right Toolbar (Inside box) (Only for Code or inactive Markdown) */}
                         {!(cell.cell_type === 'markdown' && isActive) && (
                             <div className={clsx(
-                                "absolute top-0 right-0 flex items-center pt-1.5 pr-1.5 gap-0.5 transition-opacity z-10 bg-gradient-to-l from-[#1e2025] via-[#1e2025]/95 to-transparent pl-6",
+                                "absolute top-0 right-0 flex items-center pt-1.5 pr-1.5 gap-0.5 transition-opacity z-10 bg-transparent pl-6",
                                 isActive ? "opacity-100" : "opacity-0 group-hover/cell:opacity-100"
                             )}>
                                 {/* Language Badge */}
