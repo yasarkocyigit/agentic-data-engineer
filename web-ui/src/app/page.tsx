@@ -70,6 +70,18 @@ type OpenFile = {
   lineCount: number;
 };
 
+type DashboardLog = {
+  id: string;
+  level: 'INFO' | 'WARN' | 'SUCCESS';
+  message: string;
+  timestamp: string;
+};
+
+type CatalogRow = {
+  name: string;
+  schema: string;
+};
+
 function HomeContent() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -120,7 +132,9 @@ function HomeContent() {
   const formatBytes = (bytes: number) => {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    if (bytes < 1024 * 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+    return `${(bytes / (1024 * 1024 * 1024 * 1024)).toFixed(1)} TB`;
   };
 
   // Syntax highlighting colors based on language
@@ -135,16 +149,163 @@ function HomeContent() {
   };
 
   const [repoName, setRepoName] = useState('Workspace');
+  const [dashboardLoading, setDashboardLoading] = useState(true);
+  const [airflowDags, setAirflowDags] = useState({ total: 0, healthy: 0, failed: 0 });
+  const [agentStatus, setAgentStatus] = useState({ title: 'Checking...', detail: 'Collecting runtime health' });
+  const [systemLoad, setSystemLoad] = useState({ percent: 0, usedPercent: 0, cores: 0 });
+  const [dataVolume, setDataVolume] = useState({ totalBytes: 0, bucketCount: 0 });
+  const [catalogRows, setCatalogRows] = useState<CatalogRow[]>([]);
+  const [dashboardLogs, setDashboardLogs] = useState<DashboardLog[]>([]);
+  const [dashboardError, setDashboardError] = useState<string | null>(null);
+
+  const nowClock = useCallback(
+    () => new Date().toLocaleTimeString('en-GB', { hour12: false }),
+    []
+  );
+
+  const runDashboardRefresh = useCallback(async () => {
+    setDashboardLoading(true);
+
+    const logs: DashboardLog[] = [];
+    const failedStates = new Set(['failed', 'upstream_failed']);
+    const nextError: string[] = [];
+
+    const addLog = (level: DashboardLog['level'], message: string) => {
+      logs.push({
+        id: `${Date.now()}-${logs.length}`,
+        level,
+        message,
+        timestamp: nowClock(),
+      });
+    };
+
+    const fetchJson = async (url: string, init?: RequestInit) => {
+      const res = await fetch(url, init);
+      if (!res.ok) {
+        throw new Error(`${res.status} ${res.statusText}`);
+      }
+      return res.json();
+    };
+
+    const [
+      dagsResult,
+      notebookResult,
+      dockerResult,
+      storageResult,
+      catalogResult,
+    ] = await Promise.allSettled([
+      fetchJson('/api/orchestrator/dags?limit=200'),
+      fetchJson('/api/notebook/health'),
+      fetchJson('/api/docker/stats'),
+      fetchJson('/api/storage?action=listBuckets'),
+      fetchJson('/api/trino', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query:
+            "SELECT table_schema, table_name FROM iceberg.information_schema.tables WHERE table_schema NOT IN ('information_schema') ORDER BY table_schema, table_name LIMIT 50",
+        }),
+      }),
+    ]);
+
+    if (dagsResult.status === 'fulfilled') {
+      const dags = Array.isArray(dagsResult.value?.dags) ? dagsResult.value.dags : [];
+      const total = dags.length;
+      const failed = dags.filter((dag: any) => {
+        const state = String(dag?.last_run?.state || '').toLowerCase();
+        return Boolean(dag?.has_import_errors) || failedStates.has(state);
+      }).length;
+      const healthy = Math.max(total - failed, 0);
+      setAirflowDags({ total, healthy, failed });
+      addLog('INFO', `Airflow DAGs loaded (${healthy}/${total} healthy).`);
+    } else {
+      setAirflowDags({ total: 0, healthy: 0, failed: 0 });
+      nextError.push(`DAG health unavailable: ${dagsResult.reason?.message || 'request failed'}`);
+      addLog('WARN', 'Airflow DAG metric fetch failed.');
+    }
+
+    if (notebookResult.status === 'fulfilled') {
+      const mode = notebookResult.value?.mode === 'gateway' ? 'Gateway' : 'Local Spark';
+      const activeSessions = Number(notebookResult.value?.active_sessions || 0);
+      const runtimeMode = notebookResult.value?.spark_runtime_mode || 'local';
+      setAgentStatus({
+        title: `${mode} Ready`,
+        detail: `${activeSessions} active session${activeSessions === 1 ? '' : 's'} • ${runtimeMode}`,
+      });
+      addLog('INFO', `Notebook engine online (${mode.toLowerCase()}, ${activeSessions} active sessions).`);
+    } else {
+      setAgentStatus({
+        title: 'Unavailable',
+        detail: 'Notebook health endpoint is unreachable',
+      });
+      nextError.push(`Notebook health unavailable: ${notebookResult.reason?.message || 'request failed'}`);
+      addLog('WARN', 'Notebook health check failed.');
+    }
+
+    if (dockerResult.status === 'fulfilled') {
+      const usedPercent = Number(dockerResult.value?.cpu?.used_percent || 0);
+      const totalPercent = Number(dockerResult.value?.cpu?.total_percent || 0);
+      const normalizedPercent =
+        totalPercent > 0 ? Math.min(100, Math.max(0, (usedPercent / totalPercent) * 100)) : Math.min(100, Math.max(0, usedPercent));
+      setSystemLoad({
+        percent: normalizedPercent,
+        usedPercent,
+        cores: Number(dockerResult.value?.cpu?.cores || 0),
+      });
+      addLog('INFO', `Docker metrics updated (${normalizedPercent.toFixed(0)}% host load).`);
+    } else {
+      setSystemLoad({ percent: 0, usedPercent: 0, cores: 0 });
+      nextError.push(`Docker stats unavailable: ${dockerResult.reason?.message || 'request failed'}`);
+      addLog('WARN', 'Docker stats endpoint failed.');
+    }
+
+    if (storageResult.status === 'fulfilled') {
+      const buckets = Array.isArray(storageResult.value?.buckets) ? storageResult.value.buckets : [];
+      const totalBytes = buckets.reduce((acc: number, bucket: any) => acc + Number(bucket?.totalSize || 0), 0);
+      setDataVolume({
+        totalBytes,
+        bucketCount: buckets.length,
+      });
+      addLog('INFO', `Storage scanned (${buckets.length} bucket${buckets.length === 1 ? '' : 's'}).`);
+    } else {
+      setDataVolume({ totalBytes: 0, bucketCount: 0 });
+      nextError.push(`Storage metrics unavailable: ${storageResult.reason?.message || 'request failed'}`);
+      addLog('WARN', 'Storage bucket scan failed.');
+    }
+
+    if (catalogResult.status === 'fulfilled') {
+      const rows = Array.isArray(catalogResult.value?.data) ? catalogResult.value.data : [];
+      const catalog = rows.map((row: any) => ({
+        name: `${row.table_schema}.${row.table_name}`,
+        schema: row.table_schema,
+      }));
+      setCatalogRows(catalog);
+      addLog('SUCCESS', `Iceberg catalog synced (${catalog.length} table${catalog.length === 1 ? '' : 's'}).`);
+    } else {
+      setCatalogRows([]);
+      nextError.push(`Catalog lookup unavailable: ${catalogResult.reason?.message || 'request failed'}`);
+      addLog('WARN', 'Iceberg catalog lookup failed.');
+    }
+
+    setDashboardLogs(logs);
+    setDashboardError(nextError.length ? nextError.join(' • ') : null);
+    setDashboardLoading(false);
+  }, [nowClock]);
 
   // Fetch Gitea repo name
   useEffect(() => {
     async function fetchRepo() {
       try {
-        const res = await fetch('/api/gitea/repos?limit=1');
+        const res = await fetch('/api/gitea/repos?limit=20');
         if (res.ok) {
           const data = await res.json();
           if (data.repos && data.repos.length > 0) {
-            setRepoName(data.repos[0].full_name);
+            const preferred =
+              data.repos.find((repo: any) => repo?.name === 'data-pipelines') ||
+              data.repos[0];
+            if (preferred?.full_name) {
+              setRepoName(preferred.full_name);
+            }
           }
         }
       } catch (e) {
@@ -153,6 +314,15 @@ function HomeContent() {
     }
     fetchRepo();
   }, []);
+
+  useEffect(() => {
+    if (openFile) {
+      return;
+    }
+    runDashboardRefresh();
+    const interval = window.setInterval(runDashboardRefresh, 30000);
+    return () => window.clearInterval(interval);
+  }, [openFile, runDashboardRefresh]);
 
   return (
     <div className="flex h-screen bg-[#09090b] text-foreground font-sans overflow-hidden relative" style={{ fontFamily: "'Inter', -apple-system, sans-serif" }}>
@@ -188,7 +358,7 @@ function HomeContent() {
           <div className="flex items-center space-x-3">
             <div className="flex items-center px-3 py-1 bg-black/20 border border-white/5 rounded-md text-[11px] font-medium text-foreground gap-2 transition-all">
               <span className="w-2 h-2 rounded-full bg-white/40 animate-pulse"></span>
-              ClawdBot: Online
+              ClawBot: Online
             </div>
             <button className="p-1.5 text-obsidian-muted hover:text-foreground hover:bg-white/5 rounded-md transition-all active:scale-95">
               <Bell className="w-4 h-4" />
@@ -268,7 +438,7 @@ function HomeContent() {
                 <iframe
                   srcDoc={openFile.content}
                   className="w-full h-full border-0"
-                  sandbox="allow-scripts allow-same-origin"
+                  sandbox="allow-scripts"
                   title={`Preview: ${openFile.name}`}
                   style={{ background: '#fff' }}
                 />
@@ -332,9 +502,18 @@ function HomeContent() {
                   <Activity className="w-4 h-4 text-white/40" />
                 </div>
                 <div>
-                  <div className="text-3xl font-mono text-white tracking-tight">12 / 12</div>
+                  <div className="text-3xl font-mono text-white tracking-tight">
+                    {dashboardLoading ? '-- / --' : `${airflowDags.healthy} / ${airflowDags.total}`}
+                  </div>
                   <div className="flex items-center mt-1 text-[11px] text-white/50 font-medium">
-                    <CheckCircle className="w-3.5 h-3.5 mr-1 text-white/40" /> All Operational
+                    <CheckCircle className="w-3.5 h-3.5 mr-1 text-white/40" />
+                    {dashboardLoading
+                      ? 'Loading DAG status...'
+                      : airflowDags.total === 0
+                        ? 'No DAGs found'
+                        : airflowDags.failed === 0
+                          ? 'All Operational'
+                          : `${airflowDags.failed} issue(s) detected`}
                   </div>
                 </div>
               </div>
@@ -346,9 +525,9 @@ function HomeContent() {
                   <Bot className="w-4 h-4 text-white/40" />
                 </div>
                 <div>
-                  <div className="text-[22px] font-mono text-white tracking-tight truncate">Thinking...</div>
+                  <div className="text-[22px] font-mono text-white tracking-tight truncate">{agentStatus.title}</div>
                   <div className="flex items-center mt-1 text-[11px] text-white/50 font-medium">
-                    <GitPullRequest className="w-3.5 h-3.5 mr-1 text-white/40" /> Reviewing PR #42
+                    <GitPullRequest className="w-3.5 h-3.5 mr-1 text-white/40" /> {agentStatus.detail}
                   </div>
                 </div>
               </div>
@@ -360,9 +539,11 @@ function HomeContent() {
                   <Cpu className="w-4 h-4 text-white/40" />
                 </div>
                 <div>
-                  <div className="text-3xl font-mono text-white tracking-tight">34%</div>
+                  <div className="text-3xl font-mono text-white tracking-tight">
+                    {dashboardLoading ? '--%' : `${systemLoad.percent.toFixed(0)}%`}
+                  </div>
                   <div className="w-full bg-black/40 border border-white/5 h-[3px] mt-2 rounded-full overflow-hidden">
-                    <div className="bg-white/40 h-full w-[34%] rounded-full"></div>
+                    <div className="bg-white/40 h-full rounded-full transition-all duration-300" style={{ width: `${systemLoad.percent}%` }}></div>
                   </div>
                 </div>
               </div>
@@ -374,8 +555,14 @@ function HomeContent() {
                   <Database className="w-4 h-4 text-white/40" />
                 </div>
                 <div>
-                  <div className="text-3xl font-mono text-white tracking-tight">1.2 TB</div>
-                  <div className="mt-1 text-[11px] text-obsidian-muted/90 font-medium">+12GB today</div>
+                  <div className="text-3xl font-mono text-white tracking-tight">
+                    {dashboardLoading ? '--' : formatBytes(dataVolume.totalBytes)}
+                  </div>
+                  <div className="mt-1 text-[11px] text-obsidian-muted/90 font-medium">
+                    {dashboardLoading
+                      ? 'Loading buckets...'
+                      : `${dataVolume.bucketCount} bucket${dataVolume.bucketCount === 1 ? '' : 's'} indexed`}
+                  </div>
                 </div>
               </div>
             </div>
@@ -391,10 +578,28 @@ function HomeContent() {
                   </div>
                 </div>
                 <div className="flex-1 overflow-auto p-4 font-mono text-[11px] leading-6 custom-scrollbar relative z-10">
-                  <div className="text-obsidian-muted group hover:bg-white/5 px-2 -mx-2 rounded transition-colors"><span className="text-white/30">[10:42:15]</span> <span className="text-white/60 font-bold">INFO...</span> Started metadata analysis of `medallion_pipeline.py`</div>
-                  <div className="text-obsidian-muted group hover:bg-white/5 px-2 -mx-2 rounded transition-colors"><span className="text-white/30">[10:42:25]</span> <span className="text-white/40 font-bold">ACTION.</span> Executing `pip install pandas==2.1.0` in Docker container...</div>
-                  <div className="text-obsidian-muted group hover:bg-white/5 px-2 -mx-2 rounded transition-colors"><span className="text-white/30">[10:43:02]</span> <span className="text-white/60 font-bold">SUCCESS</span> Dependencies resolved.</div>
-                  <div className="text-obsidian-muted group hover:bg-white/5 px-2 -mx-2 rounded transition-colors"><span className="text-white/30">[10:43:10]</span> <span className="text-white/60 font-bold">PR OPEN</span> Created PR #43: "Fix dependency issue"</div>
+                  {dashboardError ? (
+                    <div className="text-red-300/90 group hover:bg-white/5 px-2 -mx-2 rounded transition-colors">
+                      <span className="text-red-200/70">[{nowClock()}]</span> <span className="font-bold">WARN</span> {dashboardError}
+                    </div>
+                  ) : null}
+                  {(dashboardLogs.length > 0 ? dashboardLogs : [{
+                    id: 'loading',
+                    level: 'INFO' as const,
+                    message: dashboardLoading ? 'Collecting live infrastructure metrics...' : 'No activity yet.',
+                    timestamp: nowClock(),
+                  }]).map((log) => (
+                    <div key={log.id} className="text-obsidian-muted group hover:bg-white/5 px-2 -mx-2 rounded transition-colors">
+                      <span className="text-white/30">[{log.timestamp}]</span>{' '}
+                      <span className={clsx(
+                        'font-bold',
+                        log.level === 'WARN' ? 'text-red-300/80' : log.level === 'SUCCESS' ? 'text-emerald-300/80' : 'text-white/60'
+                      )}>
+                        {log.level}
+                      </span>{' '}
+                      {log.message}
+                    </div>
+                  ))}
                   <div className="flex items-center text-foreground mt-2 px-2 -mx-2">
                     <span className="mr-2 text-white/40">❯</span>
                     <span className="w-2 h-3.5 bg-white/40 animate-pulse"></span>
@@ -413,22 +618,20 @@ function HomeContent() {
                     <thead>
                       <tr>
                         <th className="p-2 px-3 pb-3 text-[10px] text-obsidian-muted font-bold uppercase tracking-wider">Table</th>
-                        <th className="p-2 px-3 pb-3 text-[10px] text-obsidian-muted font-bold uppercase tracking-wider text-right">Modified</th>
+                        <th className="p-2 px-3 pb-3 text-[10px] text-obsidian-muted font-bold uppercase tracking-wider text-right">Schema</th>
                       </tr>
                     </thead>
                     <tbody className="text-[12px]">
-                      {[
-                        { name: 'orders_bronze', time: '2m', color: 'text-white/40' },
-                        { name: 'customer_silver', time: '15m', color: 'text-white/40' },
-                        { name: 'revenue_gold', time: '1h', color: 'text-white/40' }
-                      ].map((item, i) => (
-                        <tr key={i} className="group cursor-pointer">
+                      {(catalogRows.length ? catalogRows : [
+                        { name: 'No Iceberg tables found', schema: '--' }
+                      ]).map((item, i) => (
+                        <tr key={`${item.name}-${i}`} className="group cursor-pointer">
                           <td className="p-2 px-3 border-b border-white/5 text-foreground flex items-center gap-2.5 transition-colors group-hover:bg-white/[0.02] rounded-l-md border-l-2 border-transparent group-hover:border-white/20">
-                            <Table className={clsx("w-4 h-4", item.color)} />
+                            <Table className="w-4 h-4 text-white/40" />
                             <span className="group-hover:text-white transition-colors">{item.name}</span>
                           </td>
                           <td className="p-2 px-3 border-b border-white/5 text-obsidian-muted text-right transition-colors group-hover:bg-white/[0.02] rounded-r-md group-hover:text-foreground">
-                            {item.time}
+                            {item.schema}
                           </td>
                         </tr>
                       ))}

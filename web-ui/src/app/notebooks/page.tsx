@@ -135,6 +135,13 @@ type NotebookObservabilityItem = {
     }>;
 };
 
+type NotebookConfirmDialog = {
+    title: string;
+    message: string;
+    confirmLabel?: string;
+    tone?: 'default' | 'danger';
+};
+
 const formatMemoryGbFromMb = (mb: number | undefined): string => {
     if (!mb || mb <= 0) return '0G';
     return `${(mb / 1024).toFixed(mb % 1024 === 0 ? 0 : 1)}G`;
@@ -533,7 +540,27 @@ function ExecuteResultOutput({ output }: { output: CellOutput }) {
     if (!data) return null;
 
     if (data['application/json']?.columns) return <TableOutput data={data['application/json']} />;
-    if (data['text/html']) return <div className="px-4 py-2 bg-obsidian-bg" dangerouslySetInnerHTML={{ __html: data['text/html'] }} />;
+    if (data['text/markdown']) {
+        return (
+            <div className="px-4 py-2 bg-obsidian-bg prose prose-invert prose-sm max-w-none text-foreground/90">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    {String(data['text/markdown'])}
+                </ReactMarkdown>
+            </div>
+        );
+    }
+    if (data['text/html']) {
+        return (
+            <div className="px-4 py-2 bg-obsidian-bg">
+                <iframe
+                    srcDoc={String(data['text/html'])}
+                    className="w-full min-h-[120px] border border-obsidian-border rounded bg-white"
+                    sandbox=""
+                    title="notebook-html-output"
+                />
+            </div>
+        );
+    }
     if (data['image/png']) return <div className="px-4 py-2 bg-obsidian-bg"><img src={`data:image/png;base64,${data['image/png']}`} alt="output" className="max-w-full rounded border border-obsidian-border" /></div>;
     if (data['text/plain']) return <pre className="px-4 py-2 font-mono text-[11px] text-foreground/90 whitespace-pre-wrap bg-obsidian-bg">{data['text/plain']}</pre>;
 
@@ -1053,15 +1080,40 @@ export default function NotebooksPage() {
     const [clustersLoaded, setClustersLoaded] = useState(false);
     const [clusterApiAvailable, setClusterApiAvailable] = useState<boolean>(true);
     const [uiNotice, setUiNotice] = useState<{ tone: 'success' | 'error' | 'info'; message: string } | null>(null);
+    const [confirmDialog, setConfirmDialog] = useState<NotebookConfirmDialog | null>(null);
     const sqlColumnCacheRef = useRef<Map<string, NotebookSqlSuggestionItem[]>>(new Map());
+    const confirmResolverRef = useRef<((accepted: boolean) => void) | null>(null);
+    const runningExecutionsRef = useRef(0);
     const pythonSymbolItems = React.useMemo(() => collectPythonNotebookSymbols(cells), [cells]);
-    const [navExpanded, setNavExpanded] = useState(true); // Added for navExpanded
+
+    const requestConfirm = useCallback((config: NotebookConfirmDialog) => {
+        return new Promise<boolean>((resolve) => {
+            confirmResolverRef.current = resolve;
+            setConfirmDialog(config);
+        });
+    }, []);
+
+    const resolveConfirm = useCallback((accepted: boolean) => {
+        const resolver = confirmResolverRef.current;
+        confirmResolverRef.current = null;
+        setConfirmDialog(null);
+        if (resolver) resolver(accepted);
+    }, []);
 
     useEffect(() => {
         if (!uiNotice) return;
         const timer = window.setTimeout(() => setUiNotice(null), 3500);
         return () => window.clearTimeout(timer);
     }, [uiNotice]);
+
+    useEffect(() => {
+        return () => {
+            if (confirmResolverRef.current) {
+                confirmResolverRef.current(false);
+                confirmResolverRef.current = null;
+            }
+        };
+    }, []);
 
     useEffect(() => {
         const handler = (event: Event) => {
@@ -1113,6 +1165,11 @@ export default function NotebooksPage() {
     }, [fetchJsonOrThrow]);
 
     const refreshSqlSuggestions = useCallback(async () => {
+        const CATALOG_PRIORITY = ['iceberg', 'lakehouse', 'delta', 'hive', 'postgres'];
+        const MAX_CATALOGS = 4;
+        const MAX_SCHEMAS_PER_CATALOG = 8;
+        const MAX_TABLES_PER_SCHEMA = 200;
+
         const itemsByFqn = new Map<string, NotebookSqlSuggestionItem>();
         const addItem = (item: NotebookSqlSuggestionItem) => {
             const key = `${item.kind}:${item.fqn}`.toLowerCase();
@@ -1121,9 +1178,23 @@ export default function NotebooksPage() {
 
         try {
             const catalogRows = await fetchTrinoRows('SHOW CATALOGS');
-            for (const catalogRow of catalogRows) {
-                const catalogName = readStringFromRow(catalogRow, ['Catalog', 'catalog', 'catalog_name']);
-                if (!catalogName) continue;
+            const allCatalogs = catalogRows
+                .map((catalogRow: any) => readStringFromRow(catalogRow, ['Catalog', 'catalog', 'catalog_name']))
+                .filter((name: string | null): name is string => Boolean(name))
+                .filter((name: string, index: number, arr: string[]) => arr.findIndex((item: string) => item.toLowerCase() === name.toLowerCase()) === index);
+
+            const prioritizedCatalogs = allCatalogs
+                .sort((a: string, b: string) => {
+                    const aIdx = CATALOG_PRIORITY.indexOf(a.toLowerCase());
+                    const bIdx = CATALOG_PRIORITY.indexOf(b.toLowerCase());
+                    const aRank = aIdx === -1 ? 999 : aIdx;
+                    const bRank = bIdx === -1 ? 999 : bIdx;
+                    if (aRank !== bRank) return aRank - bRank;
+                    return a.localeCompare(b);
+                })
+                .slice(0, MAX_CATALOGS);
+
+            for (const catalogName of prioritizedCatalogs) {
 
                 addItem({
                     label: catalogName,
@@ -1139,9 +1210,12 @@ export default function NotebooksPage() {
                     schemaRows = [];
                 }
 
-                for (const schemaRow of schemaRows) {
-                    const schemaName = readStringFromRow(schemaRow, ['Schema', 'schema', 'schema_name']);
-                    if (!schemaName) continue;
+                const schemaNames = schemaRows
+                    .map((schemaRow: any) => readStringFromRow(schemaRow, ['Schema', 'schema', 'schema_name']))
+                    .filter((name): name is string => Boolean(name))
+                    .slice(0, MAX_SCHEMAS_PER_CATALOG);
+
+                for (const schemaName of schemaNames) {
                     const schemaFqn = `${catalogName}.${schemaName}`;
 
                     addItem({
@@ -1154,7 +1228,7 @@ export default function NotebooksPage() {
                     let tableRows: any[] = [];
                     try {
                         tableRows = await fetchTrinoRows(
-                            `SELECT table_name, table_type FROM ${quoteSqlIdentifier(catalogName)}.information_schema.tables WHERE table_schema = '${escapeSqlLiteral(schemaName)}' ORDER BY table_name`,
+                            `SELECT table_name, table_type FROM ${quoteSqlIdentifier(catalogName)}.information_schema.tables WHERE table_schema = '${escapeSqlLiteral(schemaName)}' ORDER BY table_name LIMIT ${MAX_TABLES_PER_SCHEMA}`,
                             catalogName
                         );
                     } catch {
@@ -1182,27 +1256,6 @@ export default function NotebooksPage() {
                         });
                     }
 
-                    let functionRows: any[] = [];
-                    try {
-                        functionRows = await fetchTrinoRows(
-                            `SHOW FUNCTIONS FROM ${quoteSqlIdentifier(catalogName)}.${quoteSqlIdentifier(schemaName)}`,
-                            catalogName
-                        );
-                    } catch {
-                        functionRows = [];
-                    }
-
-                    for (const fnRow of functionRows) {
-                        const fnName = readStringFromRow(fnRow, ['Function', 'function_name', 'name']);
-                        if (!fnName) continue;
-                        const fnFqn = `${schemaFqn}.${fnName}`;
-                        addItem({
-                            label: fnName,
-                            detail: `function (${schemaFqn})`,
-                            fqn: fnFqn,
-                            kind: 'function',
-                        });
-                    }
                 }
             }
         } catch (err) {
@@ -1310,6 +1363,7 @@ export default function NotebooksPage() {
     const startKernel = useCallback(async (clusterId: string) => {
         const targetClusterId = (clusterId || 'small').trim();
         setKernelStatus('starting');
+        runningExecutionsRef.current = 0;
         try {
             const reqInit: RequestInit = clusterApiAvailable
                 ? {
@@ -1330,6 +1384,7 @@ export default function NotebooksPage() {
             void loadClusterProfiles().catch(() => { });
         } catch (e) {
             console.error('Failed to start kernel:', e);
+            runningExecutionsRef.current = 0;
             setKernelStatus('disconnected');
         }
     }, [clusterApiAvailable, fetchJsonOrThrow, refreshClusterObservability, loadClusterProfiles]);
@@ -1337,6 +1392,7 @@ export default function NotebooksPage() {
     const restartKernel = useCallback(async () => {
         if (!kernelId) return;
         setKernelStatus('starting');
+        runningExecutionsRef.current = 0;
         try {
             const data = await fetchJsonOrThrow(`/api/notebook/kernels/${encodeURIComponent(kernelId)}/restart`, { method: 'POST' });
             setKernelStatus('idle');
@@ -1346,6 +1402,7 @@ export default function NotebooksPage() {
             void loadClusterProfiles().catch(() => { });
         } catch (e) {
             console.error('Failed to restart kernel:', e);
+            runningExecutionsRef.current = 0;
             setKernelStatus('disconnected');
         }
     }, [kernelId, fetchJsonOrThrow, attachedClusterId, refreshClusterObservability, loadClusterProfiles]);
@@ -1367,6 +1424,7 @@ export default function NotebooksPage() {
         }
         setClusterAttachBusy(true);
         setKernelStatus('starting');
+        runningExecutionsRef.current = 0;
         try {
             const data = await fetchJsonOrThrow(`/api/notebook/kernels/${encodeURIComponent(kernelId)}/attach`, {
                 method: 'POST',
@@ -1383,6 +1441,7 @@ export default function NotebooksPage() {
             void loadClusterProfiles().catch(() => { });
         } catch (err) {
             console.error('Failed to attach cluster:', err);
+            runningExecutionsRef.current = 0;
             setKernelStatus('disconnected');
             setUiNotice({ tone: 'error', message: `Failed to attach cluster: ${String(err)}` });
         } finally {
@@ -1430,26 +1489,9 @@ export default function NotebooksPage() {
         void refreshSqlSuggestions();
         const interval = window.setInterval(() => {
             void refreshSqlSuggestions();
-        }, 60000);
+        }, 5 * 60 * 1000);
         return () => window.clearInterval(interval);
     }, [refreshSqlSuggestions]);
-
-    useEffect(() => {
-        if (!kernelId) return;
-
-        const shutdown = () => {
-            fetch(`/api/notebook/kernels/${encodeURIComponent(kernelId)}`, {
-                method: 'DELETE',
-                keepalive: true,
-            }).catch(() => { });
-        };
-
-        window.addEventListener('beforeunload', shutdown);
-        return () => {
-            window.removeEventListener('beforeunload', shutdown);
-            shutdown();
-        };
-    }, [kernelId]);
 
     // ─── Save / Load ───
     const loadNotebookList = useCallback(async () => {
@@ -1519,9 +1561,16 @@ export default function NotebooksPage() {
     const loadNotebook = useCallback(async (name: string) => {
         try {
             const data = await fetchJsonOrThrow(`/api/notebook/files/${encodeURIComponent(name)}`);
+            const normalizedCells: Cell[] = (data.cells || []).map((c: any) => ({
+                ...c,
+                id: c.id || genId(),
+                running: false,
+                outputs: c.outputs || [],
+            }));
+            const fallbackCell: Cell = { ...INITIAL_CELL, id: genId() };
             setNotebookName(data.name || name);
-            setCells((data.cells || []).map((c: any) => ({ ...c, id: c.id || genId(), running: false, outputs: c.outputs || [] })));
-            if (data.cells?.length > 0) setActiveCell(data.cells[0].id || genId());
+            setCells(normalizedCells.length > 0 ? normalizedCells : [fallbackCell]);
+            setActiveCell(normalizedCells.length > 0 ? normalizedCells[0].id : fallbackCell.id);
             setOpenTabs(prev => prev.includes(data.name || name) ? prev : [...prev, data.name || name]);
             setIsEditingName(false);
         } catch (e) {
@@ -1541,7 +1590,7 @@ export default function NotebooksPage() {
             return next;
         });
         setActiveCell(newCell.id);
-    }, []);
+    }, [defaultLanguage]);
 
     const updateCell = useCallback((id: string, updates: Partial<Cell>) => { setCells(prev => prev.map(c => c.id === id ? { ...c, ...updates } : c)); }, []);
 
@@ -1557,7 +1606,13 @@ export default function NotebooksPage() {
 
     const deleteSavedNotebook = useCallback(async (name: string, e: React.MouseEvent) => {
         e.stopPropagation();
-        if (!confirm(`Are you sure you want to delete '${name}'?`)) return;
+        const accepted = await requestConfirm({
+            title: 'Delete notebook?',
+            message: `This will permanently delete '${name}'.`,
+            confirmLabel: 'Delete',
+            tone: 'danger',
+        });
+        if (!accepted) return;
 
         try {
             await fetchJsonOrThrow(`/api/notebook/files/${encodeURIComponent(name)}`, { method: 'DELETE' });
@@ -1581,7 +1636,7 @@ export default function NotebooksPage() {
             console.error('Failed to delete notebook:', err);
             setUiNotice({ tone: 'error', message: `Failed to delete '${name}': ${String(err)}` });
         }
-    }, [loadNotebookList, notebookName, loadNotebook, openTabs, fetchJsonOrThrow]);
+    }, [loadNotebookList, notebookName, loadNotebook, openTabs, fetchJsonOrThrow, requestConfirm]);
 
     const closeTab = useCallback((name: string, e: React.MouseEvent) => {
         e.stopPropagation();
@@ -1661,6 +1716,7 @@ export default function NotebooksPage() {
         const cell = cells.find(c => c.id === id);
         if (!cell || !kernelId) return;
 
+        runningExecutionsRef.current += 1;
         updateCell(id, { running: true, outputs: [] });
         setKernelStatus('busy');
 
@@ -1680,8 +1736,13 @@ export default function NotebooksPage() {
             updateCell(id, { running: false, outputs: result.outputs || [], execution_count: result.execution_count });
         } catch (e) {
             updateCell(id, { running: false, outputs: [{ output_type: 'error', ename: 'ExecutionError', evalue: String(e), traceback: [] }] });
+        } finally {
+            runningExecutionsRef.current = Math.max(0, runningExecutionsRef.current - 1);
+            setKernelStatus(prev => {
+                if (prev === 'disconnected' || prev === 'starting') return prev;
+                return runningExecutionsRef.current === 0 ? 'idle' : 'busy';
+            });
         }
-        setKernelStatus('idle');
     }, [cells, kernelId, updateCell]);
 
     const runAllCells = useCallback(async () => {
@@ -1706,10 +1767,16 @@ export default function NotebooksPage() {
     }, [cells, activeCell, runCell]);
 
     const restartAndRunAll = useCallback(async () => {
-        if (!confirm('Restart kernel and run all cells?')) return;
+        const accepted = await requestConfirm({
+            title: 'Restart kernel?',
+            message: 'All in-memory variables will be lost, then all code cells will run.',
+            confirmLabel: 'Restart & Run',
+            tone: 'danger',
+        });
+        if (!accepted) return;
         await restartKernel();
         await runAllCells();
-    }, [restartKernel, runAllCells]);
+    }, [restartKernel, runAllCells, requestConfirm]);
 
     // ─── Databricks-like: Clear All Outputs ───
     const clearAllOutputs = useCallback(() => {
@@ -1862,14 +1929,14 @@ export default function NotebooksPage() {
             </div>
 
             {/* Left Nav Pane - Notebook Browser */}
-            {navExpanded && (
-                <div className="w-[280px] bg-black/20 backdrop-blur-xl border-r border-white/5 shrink-0 flex flex-col z-10 relative shadow-[4px_0_24px_rgba(0,0,0,0.4)]">
-                    <div className="h-10 bg-black/40 border-b border-white/5 flex items-center justify-between px-3 shrink-0">
+            {showFilePanel && (
+                <div className="w-[260px] bg-black/20 backdrop-blur-xl border-r border-white/5 shrink-0 flex flex-col z-10 relative shadow-[4px_0_24px_rgba(0,0,0,0.4)]">
+                    <div className="h-10 border-b border-white/5 flex items-center justify-between px-4 shrink-0">
                         <div className="flex items-center gap-2">
-                            <BookOpen className="w-3.5 h-3.5 text-white/40" />
-                            <span className="text-[11px] font-bold text-white tracking-widest uppercase">Notebooks</span>
+                            <BookOpen className="w-3.5 h-3.5 text-sky-400 opacity-80" />
+                            <span className="text-xs font-semibold text-white/90 tracking-wide">Notebooks</span>
                         </div>
-                        <div className="flex gap-1">
+                        <div className="flex gap-1 shrink-0">
                             <button
                                 onClick={loadNotebookList}
                                 className="p-1 hover:bg-white/10 rounded text-obsidian-muted hover:text-white transition-all active:scale-95"
@@ -1990,7 +2057,20 @@ export default function NotebooksPage() {
                                         { label: 'Run All Below', shortcut: '', action: () => runAllBelow(), icon: <ChevronDown className="w-3.5 h-3.5" /> },
                                         { divider: true },
                                         { label: 'Interrupt Kernel', shortcut: '', action: () => interruptKernel(), icon: <StopCircle className="w-3.5 h-3.5" /> },
-                                        { label: 'Restart Kernel', shortcut: '', action: () => { if (confirm('Restart kernel? All variables will be lost.')) restartKernel(); }, icon: <RotateCw className="w-3.5 h-3.5" /> },
+                                        {
+                                            label: 'Restart Kernel',
+                                            shortcut: '',
+                                            action: async () => {
+                                                const accepted = await requestConfirm({
+                                                    title: 'Restart kernel?',
+                                                    message: 'All in-memory variables will be lost.',
+                                                    confirmLabel: 'Restart',
+                                                    tone: 'danger',
+                                                });
+                                                if (accepted) await restartKernel();
+                                            },
+                                            icon: <RotateCw className="w-3.5 h-3.5" />
+                                        },
                                         { label: 'Restart & Run All', shortcut: '', action: () => restartAndRunAll(), icon: <RotateCcw className="w-3.5 h-3.5" /> },
                                     ]
                                 },
@@ -2075,21 +2155,23 @@ export default function NotebooksPage() {
                     </div>
 
                     {/* Right side controls */}
-                    <div className="flex items-center gap-3">
-                        <button onClick={runAllCells} disabled={kernelStatus !== 'busy'}
-                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-white/10 bg-white/[0.03] hover:bg-white/[0.06] transition-all cursor-pointer group/run active:scale-95 text-[12px] font-medium text-white/70 hover:text-white disabled:opacity-50">
-                            <Play className="w-3.5 h-3.5 text-obsidian-muted group-hover/run:text-green-400 transition-colors" />
+                    <div className="flex items-center gap-1 xl:gap-2 justify-end min-w-0 flex-1">
+                        <button
+                            onClick={runAllCells}
+                            disabled={!kernelId || kernelStatus === 'busy' || kernelStatus === 'starting' || kernelStatus === 'disconnected'}
+                            className="flex-shrink-0 whitespace-nowrap flex items-center gap-1.5 px-2.5 xl:px-3 py-1.5 rounded-md hover:bg-white/[0.08] transition-all cursor-pointer group/run active:scale-95 text-[12px] font-medium text-white/70 hover:text-white disabled:opacity-50">
+                            <Play className="w-3.5 h-3.5 opacity-70 group-hover/run:text-green-400 group-hover/run:opacity-100 transition-colors" />
                             Run all
                         </button>
 
-                        <div className="hidden md:flex items-center gap-1.5 p-0.5 rounded-md border border-white/[0.08] bg-[#09090b]/80 shadow-sm relative z-10">
-                            <div className="flex items-center gap-1.5 pl-2.5 pr-1 py-1">
-                                <Server className="w-3.5 h-3.5 text-obsidian-muted" />
-                                <div className="relative flex items-center">
+                        <div className="hidden md:flex items-center h-[28px] p-[2px] rounded border border-white/5 bg-[#09090b]/80 shadow-md relative z-10 flex-shrink-0 ring-1 ring-white/[0.02]">
+                            <div className="flex items-center gap-1.5 pl-2 pr-1 h-full hover:bg-white/[0.04] rounded-sm transition-colors cursor-pointer group/select w-[140px] xl:w-[200px]">
+                                <Server className="w-[11px] h-[11px] text-white/30 group-hover/select:text-white/50 transition-colors flex-shrink-0" />
+                                <div className="relative flex items-center h-full flex-1 min-w-0">
                                     <select
                                         value={selectedClusterId}
                                         onChange={(e) => setSelectedClusterId(e.target.value)}
-                                        className="bg-transparent text-[12px] text-white/80 font-medium outline-none cursor-pointer appearance-none pr-5 pl-1"
+                                        className="bg-transparent text-[11px] text-white/60 group-hover/select:text-white/90 font-medium outline-none cursor-pointer appearance-none w-full pr-5 pl-0.5 h-full truncate transition-colors"
                                         disabled={clusterAttachBusy || kernelStatus === 'busy'}
                                     >
                                         {clusterProfiles.map(profile => (
@@ -2098,10 +2180,10 @@ export default function NotebooksPage() {
                                             </option>
                                         ))}
                                     </select>
-                                    <ChevronDown className="w-3 h-3 text-white/40 absolute right-0 pointer-events-none" />
+                                    <ChevronDown className="w-3 h-3 text-white/20 group-hover/select:text-white/40 absolute right-0 pointer-events-none flex-shrink-0 transition-colors" />
                                 </div>
                             </div>
-                            <div className="w-px h-4 bg-white/10" />
+                            <div className="w-[1px] h-3.5 bg-white/[0.08] mx-0.5 flex-shrink-0" />
                             <button
                                 onClick={attachCluster}
                                 disabled={
@@ -2112,24 +2194,23 @@ export default function NotebooksPage() {
                                     || !clusterApiAvailable
                                     || selectedClusterId === attachedClusterId
                                 }
-                                className="flex items-center gap-1.5 px-3 py-1 rounded-[4px] text-[12px] font-medium transition-all
+                                className="flex-shrink-0 h-full whitespace-nowrap flex items-center gap-1.5 px-2 rounded-sm text-[11px] font-medium transition-all
                                 disabled:opacity-40 disabled:cursor-not-allowed
-                                hover:bg-white/[0.08] text-white/80 active:scale-95"
+                                hover:bg-white/[0.04] text-white/60 hover:text-white active:scale-95"
                                 title="Attach selected cluster profile"
                             >
-                                {clusterAttachBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-400" /> : <Activity className="w-3.5 h-3.5 text-obsidian-muted" />}
-                                <span className={attachedClusterId === selectedClusterId ? "text-green-400" : ""}>Attach</span>
+                                {clusterAttachBusy ? <Loader2 className="w-[11px] h-[11px] animate-spin text-blue-400" /> : null}
+                                <span className={attachedClusterId === selectedClusterId ? "text-green-400/90 font-semibold" : ""}>
+                                    {attachedClusterId === selectedClusterId ? "Attached" : "Attach"}
+                                </span>
                             </button>
                         </div>
 
                         {selectedCluster && (
-                            <div className="hidden xl:flex items-center gap-2 text-[11px] font-mono max-w-[640px] px-2">
-                                <span className="text-white/45 truncate">
-                                    {selectedCluster.label}: {clusterPowerLabel(selectedCluster)}
+                            <div className="hidden xl:flex items-center gap-2 text-[11px] font-mono min-w-0 flex-1 max-w-[200px] 2xl:max-w-[400px] px-2 opacity-50">
+                                <span className="text-white/50 truncate block w-full" title={`${selectedCluster.label}: ${clusterPowerLabel(selectedCluster)}`}>
+                                    {selectedCluster.label}: <span className="opacity-70">{clusterPowerLabel(selectedCluster)}</span>
                                 </span>
-                                {clusterShuffleLabel(selectedCluster) && (
-                                    <span className="text-white/55 whitespace-nowrap">{clusterShuffleLabel(selectedCluster)}</span>
-                                )}
                             </div>
                         )}
 
@@ -2138,18 +2219,18 @@ export default function NotebooksPage() {
                                 href={clusterObservability?.spark_ui_url || clusterObservability?.spark_master_ui_url || '#'}
                                 target="_blank"
                                 rel="noreferrer"
-                                className="hidden md:flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-obsidian-info/20 bg-obsidian-info/5 text-[12px] font-medium text-obsidian-info hover:bg-obsidian-info/10 transition-colors shadow-sm ring-1 ring-inset ring-obsidian-info/10 active:scale-95"
+                                className="hidden lg:flex flex-shrink-0 whitespace-nowrap items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-white/10 bg-white/[0.03] hover:bg-white/[0.08] text-[12px] font-medium text-white/70 hover:text-white transition-all shadow-sm active:scale-95 group/spark"
                                 title="Open Spark UI"
                             >
-                                <ExternalLink className="w-3.5 h-3.5" />
+                                <ExternalLink className="w-3.5 h-3.5 opacity-70 group-hover/spark:opacity-100 transition-opacity" />
                                 <span>Spark UI</span>
                             </a>
                         )}
 
-                        <div className="w-[1px] h-5 bg-gradient-to-b from-transparent via-white/10 to-transparent mx-1 rounded-full" />
+                        <div className="hidden md:block w-[1px] h-5 bg-gradient-to-b from-transparent via-white/10 to-transparent mx-1 rounded-full flex-shrink-0" />
 
                         <button onClick={saveNotebook}
-                            className="px-3 py-1.5 rounded-md hover:bg-white/[0.08] transition-all text-white/70 hover:text-white text-[12px] font-medium flex items-center gap-1.5 active:scale-95"
+                            className="flex-shrink-0 whitespace-nowrap px-3 py-1.5 rounded-md hover:bg-white/[0.08] transition-all text-white/70 hover:text-white text-[12px] font-medium flex items-center gap-1.5 active:scale-95"
                         >
                             <Save className="w-3.5 h-3.5 opacity-70" />
                             Save
@@ -2158,7 +2239,10 @@ export default function NotebooksPage() {
                 </header>
 
                 {/* ─── Tab Bar (Premium Obsidian) ─── */}
-                <div className="flex items-end overflow-x-auto shrink-0 bg-black/40 backdrop-blur-md h-[38px] w-full border-b border-white/5 custom-scrollbar">
+                <div className="flex items-end overflow-x-auto shrink-0 bg-black/20 backdrop-blur-md h-[40px] w-full border-b border-white/[0.06] custom-scrollbar relative z-10 shadow-inner">
+                    {/* Shadow overlay for depth */}
+                    <div className="absolute inset-x-0 top-0 h-[10px] bg-gradient-to-b from-black/20 to-transparent pointer-events-none" />
+
                     {openTabs.map(tab => {
                         const isActive = isEditingName ? tab === originalName : tab === notebookName;
                         const displayTitle = isActive && isEditingName ? notebookName : tab;
@@ -2168,16 +2252,21 @@ export default function NotebooksPage() {
                                 key={tab}
                                 onClick={() => { if (!isActive) loadNotebook(tab); }}
                                 className={clsx(
-                                    "relative flex items-center justify-between cursor-pointer select-none group h-[38px] min-w-[140px] max-w-[220px] px-3 transition-colors",
-                                    isActive ? "bg-white/[0.04] text-white" : "text-white/40 hover:text-white/80 hover:bg-white/[0.02]"
+                                    "relative flex items-center justify-between cursor-pointer select-none group h-[40px] min-w-[140px] max-w-[220px] px-3 transition-colors",
+                                    isActive ? "bg-[#18181b]/90 text-white" : "text-white/40 hover:text-white/90 hover:bg-white/[0.04] bg-transparent"
                                 )}
                                 style={{
-                                    borderTop: isActive ? '2px solid rgba(255,255,255,0.2)' : '2px solid transparent',
                                     borderRight: '1px solid rgba(255,255,255,0.05)',
                                     fontSize: '13px',
-                                }}>
+                                }}
+                            >
+                                {/* Active Tab Top Highlight */}
+                                {isActive && (
+                                    <div className="absolute top-0 left-0 right-0 h-[2px] bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.5)] z-10 rounded-t-sm" />
+                                )}
+
                                 <div className="flex items-center gap-2.5 truncate">
-                                    <FileText className={clsx("w-3.5 h-3.5 flex-shrink-0", isActive ? "text-white/50" : "text-white/30 group-hover:text-white/50")} />
+                                    <FileText className={clsx("w-3.5 h-3.5 flex-shrink-0", isActive ? "text-blue-400" : "text-white/30 group-hover:text-white/50")} />
                                     {isActive && isEditingName ? (
                                         <input
                                             autoFocus
@@ -2190,7 +2279,7 @@ export default function NotebooksPage() {
                                         />
                                     ) : (
                                         <span
-                                            className="truncate font-medium tracking-wide"
+                                            className={clsx("truncate tracking-wide", isActive ? "font-semibold" : "font-medium")}
                                             onClick={(e) => {
                                                 e.stopPropagation();
                                                 if (isActive) {
@@ -2206,12 +2295,12 @@ export default function NotebooksPage() {
                                         </span>
                                     )}
                                 </div>
-                                <div className="flex items-center gap-1.5 ml-3">
+                                <div className="flex items-center gap-1.5 ml-3 z-20">
                                     <X
                                         onClick={(e) => closeTab(tab, e)}
                                         className={clsx(
-                                            "w-3.5 h-3.5 rounded-sm transition-all flex-shrink-0 hover:bg-white/20",
-                                            isActive ? "opacity-50 hover:opacity-100" : "opacity-0 group-hover:opacity-50 hover:opacity-100"
+                                            "w-4 h-4 p-0.5 rounded-md transition-all flex-shrink-0 hover:bg-white/20 active:scale-95",
+                                            isActive ? "opacity-60 hover:opacity-100" : "opacity-0 group-hover:opacity-60 hover:opacity-100"
                                         )}
                                     />
                                 </div>
@@ -2221,8 +2310,8 @@ export default function NotebooksPage() {
                 </div>
 
                 {/* Main Content Area */}
-                <div className="flex-1 relative flex flex-col min-h-0 bg-transparent custom-scrollbar">
-                    <div className="flex-1 py-4 px-6 flex flex-col gap-2 items-center w-full max-w-[1440px] mx-auto custom-scrollbar">
+                <div className="flex-1 relative flex flex-col min-h-0 bg-transparent overflow-hidden">
+                    <div className="flex-1 overflow-y-auto py-4 px-6 flex flex-col gap-2 items-center w-full max-w-[1440px] mx-auto custom-scrollbar">
                         {cells.map((cell, i) => (
                             <div key={cell.id} className="w-full">
                                 <NotebookCell
@@ -2361,6 +2450,39 @@ export default function NotebooksPage() {
                         >
                             <X className="w-3.5 h-3.5" />
                         </button>
+                    </div>
+                </div>
+            )}
+
+            {confirmDialog && (
+                <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/65 backdrop-blur-sm" onClick={() => resolveConfirm(false)}>
+                    <div
+                        className="w-[440px] max-w-[92vw] rounded-xl border border-white/10 bg-[#151518] shadow-2xl"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="px-5 py-4 border-b border-white/10">
+                            <h3 className="text-sm font-semibold text-white">{confirmDialog.title}</h3>
+                            <p className="mt-1 text-xs text-white/65">{confirmDialog.message}</p>
+                        </div>
+                        <div className="px-5 py-3 flex items-center justify-end gap-2">
+                            <button
+                                onClick={() => resolveConfirm(false)}
+                                className="px-3 py-1.5 text-xs rounded-md border border-white/10 text-white/70 hover:text-white hover:bg-white/5 transition-colors"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={() => resolveConfirm(true)}
+                                className={clsx(
+                                    "px-3 py-1.5 text-xs rounded-md transition-colors",
+                                    confirmDialog.tone === 'danger'
+                                        ? "border border-rose-400/30 bg-rose-500/20 text-rose-200 hover:bg-rose-500/30"
+                                        : "border border-cyan-400/30 bg-cyan-500/20 text-cyan-200 hover:bg-cyan-500/30"
+                                )}
+                            >
+                                {confirmDialog.confirmLabel || 'Confirm'}
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}

@@ -493,6 +493,7 @@ export default function CICDPage() {
     const [health, setHealth] = useState<'checking' | 'online' | 'offline'>('checking');
     const [giteaVersion, setGiteaVersion] = useState<string>('');
     const [repos, setRepos] = useState<GiteaRepo[]>([]);
+    const [showRepoPanel, setShowRepoPanel] = useState(true);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [search, setSearch] = useState('');
@@ -1801,7 +1802,64 @@ export default function CICDPage() {
                 <Sidebar />
             </div>
 
-            <main className="flex-1 flex flex-col min-w-0 bg-transparent relative z-10">
+            {/* Left Nav Pane - Repositories Browser */}
+            {showRepoPanel && (
+                <div className={clsx("w-[260px] bg-black/20 backdrop-blur-xl border-r border-white/5 shrink-0 flex flex-col z-10 relative shadow-[4px_0_24px_rgba(0,0,0,0.4)] transition-all", selectedRepo ? "hidden md:flex" : "flex")}>
+                    <div className="h-10 border-b border-white/5 flex items-center justify-between px-4 shrink-0">
+                        <div className="flex items-center gap-2">
+                            <GitPullRequest className="w-3.5 h-3.5 text-sky-400 opacity-80" />
+                            <span className="text-xs font-semibold text-white/90 tracking-wide">Repositories</span>
+                        </div>
+                    </div>
+                    <div className="p-2 border-b border-white/5">
+                        <div className="relative">
+                            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-obsidian-muted" />
+                            <input
+                                type="text"
+                                placeholder="Search..."
+                                className="w-full bg-black/20 border border-white/10 focus:border-obsidian-info shadow-sm rounded pl-7 pr-2 py-1 text-[11px] text-foreground placeholder-obsidian-muted outline-none transition-all"
+                                value={search}
+                                onChange={e => setSearch(e.target.value)}
+                            />
+                        </div>
+                    </div>
+                    <div className="flex-1 overflow-y-auto custom-scrollbar">
+                        {loading ? (
+                            <div className="p-4 text-center text-obsidian-muted text-[11px]">Loading repositories...</div>
+                        ) : filteredRepos.length === 0 ? (
+                            <div className="p-4 text-center text-obsidian-muted text-[11px]">No repositories found.</div>
+                        ) : (
+                            filteredRepos.map(repo => (
+                                <div
+                                    key={repo.id}
+                                    className={clsx(
+                                        "flex flex-col gap-1 px-4 py-2.5 border-b border-white/5 cursor-pointer transition-colors",
+                                        selectedRepo?.id === repo.id ? "bg-white/[0.04]" : "hover:bg-white/[0.02]"
+                                    )}
+                                    onClick={() => {
+                                        selectRepo(repo);
+                                    }}
+                                >
+                                    <div className="flex items-center gap-2">
+                                        <GitPullRequest className="w-3.5 h-3.5 text-obsidian-info shrink-0" />
+                                        <span className="text-[12px] text-foreground font-medium truncate">{repo.full_name}</span>
+                                    </div>
+                                    {repo.description && (
+                                        <p className="text-[10px] text-obsidian-muted line-clamp-2">{repo.description}</p>
+                                    )}
+                                    <div className="flex items-center gap-3 text-[10px] text-obsidian-muted mt-1">
+                                        <span className="flex items-center gap-1"><Star className="w-2.5 h-2.5" />{repo.stars_count}</span>
+                                        <span className="flex items-center gap-1"><GitBranch className="w-2.5 h-2.5" />{repo.default_branch}</span>
+                                        <span className="ml-auto">{timeAgo(repo.updated_at)}</span>
+                                    </div>
+                                </div>
+                            ))
+                        )}
+                    </div>
+                </div>
+            )}
+
+            <main className="flex-1 flex flex-col min-w-0 min-h-0 bg-transparent relative z-10">
                 {/* Top Toolbar */}
                 <header className="flex items-center px-4 justify-between h-12 bg-black/40 backdrop-blur-md border-b border-white/5 shrink-0 z-20">
                     {/* Top Edge Gradient Branding */}
@@ -1809,9 +1867,9 @@ export default function CICDPage() {
 
                     <div className="flex items-center gap-3 text-[12px]">
                         <button
-                            onClick={() => window.dispatchEvent(new CustomEvent('openclaw:toggle-sidebar'))}
+                            onClick={() => setShowRepoPanel(!showRepoPanel)}
                             className="p-1.5 hover:bg-white/10 rounded-md text-obsidian-muted hover:text-white transition-all active:scale-95 border border-transparent hover:border-obsidian-border/50"
-                            title="Toggle Explorer"
+                            title="Toggle Repositories Panel"
                         >
                             <LayoutPanelLeft className="w-4 h-4 drop-shadow-[0_0_8px_rgba(255,255,255,0.2)]" />
                         </button>
@@ -1839,71 +1897,9 @@ export default function CICDPage() {
                 </header>
 
                 {/* Main Content Area */}
-                <div className="flex-1 flex overflow-hidden bg-transparent">
-                    {/* Master View (Repo List) */}
-                    <div className={clsx("w-80 flex flex-col border-r border-white/5 bg-black/20 backdrop-blur-xl shrink-0 transition-all", selectedRepo ? "hidden md:flex" : "flex")}>
-                        <div className="p-3 border-b border-white/5">
-                            <div className="relative">
-                                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-obsidian-muted" />
-                                <input
-                                    type="text"
-                                    placeholder="Search repositories..."
-                                    className="w-full bg-black/20 border border-white/10 focus:border-obsidian-info shadow-sm rounded-md pl-9 pr-3 py-1.5 text-[12px] text-foreground placeholder-obsidian-muted outline-none transition-all"
-                                    value={search}
-                                    onChange={e => setSearch(e.target.value)}
-                                />
-                            </div>
-                        </div>
-                        <div className="flex-1 overflow-y-auto custom-scrollbar">
-                            {loading ? (
-                                <div className="p-4 text-center text-obsidian-muted text-[11px]">Loading repositories...</div>
-                            ) : filteredRepos.length === 0 ? (
-                                <div className="p-4 text-center text-obsidian-muted text-[11px]">No repositories found.</div>
-                            ) : (
-                                filteredRepos.map(repo => (
-                                    <div
-                                        key={repo.id}
-                                        className={clsx(
-                                            "flex flex-col gap-1 px-4 py-2.5 border-b border-white/5 cursor-pointer transition-colors",
-                                            selectedRepo?.id === repo.id ? "bg-white/[0.04]" : "hover:bg-white/[0.02]"
-                                        )}
-                                        onClick={() => {
-                                            setSelectedRepo(repo);
-                                            setDetailTab('files');
-                                            setSelectedFile(null);
-                                            setFileContent('');
-                                            setSelectedCommit(null);
-                                            setSelectedPR(null);
-                                            setPrDetail(null);
-                                            setPrComments([]);
-                                            setPrReviews([]);
-                                            setPrChecksState('unknown');
-                                            setPrChecks([]);
-                                            setSelectedActionRun(null);
-                                            setActionJobs([]);
-                                            setCurrentPath('');
-                                        }}
-                                    >
-                                        <div className="flex items-center gap-2">
-                                            <GitPullRequest className="w-3.5 h-3.5 text-obsidian-info shrink-0" />
-                                            <span className="text-[12px] text-foreground font-medium truncate">{repo.full_name}</span>
-                                        </div>
-                                        {repo.description && (
-                                            <p className="text-[10px] text-obsidian-muted line-clamp-2">{repo.description}</p>
-                                        )}
-                                        <div className="flex items-center gap-3 text-[10px] text-obsidian-muted mt-1">
-                                            <span className="flex items-center gap-1"><Star className="w-2.5 h-2.5" />{repo.stars_count}</span>
-                                            <span className="flex items-center gap-1"><GitBranch className="w-2.5 h-2.5" />{repo.default_branch}</span>
-                                            <span className="ml-auto">{timeAgo(repo.updated_at)}</span>
-                                        </div>
-                                    </div>
-                                ))
-                            )}
-                        </div>
-                    </div>
-
+                <div className="flex-1 flex min-h-0 overflow-hidden bg-transparent">
                     {/* Detail View */}
-                    <div className={clsx("flex-1 flex flex-col min-w-0 bg-transparent", !selectedRepo ? "hidden md:flex" : "flex")}>
+                    <div className={clsx("flex-1 min-h-0 flex flex-col min-w-0 bg-transparent", !selectedRepo ? "hidden md:flex" : "flex")}>
                         {/* ─── Welcome State (no repo selected) ─── */}
                         {!selectedRepo ? (
                             <div className="flex-1 flex flex-col items-center justify-center gap-4 text-obsidian-muted">
@@ -1928,7 +1924,7 @@ export default function CICDPage() {
                             </div>
                         ) : (
                             /* ─── Detail Area ─── */
-                            <div className="flex-1 flex flex-col min-w-0 bg-transparent">
+                            <div className="flex-1 min-h-0 flex flex-col min-w-0 bg-transparent">
                                 {/* GitHub-style Repo Header */}
                                 <div className="bg-black/20 backdrop-blur-md border-b border-white/5 shrink-0 flex flex-col pt-4">
                                     {/* Top Row - Title & Actions */}
@@ -3214,411 +3210,411 @@ export default function CICDPage() {
                                             )}
                                         </div>
 
-                                                            ) : detailTab === 'actions' ? (
-                                                            /* ─── Actions Tab ─── */
-                                                            <div className="flex-1 overflow-auto">
-                                                                {actionRuns.length === 0 ? (
-                                                                    <div className="flex flex-col items-center justify-center py-16 text-obsidian-muted gap-2">
-                                                                        <Play className="w-8 h-8 opacity-30" />
-                                                                        <span className="text-[12px]">No workflow runs</span>
-                                                                    </div>
-                                                                ) : actionRuns.map((run) => (
-                                                                    <div key={run.id} className="border-b border-white/5">
-                                                                        <div
-                                                                            className={clsx(
-                                                                                "px-4 py-2.5 hover:bg-white/[0.02] transition-all active:scale-95 cursor-pointer",
-                                                                                selectedActionRun === run.id && "bg-white/[0.03]"
-                                                                            )}
-                                                                            onClick={() => {
-                                                                                if (!selectedRepo) return;
-                                                                                const [owner, repo] = selectedRepo.full_name.split('/');
-                                                                                if (selectedActionRun === run.id) {
-                                                                                    setSelectedActionRun(null);
-                                                                                    setActionJobs([]);
-                                                                                    return;
-                                                                                }
-                                                                                setSelectedActionRun(run.id);
-                                                                                fetchActionRunJobs(owner, repo, run.id);
-                                                                            }}
-                                                                        >
-                                                                            <div className="flex items-center justify-between mb-1">
-                                                                                <div className="flex items-center gap-2 min-w-0">
-                                                                                    <ActionBadge status={run.status || 'unknown'} conclusion={run.conclusion} />
-                                                                                    <span className="text-[11px] text-foreground font-medium truncate">{run.name || `Run #${run.id}`}</span>
-                                                                                </div>
-                                                                                <span className="text-[10px] text-obsidian-muted shrink-0 ml-2">{timeAgo(run.updated_at || run.created_at)}</span>
-                                                                            </div>
-                                                                            <div className="flex items-center gap-2 text-[10px] text-obsidian-muted pl-1">
-                                                                                {run.head_branch && (
-                                                                                    <span className="flex items-center gap-0.5"><GitBranch className="w-2.5 h-2.5" />{run.head_branch}</span>
-                                                                                )}
-                                                                                {run.run_number && <span>#{run.run_number}</span>}
-                                                                                <div className="ml-auto flex items-center gap-1.5">
-                                                                                    <button
-                                                                                        onClick={(e) => {
-                                                                                            e.stopPropagation();
-                                                                                            handleActionRunCommand(run.id, 'rerun');
-                                                                                        }}
-                                                                                        disabled={Boolean(actionRunCommand && actionRunCommand.runId === run.id)}
-                                                                                        className="px-2 py-0.5 rounded border border-obsidian-info/30 bg-obsidian-info/10 text-obsidian-info hover:bg-obsidian-info/20 disabled:opacity-50 text-[9px]"
-                                                                                    >
-                                                                                        {actionRunCommand?.runId === run.id && actionRunCommand.action === 'rerun' ? 'Running...' : 'Re-run'}
-                                                                                    </button>
-                                                                                    <button
-                                                                                        onClick={(e) => {
-                                                                                            e.stopPropagation();
-                                                                                            handleActionRunCommand(run.id, 'cancel');
-                                                                                        }}
-                                                                                        disabled={Boolean(actionRunCommand && actionRunCommand.runId === run.id)}
-                                                                                        className="px-2 py-0.5 rounded border border-obsidian-danger/30 bg-obsidian-danger/10 text-obsidian-danger hover:bg-obsidian-danger/20 disabled:opacity-50 text-[9px]"
-                                                                                    >
-                                                                                        {actionRunCommand?.runId === run.id && actionRunCommand.action === 'cancel' ? 'Cancelling...' : 'Cancel'}
-                                                                                    </button>
-                                                                                    <span className="text-[9px] text-obsidian-info">
-                                                                                        {selectedActionRun === run.id ? 'Hide details' : 'View details'}
-                                                                                    </span>
-                                                                                </div>
-                                                                            </div>
-                                                                        </div>
-
-                                                                        {selectedActionRun === run.id && (
-                                                                            <div className="px-4 pb-3 bg-white/[0.01] border-t border-white/5">
-                                                                                {actionJobsLoading ? (
-                                                                                    <div className="flex items-center gap-2 text-[11px] text-obsidian-muted py-2">
-                                                                                        <Loader2 className="w-3.5 h-3.5 animate-spin text-obsidian-info" />
-                                                                                        Loading run details...
-                                                                                    </div>
-                                                                                ) : actionJobs.length === 0 ? (
-                                                                                    <div className="text-[11px] text-obsidian-muted py-2">No job details returned by Gitea for this run.</div>
-                                                                                ) : (
-                                                                                    <div className="space-y-2 pt-2">
-                                                                                        {actionJobs.map((job, idx) => (
-                                                                                            <div key={`${job.id || idx}`} className="rounded-md border border-white/10 bg-black/20 p-2.5">
-                                                                                                <div className="flex items-center gap-2 text-[11px]">
-                                                                                                    <span className="font-medium text-foreground">{job.name || `Job ${idx + 1}`}</span>
-                                                                                                    <ActionBadge status={job.status || 'unknown'} conclusion={job.conclusion} />
-                                                                                                    {job.runner_name && <span className="ml-auto text-[10px] text-obsidian-muted">{job.runner_name}</span>}
-                                                                                                </div>
-                                                                                                {Array.isArray(job.steps) && job.steps.length > 0 && (
-                                                                                                    <div className="mt-2 space-y-1">
-                                                                                                        {job.steps.map((step, si) => (
-                                                                                                            <div key={`${step.number || si}`} className="flex items-center gap-2 text-[10px] text-obsidian-muted">
-                                                                                                                <span className="w-4 text-right">{step.number ?? si + 1}</span>
-                                                                                                                <span className="text-foreground/90">{step.name || `Step ${si + 1}`}</span>
-                                                                                                                <span className="ml-auto">{step.conclusion || step.status || 'unknown'}</span>
-                                                                                                            </div>
-                                                                                                        ))}
-                                                                                                    </div>
-                                                                                                )}
-                                                                                            </div>
-                                                                                        ))}
-                                                                                    </div>
-                                                                                )}
-                                                                            </div>
-                                                                        )}
-                                                                    </div>
-                                                                ))}
-                                                                {actionsHasMore && (
-                                                                    <div className="px-4 py-3 flex justify-center">
-                                                                        <button
-                                                                            onClick={() => {
-                                                                                if (!selectedRepo || actionsLoadingMore) return;
-                                                                                const [owner, repo] = selectedRepo.full_name.split('/');
-                                                                                fetchActions(owner, repo, { page: actionsPage + 1, append: true });
-                                                                            }}
-                                                                            disabled={actionsLoadingMore}
-                                                                            className="px-3 py-1.5 rounded-md text-[11px] font-medium border border-white/10 bg-white/[0.02] hover:bg-white/[0.05] disabled:opacity-50 flex items-center gap-1.5"
-                                                                        >
-                                                                            {actionsLoadingMore && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                                                                            Load more runs
-                                                                        </button>
-                                                                    </div>
-                                                                )}
-                                                            </div>
-                                                            ) : detailTab === 'security' ? (
-                                                            /* ─── Security Tab ─── */
-                                                            <div className="flex-1 overflow-auto">
-                                                                <div className="px-4 py-3 border-b border-white/5 bg-black/20 backdrop-blur-md">
-                                                                    <div className="text-[12px] font-semibold text-foreground flex items-center gap-2">
-                                                                        <Scale className="w-4 h-4 text-obsidian-warning" />
-                                                                        Branch Protection
-                                                                    </div>
-                                                                </div>
-                                                                <div className="p-6 space-y-4">
-                                                                    <div className="rounded-lg border border-white/10 bg-black/20 p-4">
-                                                                        <div className="text-[12px] text-foreground font-medium mb-1">Target Branch</div>
-                                                                        <div className="text-[11px] text-obsidian-muted">
-                                                                            Default branch:
-                                                                            <span className="font-mono text-foreground ml-1">{selectedRepo?.default_branch || 'main'}</span>
-                                                                            <span className="ml-2 text-obsidian-info">{branchProtectionExists ? '(existing rule)' : '(new rule)'}</span>
-                                                                        </div>
-                                                                    </div>
-
-                                                                    {branchProtectionLoading ? (
-                                                                        <div className="rounded-lg border border-white/10 bg-black/20 p-4 text-[11px] text-obsidian-muted flex items-center gap-2">
-                                                                            <Loader2 className="w-3.5 h-3.5 animate-spin text-obsidian-info" />
-                                                                            Loading branch protection...
-                                                                        </div>
-                                                                    ) : (
-                                                                        <div className="rounded-lg border border-white/10 bg-black/20 p-4 space-y-3">
-                                                                            <label className="flex items-center gap-2 text-[11px] text-foreground">
-                                                                                <input
-                                                                                    type="checkbox"
-                                                                                    checked={Boolean(branchProtection.enable_status_check)}
-                                                                                    onChange={(e) => setBranchProtection(prev => ({ ...prev, enable_status_check: e.target.checked }))}
-                                                                                />
-                                                                                Enable required status checks
-                                                                            </label>
-
-                                                                            <div className="space-y-1">
-                                                                                <div className="text-[10px] text-obsidian-muted">Status check contexts (comma separated)</div>
-                                                                                <input
-                                                                                    value={statusCheckContextsInput}
-                                                                                    onChange={(e) => setStatusCheckContextsInput(e.target.value)}
-                                                                                    placeholder="build, test, lint"
-                                                                                    className="w-full bg-black/30 border border-white/10 rounded px-2 py-1.5 text-[11px] text-foreground outline-none"
-                                                                                />
-                                                                            </div>
-
-                                                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                                                                <label className="space-y-1">
-                                                                                    <div className="text-[10px] text-obsidian-muted">Required approvals</div>
-                                                                                    <input
-                                                                                        type="number"
-                                                                                        min={0}
-                                                                                        value={branchProtection.required_approvals ?? 1}
-                                                                                        onChange={(e) => setBranchProtection(prev => ({ ...prev, required_approvals: Number(e.target.value || 0) }))}
-                                                                                        className="w-full bg-black/30 border border-white/10 rounded px-2 py-1.5 text-[11px] text-foreground outline-none"
-                                                                                    />
-                                                                                </label>
-                                                                                <label className="flex items-center gap-2 text-[11px] text-foreground mt-5">
-                                                                                    <input
-                                                                                        type="checkbox"
-                                                                                        checked={Boolean(branchProtection.dismiss_stale_approvals)}
-                                                                                        onChange={(e) => setBranchProtection(prev => ({ ...prev, dismiss_stale_approvals: e.target.checked }))}
-                                                                                    />
-                                                                                    Dismiss stale approvals
-                                                                                </label>
-                                                                            </div>
-
-                                                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                                                                                <label className="flex items-center gap-2 text-[11px] text-foreground">
-                                                                                    <input
-                                                                                        type="checkbox"
-                                                                                        checked={Boolean(branchProtection.block_on_rejected_reviews)}
-                                                                                        onChange={(e) => setBranchProtection(prev => ({ ...prev, block_on_rejected_reviews: e.target.checked }))}
-                                                                                    />
-                                                                                    Block on rejected reviews
-                                                                                </label>
-                                                                                <label className="flex items-center gap-2 text-[11px] text-foreground">
-                                                                                    <input
-                                                                                        type="checkbox"
-                                                                                        checked={Boolean(branchProtection.block_on_outdated_branch)}
-                                                                                        onChange={(e) => setBranchProtection(prev => ({ ...prev, block_on_outdated_branch: e.target.checked }))}
-                                                                                    />
-                                                                                    Block on outdated branch
-                                                                                </label>
-                                                                                <label className="flex items-center gap-2 text-[11px] text-foreground">
-                                                                                    <input
-                                                                                        type="checkbox"
-                                                                                        checked={Boolean(branchProtection.enable_force_push)}
-                                                                                        onChange={(e) => setBranchProtection(prev => ({ ...prev, enable_force_push: e.target.checked }))}
-                                                                                    />
-                                                                                    Allow force push
-                                                                                </label>
-                                                                                <label className="flex items-center gap-2 text-[11px] text-foreground">
-                                                                                    <input
-                                                                                        type="checkbox"
-                                                                                        checked={Boolean(branchProtection.require_signed_commits)}
-                                                                                        onChange={(e) => setBranchProtection(prev => ({ ...prev, require_signed_commits: e.target.checked }))}
-                                                                                    />
-                                                                                    Require signed commits
-                                                                                </label>
-                                                                                <label className="flex items-center gap-2 text-[11px] text-foreground">
-                                                                                    <input
-                                                                                        type="checkbox"
-                                                                                        checked={Boolean(branchProtection.block_on_official_review_requests)}
-                                                                                        onChange={(e) => setBranchProtection(prev => ({ ...prev, block_on_official_review_requests: e.target.checked }))}
-                                                                                    />
-                                                                                    Block on official review requests
-                                                                                </label>
-                                                                            </div>
-
-                                                                            {branchProtectionError && (
-                                                                                <div className="rounded border border-obsidian-danger/30 bg-obsidian-danger/10 px-2 py-1.5 text-[11px] text-obsidian-danger">
-                                                                                    {branchProtectionError}
-                                                                                </div>
-                                                                            )}
-
-                                                                            <div className="flex items-center justify-end gap-2 pt-1">
-                                                                                <button
-                                                                                    onClick={() => {
-                                                                                        if (!selectedRepo) return;
-                                                                                        const [owner, repo] = selectedRepo.full_name.split('/');
-                                                                                        loadBranchProtection(owner, repo, selectedRepo.default_branch || 'main');
-                                                                                    }}
-                                                                                    disabled={branchProtectionLoading || branchProtectionSaving}
-                                                                                    className="px-3 py-1.5 rounded-md text-[11px] border border-white/10 text-obsidian-muted hover:text-foreground hover:bg-white/[0.04] disabled:opacity-50"
-                                                                                >
-                                                                                    Reload
-                                                                                </button>
-                                                                                {branchProtectionExists && (
-                                                                                    <button
-                                                                                        onClick={deleteBranchProtectionRule}
-                                                                                        disabled={branchProtectionLoading || branchProtectionSaving}
-                                                                                        className="px-3 py-1.5 rounded-md text-[11px] border border-obsidian-danger/30 bg-obsidian-danger/10 text-obsidian-danger hover:bg-obsidian-danger/20 disabled:opacity-50"
-                                                                                    >
-                                                                                        Delete Rule
-                                                                                    </button>
-                                                                                )}
-                                                                                <button
-                                                                                    onClick={saveBranchProtection}
-                                                                                    disabled={branchProtectionLoading || branchProtectionSaving}
-                                                                                    className="px-3 py-1.5 rounded-md text-[11px] border border-obsidian-info/30 bg-obsidian-info/20 text-obsidian-info hover:bg-obsidian-info/30 disabled:opacity-50 inline-flex items-center gap-1.5"
-                                                                                >
-                                                                                    {branchProtectionSaving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                                                                                    Save Rules
-                                                                                </button>
-                                                                            </div>
-                                                                        </div>
-                                                                    )}
-
-                                                                    <div className="rounded-lg border border-white/10 bg-black/20 p-4">
-                                                                        <div className="text-[12px] text-foreground font-medium mb-1">PR Conflict Handling</div>
-                                                                        <div className="text-[11px] text-obsidian-muted">
-                                                                            PR detayında merge conflict olursa "Update Branch (rebase/merge)" aksiyonları aktif.
-                                                                        </div>
-                                                                    </div>
-                                                                </div>
-                                                            </div>
-                                                            ) : (
-                                                            /* ─── Insights Tab ─── */
-                                                            <div className="flex-1 overflow-auto">
-                                                                <div className="px-4 py-3 border-b border-white/5 bg-black/20 backdrop-blur-md">
-                                                                    <div className="text-[12px] font-semibold text-foreground flex items-center gap-2">
-                                                                        <BookOpen className="w-4 h-4 text-obsidian-info" />
-                                                                        Repository Insights
-                                                                    </div>
-                                                                </div>
-                                                                <div className="p-6 grid grid-cols-1 md:grid-cols-3 gap-4">
-                                                                    <div className="rounded-lg border border-white/10 bg-black/20 p-4">
-                                                                        <div className="text-[10px] text-obsidian-muted mb-1">COMMITS (LOADED)</div>
-                                                                        <div className="text-[20px] font-semibold text-foreground">{commits.length}</div>
-                                                                    </div>
-                                                                    <div className="rounded-lg border border-white/10 bg-black/20 p-4">
-                                                                        <div className="text-[10px] text-obsidian-muted mb-1">OPEN PRs</div>
-                                                                        <div className="text-[20px] font-semibold text-foreground">{pulls.filter(p => p.state === 'open' && !p.merged).length}</div>
-                                                                    </div>
-                                                                    <div className="rounded-lg border border-white/10 bg-black/20 p-4">
-                                                                        <div className="text-[10px] text-obsidian-muted mb-1">OPEN ISSUES</div>
-                                                                        <div className="text-[20px] font-semibold text-foreground">{issues.filter(i => i.state === 'open').length}</div>
-                                                                    </div>
-                                                                </div>
-                                                            </div>
+                                    ) : detailTab === 'actions' ? (
+                                        /* ─── Actions Tab ─── */
+                                        <div className="flex-1 overflow-auto">
+                                            {actionRuns.length === 0 ? (
+                                                <div className="flex flex-col items-center justify-center py-16 text-obsidian-muted gap-2">
+                                                    <Play className="w-8 h-8 opacity-30" />
+                                                    <span className="text-[12px]">No workflow runs</span>
+                                                </div>
+                                            ) : actionRuns.map((run) => (
+                                                <div key={run.id} className="border-b border-white/5">
+                                                    <div
+                                                        className={clsx(
+                                                            "px-4 py-2.5 hover:bg-white/[0.02] transition-all active:scale-95 cursor-pointer",
+                                                            selectedActionRun === run.id && "bg-white/[0.03]"
                                                         )}
+                                                        onClick={() => {
+                                                            if (!selectedRepo) return;
+                                                            const [owner, repo] = selectedRepo.full_name.split('/');
+                                                            if (selectedActionRun === run.id) {
+                                                                setSelectedActionRun(null);
+                                                                setActionJobs([]);
+                                                                return;
+                                                            }
+                                                            setSelectedActionRun(run.id);
+                                                            fetchActionRunJobs(owner, repo, run.id);
+                                                        }}
+                                                    >
+                                                        <div className="flex items-center justify-between mb-1">
+                                                            <div className="flex items-center gap-2 min-w-0">
+                                                                <ActionBadge status={run.status || 'unknown'} conclusion={run.conclusion} />
+                                                                <span className="text-[11px] text-foreground font-medium truncate">{run.name || `Run #${run.id}`}</span>
+                                                            </div>
+                                                            <span className="text-[10px] text-obsidian-muted shrink-0 ml-2">{timeAgo(run.updated_at || run.created_at)}</span>
                                                         </div>
+                                                        <div className="flex items-center gap-2 text-[10px] text-obsidian-muted pl-1">
+                                                            {run.head_branch && (
+                                                                <span className="flex items-center gap-0.5"><GitBranch className="w-2.5 h-2.5" />{run.head_branch}</span>
+                                                            )}
+                                                            {run.run_number && <span>#{run.run_number}</span>}
+                                                            <div className="ml-auto flex items-center gap-1.5">
+                                                                <button
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        handleActionRunCommand(run.id, 'rerun');
+                                                                    }}
+                                                                    disabled={Boolean(actionRunCommand && actionRunCommand.runId === run.id)}
+                                                                    className="px-2 py-0.5 rounded border border-obsidian-info/30 bg-obsidian-info/10 text-obsidian-info hover:bg-obsidian-info/20 disabled:opacity-50 text-[9px]"
+                                                                >
+                                                                    {actionRunCommand?.runId === run.id && actionRunCommand.action === 'rerun' ? 'Running...' : 'Re-run'}
+                                                                </button>
+                                                                <button
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        handleActionRunCommand(run.id, 'cancel');
+                                                                    }}
+                                                                    disabled={Boolean(actionRunCommand && actionRunCommand.runId === run.id)}
+                                                                    className="px-2 py-0.5 rounded border border-obsidian-danger/30 bg-obsidian-danger/10 text-obsidian-danger hover:bg-obsidian-danger/20 disabled:opacity-50 text-[9px]"
+                                                                >
+                                                                    {actionRunCommand?.runId === run.id && actionRunCommand.action === 'cancel' ? 'Cancelling...' : 'Cancel'}
+                                                                </button>
+                                                                <span className="text-[9px] text-obsidian-info">
+                                                                    {selectedActionRun === run.id ? 'Hide details' : 'View details'}
+                                                                </span>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    {selectedActionRun === run.id && (
+                                                        <div className="px-4 pb-3 bg-white/[0.01] border-t border-white/5">
+                                                            {actionJobsLoading ? (
+                                                                <div className="flex items-center gap-2 text-[11px] text-obsidian-muted py-2">
+                                                                    <Loader2 className="w-3.5 h-3.5 animate-spin text-obsidian-info" />
+                                                                    Loading run details...
+                                                                </div>
+                                                            ) : actionJobs.length === 0 ? (
+                                                                <div className="text-[11px] text-obsidian-muted py-2">No job details returned by Gitea for this run.</div>
+                                                            ) : (
+                                                                <div className="space-y-2 pt-2">
+                                                                    {actionJobs.map((job, idx) => (
+                                                                        <div key={`${job.id || idx}`} className="rounded-md border border-white/10 bg-black/20 p-2.5">
+                                                                            <div className="flex items-center gap-2 text-[11px]">
+                                                                                <span className="font-medium text-foreground">{job.name || `Job ${idx + 1}`}</span>
+                                                                                <ActionBadge status={job.status || 'unknown'} conclusion={job.conclusion} />
+                                                                                {job.runner_name && <span className="ml-auto text-[10px] text-obsidian-muted">{job.runner_name}</span>}
+                                                                            </div>
+                                                                            {Array.isArray(job.steps) && job.steps.length > 0 && (
+                                                                                <div className="mt-2 space-y-1">
+                                                                                    {job.steps.map((step, si) => (
+                                                                                        <div key={`${step.number || si}`} className="flex items-center gap-2 text-[10px] text-obsidian-muted">
+                                                                                            <span className="w-4 text-right">{step.number ?? si + 1}</span>
+                                                                                            <span className="text-foreground/90">{step.name || `Step ${si + 1}`}</span>
+                                                                                            <span className="ml-auto">{step.conclusion || step.status || 'unknown'}</span>
+                                                                                        </div>
+                                                                                    ))}
+                                                                                </div>
+                                                                            )}
+                                                                        </div>
+                                                                    ))}
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            ))}
+                                            {actionsHasMore && (
+                                                <div className="px-4 py-3 flex justify-center">
+                                                    <button
+                                                        onClick={() => {
+                                                            if (!selectedRepo || actionsLoadingMore) return;
+                                                            const [owner, repo] = selectedRepo.full_name.split('/');
+                                                            fetchActions(owner, repo, { page: actionsPage + 1, append: true });
+                                                        }}
+                                                        disabled={actionsLoadingMore}
+                                                        className="px-3 py-1.5 rounded-md text-[11px] font-medium border border-white/10 bg-white/[0.02] hover:bg-white/[0.05] disabled:opacity-50 flex items-center gap-1.5"
+                                                    >
+                                                        {actionsLoadingMore && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                                                        Load more runs
+                                                    </button>
                                                 </div>
                                             )}
                                         </div>
-                                    </div>
-                            </main>
-                                {deleteBranchTarget && (
-                            <div className="absolute inset-0 z-[120] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-                                <div className="w-full max-w-md rounded-xl border border-white/10 bg-[#101114] shadow-2xl overflow-hidden">
-                                    <div className="px-4 py-3 border-b border-white/10">
-                                        <div className="text-[13px] font-semibold text-foreground">Delete branch?</div>
-                                        <div className="text-[11px] text-obsidian-muted mt-1">
-                                            Branch <span className="font-mono text-foreground">{deleteBranchTarget}</span> kalici olarak silinecek.
+                                    ) : detailTab === 'security' ? (
+                                        /* ─── Security Tab ─── */
+                                        <div className="flex-1 overflow-auto">
+                                            <div className="px-4 py-3 border-b border-white/5 bg-black/20 backdrop-blur-md">
+                                                <div className="text-[12px] font-semibold text-foreground flex items-center gap-2">
+                                                    <Scale className="w-4 h-4 text-obsidian-warning" />
+                                                    Branch Protection
+                                                </div>
+                                            </div>
+                                            <div className="p-6 space-y-4">
+                                                <div className="rounded-lg border border-white/10 bg-black/20 p-4">
+                                                    <div className="text-[12px] text-foreground font-medium mb-1">Target Branch</div>
+                                                    <div className="text-[11px] text-obsidian-muted">
+                                                        Default branch:
+                                                        <span className="font-mono text-foreground ml-1">{selectedRepo?.default_branch || 'main'}</span>
+                                                        <span className="ml-2 text-obsidian-info">{branchProtectionExists ? '(existing rule)' : '(new rule)'}</span>
+                                                    </div>
+                                                </div>
+
+                                                {branchProtectionLoading ? (
+                                                    <div className="rounded-lg border border-white/10 bg-black/20 p-4 text-[11px] text-obsidian-muted flex items-center gap-2">
+                                                        <Loader2 className="w-3.5 h-3.5 animate-spin text-obsidian-info" />
+                                                        Loading branch protection...
+                                                    </div>
+                                                ) : (
+                                                    <div className="rounded-lg border border-white/10 bg-black/20 p-4 space-y-3">
+                                                        <label className="flex items-center gap-2 text-[11px] text-foreground">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={Boolean(branchProtection.enable_status_check)}
+                                                                onChange={(e) => setBranchProtection(prev => ({ ...prev, enable_status_check: e.target.checked }))}
+                                                            />
+                                                            Enable required status checks
+                                                        </label>
+
+                                                        <div className="space-y-1">
+                                                            <div className="text-[10px] text-obsidian-muted">Status check contexts (comma separated)</div>
+                                                            <input
+                                                                value={statusCheckContextsInput}
+                                                                onChange={(e) => setStatusCheckContextsInput(e.target.value)}
+                                                                placeholder="build, test, lint"
+                                                                className="w-full bg-black/30 border border-white/10 rounded px-2 py-1.5 text-[11px] text-foreground outline-none"
+                                                            />
+                                                        </div>
+
+                                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                                            <label className="space-y-1">
+                                                                <div className="text-[10px] text-obsidian-muted">Required approvals</div>
+                                                                <input
+                                                                    type="number"
+                                                                    min={0}
+                                                                    value={branchProtection.required_approvals ?? 1}
+                                                                    onChange={(e) => setBranchProtection(prev => ({ ...prev, required_approvals: Number(e.target.value || 0) }))}
+                                                                    className="w-full bg-black/30 border border-white/10 rounded px-2 py-1.5 text-[11px] text-foreground outline-none"
+                                                                />
+                                                            </label>
+                                                            <label className="flex items-center gap-2 text-[11px] text-foreground mt-5">
+                                                                <input
+                                                                    type="checkbox"
+                                                                    checked={Boolean(branchProtection.dismiss_stale_approvals)}
+                                                                    onChange={(e) => setBranchProtection(prev => ({ ...prev, dismiss_stale_approvals: e.target.checked }))}
+                                                                />
+                                                                Dismiss stale approvals
+                                                            </label>
+                                                        </div>
+
+                                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                                            <label className="flex items-center gap-2 text-[11px] text-foreground">
+                                                                <input
+                                                                    type="checkbox"
+                                                                    checked={Boolean(branchProtection.block_on_rejected_reviews)}
+                                                                    onChange={(e) => setBranchProtection(prev => ({ ...prev, block_on_rejected_reviews: e.target.checked }))}
+                                                                />
+                                                                Block on rejected reviews
+                                                            </label>
+                                                            <label className="flex items-center gap-2 text-[11px] text-foreground">
+                                                                <input
+                                                                    type="checkbox"
+                                                                    checked={Boolean(branchProtection.block_on_outdated_branch)}
+                                                                    onChange={(e) => setBranchProtection(prev => ({ ...prev, block_on_outdated_branch: e.target.checked }))}
+                                                                />
+                                                                Block on outdated branch
+                                                            </label>
+                                                            <label className="flex items-center gap-2 text-[11px] text-foreground">
+                                                                <input
+                                                                    type="checkbox"
+                                                                    checked={Boolean(branchProtection.enable_force_push)}
+                                                                    onChange={(e) => setBranchProtection(prev => ({ ...prev, enable_force_push: e.target.checked }))}
+                                                                />
+                                                                Allow force push
+                                                            </label>
+                                                            <label className="flex items-center gap-2 text-[11px] text-foreground">
+                                                                <input
+                                                                    type="checkbox"
+                                                                    checked={Boolean(branchProtection.require_signed_commits)}
+                                                                    onChange={(e) => setBranchProtection(prev => ({ ...prev, require_signed_commits: e.target.checked }))}
+                                                                />
+                                                                Require signed commits
+                                                            </label>
+                                                            <label className="flex items-center gap-2 text-[11px] text-foreground">
+                                                                <input
+                                                                    type="checkbox"
+                                                                    checked={Boolean(branchProtection.block_on_official_review_requests)}
+                                                                    onChange={(e) => setBranchProtection(prev => ({ ...prev, block_on_official_review_requests: e.target.checked }))}
+                                                                />
+                                                                Block on official review requests
+                                                            </label>
+                                                        </div>
+
+                                                        {branchProtectionError && (
+                                                            <div className="rounded border border-obsidian-danger/30 bg-obsidian-danger/10 px-2 py-1.5 text-[11px] text-obsidian-danger">
+                                                                {branchProtectionError}
+                                                            </div>
+                                                        )}
+
+                                                        <div className="flex items-center justify-end gap-2 pt-1">
+                                                            <button
+                                                                onClick={() => {
+                                                                    if (!selectedRepo) return;
+                                                                    const [owner, repo] = selectedRepo.full_name.split('/');
+                                                                    loadBranchProtection(owner, repo, selectedRepo.default_branch || 'main');
+                                                                }}
+                                                                disabled={branchProtectionLoading || branchProtectionSaving}
+                                                                className="px-3 py-1.5 rounded-md text-[11px] border border-white/10 text-obsidian-muted hover:text-foreground hover:bg-white/[0.04] disabled:opacity-50"
+                                                            >
+                                                                Reload
+                                                            </button>
+                                                            {branchProtectionExists && (
+                                                                <button
+                                                                    onClick={deleteBranchProtectionRule}
+                                                                    disabled={branchProtectionLoading || branchProtectionSaving}
+                                                                    className="px-3 py-1.5 rounded-md text-[11px] border border-obsidian-danger/30 bg-obsidian-danger/10 text-obsidian-danger hover:bg-obsidian-danger/20 disabled:opacity-50"
+                                                                >
+                                                                    Delete Rule
+                                                                </button>
+                                                            )}
+                                                            <button
+                                                                onClick={saveBranchProtection}
+                                                                disabled={branchProtectionLoading || branchProtectionSaving}
+                                                                className="px-3 py-1.5 rounded-md text-[11px] border border-obsidian-info/30 bg-obsidian-info/20 text-obsidian-info hover:bg-obsidian-info/30 disabled:opacity-50 inline-flex items-center gap-1.5"
+                                                            >
+                                                                {branchProtectionSaving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                                                                Save Rules
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                )}
+
+                                                <div className="rounded-lg border border-white/10 bg-black/20 p-4">
+                                                    <div className="text-[12px] text-foreground font-medium mb-1">PR Conflict Handling</div>
+                                                    <div className="text-[11px] text-obsidian-muted">
+                                                        PR detayında merge conflict olursa "Update Branch (rebase/merge)" aksiyonları aktif.
+                                                    </div>
+                                                </div>
+                                            </div>
                                         </div>
-                                    </div>
-                                    <div className="px-4 py-3 flex items-center justify-end gap-2">
-                                        <button
-                                            onClick={() => setDeleteBranchTarget(null)}
-                                            disabled={deletingBranch === deleteBranchTarget}
-                                            className="px-3 py-1.5 rounded-md text-[11px] border border-white/10 text-obsidian-muted hover:text-foreground hover:bg-white/[0.04] disabled:opacity-50"
-                                        >
-                                            Cancel
-                                        </button>
-                                        <button
-                                            onClick={async () => {
-                                                const target = deleteBranchTarget;
-                                                setDeleteBranchTarget(null);
-                                                if (target) await handleDeleteBranch(target);
-                                            }}
-                                            disabled={deletingBranch === deleteBranchTarget}
-                                            className="px-3 py-1.5 rounded-md text-[11px] border border-obsidian-danger/40 bg-obsidian-danger/20 text-obsidian-danger hover:bg-obsidian-danger/30 disabled:opacity-50 inline-flex items-center gap-1.5"
-                                        >
-                                            {deletingBranch === deleteBranchTarget && <Loader2 className="w-3 h-3 animate-spin" />}
-                                            Delete Branch
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-                        )}
-
-                        {reviewDialog && (
-                            <div className="absolute inset-0 z-[125] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-                                <div className="w-full max-w-lg rounded-xl border border-white/10 bg-[#101114] shadow-2xl overflow-hidden">
-                                    <div className="px-4 py-3 border-b border-white/10">
-                                        <div className="text-[13px] font-semibold text-foreground">{reviewDialog.title}</div>
-                                    </div>
-                                    <div className="p-4">
-                                        <textarea
-                                            value={reviewDialogBody}
-                                            onChange={(e) => setReviewDialogBody(e.target.value)}
-                                            placeholder={reviewDialog.placeholder}
-                                            className="w-full h-36 bg-black/30 border border-white/10 rounded px-3 py-2 text-[11px] text-foreground outline-none resize-none"
-                                        />
-                                    </div>
-                                    <div className="px-4 py-3 border-t border-white/10 flex items-center justify-end gap-2">
-                                        <button
-                                            onClick={() => {
-                                                setReviewDialog(null);
-                                                setReviewDialogBody('');
-                                            }}
-                                            className="px-3 py-1.5 rounded-md text-[11px] border border-white/10 text-obsidian-muted hover:text-foreground hover:bg-white/[0.04]"
-                                        >
-                                            Cancel
-                                        </button>
-                                        <button
-                                            onClick={submitReviewDialog}
-                                            className="px-3 py-1.5 rounded-md text-[11px] border border-obsidian-info/30 bg-obsidian-info/20 text-obsidian-info hover:bg-obsidian-info/30"
-                                        >
-                                            Submit Review
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-                        )}
-
-                        {uiNotice && (
-                            <div className="absolute right-4 bottom-4 z-[130] max-w-md">
-                                <div
-                                    className={clsx(
-                                        "flex items-start gap-2 rounded-lg border px-3 py-2 shadow-2xl backdrop-blur-md",
-                                        uiNotice.tone === 'success' && "border-obsidian-success/40 bg-obsidian-success/15 text-obsidian-success",
-                                        uiNotice.tone === 'error' && "border-obsidian-danger/40 bg-obsidian-danger/15 text-obsidian-danger",
-                                        uiNotice.tone === 'info' && "border-obsidian-info/40 bg-obsidian-info/15 text-obsidian-info",
-                                    )}
-                                >
-                                    {uiNotice.tone === 'success' ? (
-                                        <CheckCircle2 className="w-4 h-4 mt-0.5 shrink-0" />
-                                    ) : uiNotice.tone === 'error' ? (
-                                        <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
                                     ) : (
-                                        <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                                        /* ─── Insights Tab ─── */
+                                        <div className="flex-1 overflow-auto">
+                                            <div className="px-4 py-3 border-b border-white/5 bg-black/20 backdrop-blur-md">
+                                                <div className="text-[12px] font-semibold text-foreground flex items-center gap-2">
+                                                    <BookOpen className="w-4 h-4 text-obsidian-info" />
+                                                    Repository Insights
+                                                </div>
+                                            </div>
+                                            <div className="p-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+                                                <div className="rounded-lg border border-white/10 bg-black/20 p-4">
+                                                    <div className="text-[10px] text-obsidian-muted mb-1">COMMITS (LOADED)</div>
+                                                    <div className="text-[20px] font-semibold text-foreground">{commits.length}</div>
+                                                </div>
+                                                <div className="rounded-lg border border-white/10 bg-black/20 p-4">
+                                                    <div className="text-[10px] text-obsidian-muted mb-1">OPEN PRs</div>
+                                                    <div className="text-[20px] font-semibold text-foreground">{pulls.filter(p => p.state === 'open' && !p.merged).length}</div>
+                                                </div>
+                                                <div className="rounded-lg border border-white/10 bg-black/20 p-4">
+                                                    <div className="text-[10px] text-obsidian-muted mb-1">OPEN ISSUES</div>
+                                                    <div className="text-[20px] font-semibold text-foreground">{issues.filter(i => i.state === 'open').length}</div>
+                                                </div>
+                                            </div>
+                                        </div>
                                     )}
-                                    <div className="text-[11px] leading-5">{uiNotice.message}</div>
-                                    <button
-                                        onClick={() => setUiNotice(null)}
-                                        className="ml-1 text-current/80 hover:text-current"
-                                        aria-label="Dismiss notification"
-                                    >
-                                        <X className="w-3.5 h-3.5" />
-                                    </button>
                                 </div>
                             </div>
                         )}
                     </div>
-                    );
+                </div>
+            </main>
+            {deleteBranchTarget && (
+                <div className="absolute inset-0 z-[120] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+                    <div className="w-full max-w-md rounded-xl border border-white/10 bg-[#101114] shadow-2xl overflow-hidden">
+                        <div className="px-4 py-3 border-b border-white/10">
+                            <div className="text-[13px] font-semibold text-foreground">Delete branch?</div>
+                            <div className="text-[11px] text-obsidian-muted mt-1">
+                                Branch <span className="font-mono text-foreground">{deleteBranchTarget}</span> kalici olarak silinecek.
+                            </div>
+                        </div>
+                        <div className="px-4 py-3 flex items-center justify-end gap-2">
+                            <button
+                                onClick={() => setDeleteBranchTarget(null)}
+                                disabled={deletingBranch === deleteBranchTarget}
+                                className="px-3 py-1.5 rounded-md text-[11px] border border-white/10 text-obsidian-muted hover:text-foreground hover:bg-white/[0.04] disabled:opacity-50"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={async () => {
+                                    const target = deleteBranchTarget;
+                                    setDeleteBranchTarget(null);
+                                    if (target) await handleDeleteBranch(target);
+                                }}
+                                disabled={deletingBranch === deleteBranchTarget}
+                                className="px-3 py-1.5 rounded-md text-[11px] border border-obsidian-danger/40 bg-obsidian-danger/20 text-obsidian-danger hover:bg-obsidian-danger/30 disabled:opacity-50 inline-flex items-center gap-1.5"
+                            >
+                                {deletingBranch === deleteBranchTarget && <Loader2 className="w-3 h-3 animate-spin" />}
+                                Delete Branch
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {reviewDialog && (
+                <div className="absolute inset-0 z-[125] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+                    <div className="w-full max-w-lg rounded-xl border border-white/10 bg-[#101114] shadow-2xl overflow-hidden">
+                        <div className="px-4 py-3 border-b border-white/10">
+                            <div className="text-[13px] font-semibold text-foreground">{reviewDialog.title}</div>
+                        </div>
+                        <div className="p-4">
+                            <textarea
+                                value={reviewDialogBody}
+                                onChange={(e) => setReviewDialogBody(e.target.value)}
+                                placeholder={reviewDialog.placeholder}
+                                className="w-full h-36 bg-black/30 border border-white/10 rounded px-3 py-2 text-[11px] text-foreground outline-none resize-none"
+                            />
+                        </div>
+                        <div className="px-4 py-3 border-t border-white/10 flex items-center justify-end gap-2">
+                            <button
+                                onClick={() => {
+                                    setReviewDialog(null);
+                                    setReviewDialogBody('');
+                                }}
+                                className="px-3 py-1.5 rounded-md text-[11px] border border-white/10 text-obsidian-muted hover:text-foreground hover:bg-white/[0.04]"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={submitReviewDialog}
+                                className="px-3 py-1.5 rounded-md text-[11px] border border-obsidian-info/30 bg-obsidian-info/20 text-obsidian-info hover:bg-obsidian-info/30"
+                            >
+                                Submit Review
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {uiNotice && (
+                <div className="absolute right-4 bottom-4 z-[130] max-w-md">
+                    <div
+                        className={clsx(
+                            "flex items-start gap-2 rounded-lg border px-3 py-2 shadow-2xl backdrop-blur-md",
+                            uiNotice.tone === 'success' && "border-obsidian-success/40 bg-obsidian-success/15 text-obsidian-success",
+                            uiNotice.tone === 'error' && "border-obsidian-danger/40 bg-obsidian-danger/15 text-obsidian-danger",
+                            uiNotice.tone === 'info' && "border-obsidian-info/40 bg-obsidian-info/15 text-obsidian-info",
+                        )}
+                    >
+                        {uiNotice.tone === 'success' ? (
+                            <CheckCircle2 className="w-4 h-4 mt-0.5 shrink-0" />
+                        ) : uiNotice.tone === 'error' ? (
+                            <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                        ) : (
+                            <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                        )}
+                        <div className="text-[11px] leading-5">{uiNotice.message}</div>
+                        <button
+                            onClick={() => setUiNotice(null)}
+                            className="ml-1 text-current/80 hover:text-current"
+                            aria-label="Dismiss notification"
+                        >
+                            <X className="w-3.5 h-3.5" />
+                        </button>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
 }

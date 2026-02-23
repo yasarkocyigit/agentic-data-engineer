@@ -15,6 +15,9 @@ import json
 import logging
 import os
 import re
+import shlex
+import subprocess
+import sys
 import threading
 import traceback
 import uuid
@@ -31,6 +34,7 @@ from pydantic import BaseModel
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+_INVISIBLE_PREFIX_CHARS = "\ufeff\u200b\u200c\u200d\u2060"
 
 KERNEL_GW_URL = os.getenv("JUPYTER_KERNEL_GW_URL", "http://localhost:8888")
 NOTEBOOKS_DIR = os.getenv("NOTEBOOKS_DIR", os.path.join(os.path.dirname(__file__), "..", "..", "notebooks"))
@@ -87,6 +91,15 @@ SPARK_ICEBERG_CATALOG_URI = (
 SPARK_ICEBERG_CATALOG_USER = (os.getenv("ICEBERG_CATALOG_USER", "postgres") or "postgres").strip()
 SPARK_ICEBERG_CATALOG_PASSWORD = (os.getenv("ICEBERG_CATALOG_PASSWORD", "Gs+163264128") or "Gs+163264128").strip()
 SPARK_ICEBERG_WAREHOUSE = (os.getenv("ICEBERG_WAREHOUSE", "s3a://iceberg/warehouse/") or "s3a://iceberg/warehouse/").strip()
+SPARK_ICEBERG_CATALOG_ALIASES = tuple(
+    sorted(
+        {
+            alias.strip().lower()
+            for alias in (os.getenv("SPARK_ICEBERG_CATALOG_ALIASES", "iceberg") or "iceberg").split(",")
+            if alias and alias.strip()
+        }
+    )
+)
 NOTEBOOK_SQL_ENGINE = (os.getenv("NOTEBOOK_SQL_ENGINE", "spark") or "spark").strip().lower()
 if NOTEBOOK_SQL_ENGINE not in {"spark", "trino"}:
     NOTEBOOK_SQL_ENGINE = "spark"
@@ -112,6 +125,10 @@ try:
     NOTEBOOK_TABLE_ROW_LIMIT = max(50, int(os.getenv("NOTEBOOK_TABLE_ROW_LIMIT", "500")))
 except ValueError:
     NOTEBOOK_TABLE_ROW_LIMIT = 500
+try:
+    NOTEBOOK_SHELL_TIMEOUT_SECONDS = max(5, int(os.getenv("NOTEBOOK_SHELL_TIMEOUT_SECONDS", "600")))
+except ValueError:
+    NOTEBOOK_SHELL_TIMEOUT_SECONDS = 600
 
 # Ensure notebooks directory exists
 Path(NOTEBOOKS_DIR).mkdir(parents=True, exist_ok=True)
@@ -961,6 +978,318 @@ def _sanitize_sql(raw_sql: str) -> str:
     return sql
 
 
+def _strip_leading_invisible(text: str) -> str:
+    return str(text or "").lstrip(_INVISIBLE_PREFIX_CHARS)
+
+
+def _strip_sql_magic_prefix(raw_sql: str) -> str:
+    text = _strip_leading_invisible(raw_sql or "")
+    lines = text.splitlines()
+    if not lines:
+        return text
+
+    first_idx: Optional[int] = None
+    for idx, line in enumerate(lines):
+        if _strip_leading_invisible(line).strip():
+            first_idx = idx
+            break
+
+    if first_idx is None:
+        return text
+
+    first = _strip_leading_invisible(lines[first_idx]).strip()
+    magic_match = re.match(r"^(%%?(?:sql|spark))(?:\s+(.*))?$", first, re.IGNORECASE)
+    if not magic_match:
+        return text
+
+    inline = (magic_match.group(2) or "").strip()
+    remainder = "\n".join(lines[first_idx + 1 :]).strip()
+    if inline and remainder:
+        return f"{inline}\n{remainder}"
+    if inline:
+        return inline
+    return remainder
+
+
+def _normalize_spark_iceberg_catalog_alias(sql_text: str) -> str:
+    text = str(sql_text or "")
+    target_catalog = str(SPARK_ICEBERG_CATALOG or "").strip()
+    if not text or not target_catalog:
+        return text
+
+    target_lower = target_catalog.lower()
+    aliases = [alias for alias in SPARK_ICEBERG_CATALOG_ALIASES if alias != target_lower]
+    if not aliases:
+        return text
+
+    normalized = text
+    for alias in aliases:
+        normalized = re.sub(
+            rf"(?i)(?<![A-Za-z0-9_`]){re.escape(alias)}\.",
+            f"{target_catalog}.",
+            normalized,
+        )
+        normalized = re.sub(
+            rf"(?i)`{re.escape(alias)}`\.",
+            f"`{target_catalog}`.",
+            normalized,
+        )
+    return normalized
+
+
+def _split_sql_statements(sql_text: str) -> list[str]:
+    sql = _sanitize_sql(sql_text)
+    if not sql:
+        return []
+
+    statements: list[str] = []
+    current: list[str] = []
+    in_single = False
+    in_double = False
+    in_backtick = False
+    escape = False
+
+    for ch in sql:
+        if escape:
+            current.append(ch)
+            escape = False
+            continue
+
+        if ch == "\\" and (in_single or in_double):
+            current.append(ch)
+            escape = True
+            continue
+
+        if ch == "'" and not in_double and not in_backtick:
+            in_single = not in_single
+            current.append(ch)
+            continue
+        if ch == '"' and not in_single and not in_backtick:
+            in_double = not in_double
+            current.append(ch)
+            continue
+        if ch == "`" and not in_single and not in_double:
+            in_backtick = not in_backtick
+            current.append(ch)
+            continue
+
+        if ch == ";" and not in_single and not in_double and not in_backtick:
+            statement = "".join(current).strip()
+            if statement:
+                statements.append(statement)
+            current = []
+            continue
+
+        current.append(ch)
+
+    tail = "".join(current).strip()
+    if tail:
+        statements.append(tail)
+    return statements
+
+
+def _parse_cell_magic(code: str) -> tuple[Optional[str], str]:
+    normalized_code = _strip_leading_invisible(code or "")
+    lines = normalized_code.splitlines()
+    if not lines:
+        return None, ""
+
+    first_idx: Optional[int] = None
+    for idx, line in enumerate(lines):
+        if _strip_leading_invisible(line).strip():
+            first_idx = idx
+            break
+
+    if first_idx is None:
+        return None, ""
+
+    first = _strip_leading_invisible(lines[first_idx]).strip()
+
+    if first.startswith("%%"):
+        token = first.split(None, 1)[0].lower()
+        inline = first[len(token):].strip()
+        remainder = "\n".join(lines[first_idx + 1 :]).strip()
+        payload = inline if not remainder else (f"{inline}\n{remainder}" if inline else remainder)
+        return token, payload
+
+    if first.startswith("%"):
+        token = first.split(None, 1)[0].lower()
+        inline = first[len(token):].strip()
+        remainder = "\n".join(lines[first_idx + 1 :]).strip()
+        payload = inline if not remainder else (f"{inline}\n{remainder}" if inline else remainder)
+        return token, payload
+
+    if first.startswith("!"):
+        inline = first[1:].strip()
+        remainder = "\n".join(lines[first_idx + 1 :]).strip()
+        payload = inline if not remainder else (f"{inline}\n{remainder}" if inline else remainder)
+        return "!", payload
+
+    return None, normalized_code
+
+
+def _run_shell_command(command: str, execution_count: int) -> dict[str, Any]:
+    cmd = str(command or "").strip()
+    if not cmd:
+        return {
+            "status": "error",
+            "execution_count": execution_count,
+            "outputs": [{
+                "output_type": "error",
+                "ename": "ValueError",
+                "evalue": "Shell command is empty",
+                "traceback": [],
+            }],
+        }
+
+    try:
+        proc = subprocess.run(
+            cmd,
+            shell=True,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=NOTEBOOK_SHELL_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "status": "error",
+            "execution_count": execution_count,
+            "outputs": [{
+                "output_type": "error",
+                "ename": "TimeoutError",
+                "evalue": f"Shell command timed out after {NOTEBOOK_SHELL_TIMEOUT_SECONDS}s",
+                "traceback": [],
+            }],
+        }
+    except Exception as exc:
+        return {
+            "status": "error",
+            "execution_count": execution_count,
+            "outputs": [{
+                "output_type": "error",
+                "ename": type(exc).__name__,
+                "evalue": str(exc),
+                "traceback": traceback.format_exception(type(exc), exc, exc.__traceback__),
+            }],
+        }
+
+    outputs: list[dict[str, Any]] = []
+    if proc.stdout:
+        outputs.append({"output_type": "stream", "name": "stdout", "text": proc.stdout})
+    if proc.stderr:
+        outputs.append({"output_type": "stream", "name": "stderr", "text": proc.stderr})
+
+    if not outputs:
+        outputs.append({"output_type": "stream", "name": "stdout", "text": ""})
+
+    return {
+        "status": "ok" if proc.returncode == 0 else "error",
+        "execution_count": execution_count,
+        "outputs": outputs,
+    }
+
+
+def _run_pip_magic(arguments: str, execution_count: int) -> dict[str, Any]:
+    args_raw = str(arguments or "").strip()
+    if not args_raw:
+        return {
+            "status": "error",
+            "execution_count": execution_count,
+            "outputs": [{
+                "output_type": "error",
+                "ename": "ValueError",
+                "evalue": "Usage: %pip install <package>",
+                "traceback": [],
+            }],
+        }
+
+    try:
+        parsed = shlex.split(args_raw)
+    except ValueError as exc:
+        return {
+            "status": "error",
+            "execution_count": execution_count,
+            "outputs": [{
+                "output_type": "error",
+                "ename": "ValueError",
+                "evalue": f"Invalid pip arguments: {exc}",
+                "traceback": [],
+            }],
+        }
+
+    if parsed and parsed[0] == "pip":
+        parsed = parsed[1:]
+    if not parsed:
+        return {
+            "status": "error",
+            "execution_count": execution_count,
+            "outputs": [{
+                "output_type": "error",
+                "ename": "ValueError",
+                "evalue": "Usage: %pip install <package>",
+                "traceback": [],
+            }],
+        }
+
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "pip", *parsed],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=NOTEBOOK_SHELL_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "status": "error",
+            "execution_count": execution_count,
+            "outputs": [{
+                "output_type": "error",
+                "ename": "TimeoutError",
+                "evalue": f"pip command timed out after {NOTEBOOK_SHELL_TIMEOUT_SECONDS}s",
+                "traceback": [],
+            }],
+        }
+    except Exception as exc:
+        return {
+            "status": "error",
+            "execution_count": execution_count,
+            "outputs": [{
+                "output_type": "error",
+                "ename": type(exc).__name__,
+                "evalue": str(exc),
+                "traceback": traceback.format_exception(type(exc), exc, exc.__traceback__),
+            }],
+        }
+
+    outputs: list[dict[str, Any]] = []
+    if proc.stdout:
+        outputs.append({"output_type": "stream", "name": "stdout", "text": proc.stdout})
+    if proc.stderr:
+        outputs.append({"output_type": "stream", "name": "stderr", "text": proc.stderr})
+
+    return {
+        "status": "ok" if proc.returncode == 0 else "error",
+        "execution_count": execution_count,
+        "outputs": outputs or [{"output_type": "stream", "name": "stdout", "text": ""}],
+    }
+
+
+def _render_markdown_output(markdown_text: str, execution_count: int) -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "execution_count": execution_count,
+        "outputs": [{
+            "output_type": "display_data",
+            "data": {
+                "text/markdown": markdown_text,
+            },
+            "execution_count": execution_count,
+        }],
+    }
+
+
 def _discover_spark_jars() -> list[str]:
     if not SPARK_EXTRA_JARS:
         return []
@@ -1002,6 +1331,42 @@ def _spark_session_usable(session: Any, *, remote: bool = False) -> bool:
         return not bool(jsc.sc().isStopped())
     except Exception:
         return False
+
+
+def _is_spark_session_closed_error(exc: Exception) -> bool:
+    message = str(exc or "").strip().lower()
+    if not message:
+        return False
+    if "invalid_handle.session_closed" in message or "session_closed" in message:
+        return True
+    if "session was closed" in message or "session is closed" in message:
+        return True
+    if "handle" in message and "is invalid" in message and "session" in message:
+        return True
+    return False
+
+
+def _invalidate_spark_session(cluster_id: Optional[str] = None, *, reason: Optional[str] = None) -> None:
+    resolved_cluster_id = _resolve_cluster_id(cluster_id)
+    with _spark_session_lock:
+        spark_session = _spark_sessions.pop(resolved_cluster_id, None)
+
+    if spark_session is not None:
+        try:
+            spark_session.stop()
+        except Exception:
+            pass
+
+    _reset_spark_singletons()
+    runtime = _cluster_runtime(resolved_cluster_id)
+    runtime["status"] = "idle"
+    runtime["last_stopped"] = _now_iso()
+    runtime["spark_ui_url"] = None
+    runtime["application_id"] = None
+    runtime["effective_resources"] = None
+    runtime["active_sessions"] = _count_sessions_for_cluster(resolved_cluster_id)
+    if reason:
+        runtime["last_error"] = str(reason)
 
 
 def _spark_runtime_mode(cluster_id: Optional[str] = None) -> str:
@@ -1327,6 +1692,10 @@ def _ensure_local_session(session_id: str, cluster_id: Optional[str] = None) -> 
 def _install_local_helpers(namespace: dict[str, Any], session_id: str) -> None:
     cluster_id = _session_cluster_id(session_id)
     if namespace.get("__openclaw_helpers_loaded__") and namespace.get("__openclaw_cluster_id__") == cluster_id:
+        try:
+            namespace["spark"] = _get_spark_session(cluster_id)
+        except Exception:
+            pass
         return
 
     cluster_limits = _cluster_profile(cluster_id).get("limits", {})
@@ -1361,18 +1730,29 @@ def _install_local_helpers(namespace: dict[str, Any], session_id: str) -> None:
         limit: Optional[int] = default_limit,
     ):
         _require_module("pyspark.sql", "pyspark")
-        spark = _get_spark_session(cluster_id)
-        sql_text = _sanitize_sql(statement)
+        sql_text = _sanitize_sql(_normalize_spark_iceberg_catalog_alias(_strip_sql_magic_prefix(statement)))
         if not sql_text:
             raise RuntimeError("Spark SQL statement is empty")
 
-        with _spark_query_lock:
-            target_db = str(database).strip() or SPARK_DEFAULT_DATABASE
-            spark.catalog.setCurrentDatabase(target_db)
-            df = spark.sql(sql_text)
-            if limit is not None and int(limit) > 0:
-                df = df.limit(int(limit))
-            return df
+        target_db = str(database).strip() or SPARK_DEFAULT_DATABASE
+        for attempt in range(2):
+            try:
+                spark = _get_spark_session(cluster_id)
+                with _spark_query_lock:
+                    spark.catalog.setCurrentDatabase(target_db)
+                    df = spark.sql(sql_text)
+                    if limit is not None and int(limit) > 0:
+                        df = df.limit(int(limit))
+                    return df
+            except Exception as exc:
+                if attempt == 0 and _is_spark_session_closed_error(exc):
+                    logger.warning(
+                        "Spark session handle closed for cluster '%s' in query_spark; recreating session.",
+                        cluster_id,
+                    )
+                    _invalidate_spark_session(cluster_id, reason=str(exc))
+                    continue
+                raise
 
     def query(
         statement: str,
@@ -1430,8 +1810,8 @@ def _install_local_helpers(namespace: dict[str, Any], session_id: str) -> None:
 
 def _execute_trino_sql(raw_sql: str, execution_count: int) -> dict[str, Any]:
     outputs: list[dict[str, Any]] = []
-    sql = _sanitize_sql(raw_sql)
-    if not sql:
+    statements = _split_sql_statements(_strip_sql_magic_prefix(raw_sql))
+    if not statements:
         return {
             "status": "error",
             "execution_count": execution_count,
@@ -1466,26 +1846,29 @@ def _execute_trino_sql(raw_sql: str, execution_count: int) -> dict[str, Any]:
             schema=TRINO_SCHEMA,
         )
         cur = conn.cursor()
-        cur.execute(sql)
+        for idx, statement in enumerate(statements):
+            cur.execute(statement)
 
-        if cur.description:
-            rows = cur.fetchmany(NOTEBOOK_TABLE_ROW_LIMIT + 1)
-            columns = [d[0] for d in cur.description]
-            truncated = len(rows) > NOTEBOOK_TABLE_ROW_LIMIT
-            rows = rows[:NOTEBOOK_TABLE_ROW_LIMIT]
-            outputs.append(_table_output(columns, [list(r) for r in rows], execution_count))
-            if truncated:
+            if cur.description:
+                rows = cur.fetchmany(NOTEBOOK_TABLE_ROW_LIMIT + 1)
+                columns = [d[0] for d in cur.description]
+                truncated = len(rows) > NOTEBOOK_TABLE_ROW_LIMIT
+                rows = rows[:NOTEBOOK_TABLE_ROW_LIMIT]
+                outputs.append(_table_output(columns, [list(r) for r in rows], execution_count))
+                if truncated:
+                    outputs.append({
+                        "output_type": "stream",
+                        "name": "stdout",
+                        "text": f"Result truncated to {NOTEBOOK_TABLE_ROW_LIMIT} rows.\\n",
+                    })
+            else:
                 outputs.append({
                     "output_type": "stream",
                     "name": "stdout",
-                    "text": f"Result truncated to {NOTEBOOK_TABLE_ROW_LIMIT} rows.\\n",
+                    "text": f"Statement {idx + 1}/{len(statements)} executed successfully.\\n"
+                    if len(statements) > 1
+                    else "Statement executed successfully.\\n",
                 })
-        else:
-            outputs.append({
-                "output_type": "stream",
-                "name": "stdout",
-                "text": "Statement executed successfully.\\n",
-            })
 
         conn.close()
         return {
@@ -1514,8 +1897,8 @@ def _execute_spark_sql(
     database: str = SPARK_DEFAULT_DATABASE,
 ) -> dict[str, Any]:
     outputs: list[dict[str, Any]] = []
-    sql = _sanitize_sql(raw_sql)
-    if not sql:
+    statements = _split_sql_statements(_normalize_spark_iceberg_catalog_alias(_strip_sql_magic_prefix(raw_sql)))
+    if not statements:
         return {
             "status": "error",
             "execution_count": execution_count,
@@ -1541,52 +1924,70 @@ def _execute_spark_sql(
             }],
         }
 
-    try:
-        cluster_id = _session_cluster_id(session_id)
-        spark = _get_spark_session(cluster_id)
-        max_rows = int(_cluster_profile(cluster_id).get("limits", {}).get("max_rows", NOTEBOOK_TABLE_ROW_LIMIT))
-        with _spark_query_lock:
-            target_db = str(database).strip() or SPARK_DEFAULT_DATABASE
-            spark.catalog.setCurrentDatabase(target_db)
-            df = spark.sql(sql)
-            columns = [str(c) for c in df.columns]
+    cluster_id = _session_cluster_id(session_id)
+    max_rows = int(_cluster_profile(cluster_id).get("limits", {}).get("max_rows", NOTEBOOK_TABLE_ROW_LIMIT))
+    target_db = str(database).strip() or SPARK_DEFAULT_DATABASE
 
-            if columns:
-                rows = df.limit(max_rows + 1).collect()
-                truncated = len(rows) > max_rows
-                rows = rows[:max_rows]
-                values = [[row[col] for col in columns] for row in rows]
-                outputs.append(_table_output(columns, values, execution_count))
-                if truncated:
-                    outputs.append({
-                        "output_type": "stream",
-                        "name": "stdout",
-                        "text": f"Result truncated to {max_rows} rows.\\n",
-                    })
-            else:
-                outputs.append({
-                    "output_type": "stream",
-                    "name": "stdout",
-                    "text": "Statement executed successfully.\\n",
-                })
+    last_exception: Optional[Exception] = None
+    for attempt in range(2):
+        try:
+            spark = _get_spark_session(cluster_id)
+            attempt_outputs: list[dict[str, Any]] = []
+            with _spark_query_lock:
+                spark.catalog.setCurrentDatabase(target_db)
+                for idx, statement in enumerate(statements):
+                    df = spark.sql(statement)
+                    columns = [str(c) for c in df.columns]
 
-        return {
-            "status": "ok",
-            "execution_count": execution_count,
-            "outputs": outputs,
-        }
+                    if columns:
+                        rows = df.limit(max_rows + 1).collect()
+                        truncated = len(rows) > max_rows
+                        rows = rows[:max_rows]
+                        values = [[row[col] for col in columns] for row in rows]
+                        attempt_outputs.append(_table_output(columns, values, execution_count))
+                        if truncated:
+                            attempt_outputs.append({
+                                "output_type": "stream",
+                                "name": "stdout",
+                                "text": f"Result truncated to {max_rows} rows.\\n",
+                            })
+                    else:
+                        attempt_outputs.append({
+                            "output_type": "stream",
+                            "name": "stdout",
+                            "text": f"Statement {idx + 1}/{len(statements)} executed successfully.\\n"
+                            if len(statements) > 1
+                            else "Statement executed successfully.\\n",
+                        })
 
-    except Exception as exc:
-        return {
-            "status": "error",
-            "execution_count": execution_count,
-            "outputs": [{
-                "output_type": "error",
-                "ename": type(exc).__name__,
-                "evalue": str(exc),
-                "traceback": traceback.format_exception(type(exc), exc, exc.__traceback__),
-            }],
-        }
+            outputs = attempt_outputs
+            return {
+                "status": "ok",
+                "execution_count": execution_count,
+                "outputs": outputs,
+            }
+        except Exception as exc:
+            last_exception = exc
+            if attempt == 0 and _is_spark_session_closed_error(exc):
+                logger.warning(
+                    "Spark session handle closed for cluster '%s' in %%sql; recreating session.",
+                    cluster_id,
+                )
+                _invalidate_spark_session(cluster_id, reason=str(exc))
+                continue
+            break
+
+    exc = last_exception or RuntimeError("Spark SQL execution failed")
+    return {
+        "status": "error",
+        "execution_count": execution_count,
+        "outputs": [{
+            "output_type": "error",
+            "ename": type(exc).__name__,
+            "evalue": str(exc),
+            "traceback": traceback.format_exception(type(exc), exc, exc.__traceback__),
+        }],
+    }
 
 
 def _compile_cell(code: str) -> tuple[Optional[Any], Optional[Any]]:
@@ -1701,16 +2102,18 @@ def _execute_local(code: str, session_id: str) -> dict[str, Any]:
     execution_count = _execution_counts[session_id]
 
     stripped = (code or "").strip()
-    if stripped.startswith("%%spark"):
-        sql_code = stripped[len("%%spark"):].strip()
+    magic, payload = _parse_cell_magic(code or "")
+
+    if magic == "%%spark":
+        sql_code = payload.strip()
         return _execute_spark_sql(sql_code, execution_count, session_id=session_id)
 
-    if stripped.startswith("%%trino"):
-        sql_code = stripped[len("%%trino"):].strip()
+    if magic == "%%trino":
+        sql_code = payload.strip()
         return _execute_trino_sql(sql_code, execution_count)
 
-    if stripped.startswith("%%sql"):
-        sql_body = stripped[len("%%sql"):].strip()
+    if magic in {"%%sql", "%sql"}:
+        sql_body = payload.strip()
         selected_engine = NOTEBOOK_SQL_ENGINE
         match = re.match(r"^(spark|trino)\b", sql_body, re.IGNORECASE)
         if match:
@@ -1720,6 +2123,18 @@ def _execute_local(code: str, session_id: str) -> dict[str, Any]:
         if selected_engine == "spark":
             return _execute_spark_sql(sql_body, execution_count, session_id=session_id)
         return _execute_trino_sql(sql_body, execution_count)
+
+    if magic in {"%python", "%%python"}:
+        return _execute_local_python(payload, session_id, execution_count)
+
+    if magic in {"%md", "%%md"}:
+        return _render_markdown_output(payload, execution_count)
+
+    if magic in {"%sh", "%%sh", "!"}:
+        return _run_shell_command(payload, execution_count)
+
+    if magic in {"%pip", "%%pip"}:
+        return _run_pip_magic(payload, execution_count)
 
     return _execute_local_python(code, session_id, execution_count)
 
@@ -2244,11 +2659,26 @@ async def load_notebook(name: str):
         data = json.loads(filepath_ipynb.read_text(encoding="utf-8"))
         cells = []
         for cell in data.get("cells", []):
+            source_text = "".join(cell.get("source", []))
+            first_non_empty = ""
+            for raw_line in source_text.splitlines():
+                stripped_line = raw_line.strip()
+                if stripped_line:
+                    first_non_empty = stripped_line.lower()
+                    break
+
+            metadata = cell.get("metadata") if isinstance(cell.get("metadata"), dict) else {}
+            metadata_lang = str(metadata.get("language") or metadata.get("language_id") or "").strip().lower()
+
+            detected_language = "python"
+            if first_non_empty.startswith("%%sql") or first_non_empty.startswith("%sql") or metadata_lang == "sql":
+                detected_language = "sql"
+
             cells.append({
                 "id": str(uuid.uuid4()),
                 "cell_type": cell.get("cell_type", "code"),
-                "source": "".join(cell.get("source", [])),
-                "language": "python",
+                "source": source_text,
+                "language": detected_language,
                 "outputs": cell.get("outputs", []),
                 "execution_count": cell.get("execution_count"),
             })

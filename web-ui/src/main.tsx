@@ -13,7 +13,6 @@ const CicdPage = lazy(() => import('./app/cicd/page'));
 const AgentPage = lazy(() => import('./app/agent/page'));
 const VisualizePage = lazy(() => import('./app/visualize/page'));
 const NotebooksPage = lazy(() => import('./app/notebooks/page'));
-const DockerCliPage = lazy(() => import('./app/docker-cli/page'));
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
     <React.StrictMode>
@@ -30,7 +29,6 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
                     <Route path="/agent" element={<AgentPage />} />
                     <Route path="/visualize" element={<VisualizePage />} />
                     <Route path="/notebooks" element={<NotebooksPage />} />
-                    <Route path="/docker-cli" element={<DockerCliPage />} />
                 </Routes>
             </Suspense>
         </BrowserRouter>
