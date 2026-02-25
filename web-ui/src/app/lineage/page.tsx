@@ -147,41 +147,71 @@ export default function LineagePage() {
     const [isPanning, setIsPanning] = useState(false);
     const panStart = useRef({ x: 0, y: 0 });
     const svgRef = useRef<SVGSVGElement>(null);
+    const parseLineageResponse = useCallback(async (res: Response, fallbackMessage: string) => {
+        const payload = await res.json().catch(() => ({} as Record<string, any>));
+        if (!res.ok) {
+            const detail =
+                (typeof payload?.detail === 'string' && payload.detail) ||
+                (typeof payload?.error === 'string' && payload.error) ||
+                `${fallbackMessage} (HTTP ${res.status})`;
+            throw new Error(detail);
+        }
+        if (typeof payload?.error === 'string' && payload.error.trim().length > 0) {
+            throw new Error(payload.error);
+        }
+        return payload;
+    }, []);
 
     // ─── Fetch Namespaces ───
     const fetchNamespaces = useCallback(async () => {
         try {
             setLoading(true);
+            setError(null);
             const res = await fetch('/api/lineage?action=namespaces');
-            const data = await res.json();
-            if (data.error) throw new Error(data.error);
+            const data = await parseLineageResponse(res, 'Failed to fetch namespaces');
             const nsList = data.namespaces || [];
             setNamespaces(nsList);
             if (nsList.length > 0 && !selectedNs) {
                 setSelectedNs(nsList[0].name);
+            }
+            if (nsList.length === 0) {
+                setSelectedNs('');
+                setJobs([]);
+                setDatasets([]);
+                setLineageNodes([]);
+                setLineageEdges([]);
             }
         } catch (e: unknown) {
             setError(e instanceof Error ? e.message : 'Failed to fetch namespaces');
         } finally {
             setLoading(false);
         }
-    }, [selectedNs]);
+    }, [parseLineageResponse, selectedNs]);
 
     // ─── Fetch Jobs & Datasets for namespace ───
     const fetchNamespaceData = useCallback(async (ns: string) => {
         try {
+            setError(null);
             const [jobsRes, datasetsRes] = await Promise.all([
                 fetch(`/api/lineage?action=jobs&ns=${encodeURIComponent(ns)}`),
                 fetch(`/api/lineage?action=datasets&ns=${encodeURIComponent(ns)}`)
             ]);
-            const jobsData = await jobsRes.json();
-            const datasetsData = await datasetsRes.json();
+            const [jobsData, datasetsData] = await Promise.all([
+                parseLineageResponse(jobsRes, `Failed to fetch jobs for namespace ${ns}`),
+                parseLineageResponse(datasetsRes, `Failed to fetch datasets for namespace ${ns}`),
+            ]);
             setJobs(jobsData.jobs || []);
             setDatasets(datasetsData.datasets || []);
-        } catch (e) {
+        } catch (e: unknown) {
             console.error('Failed to fetch namespace data', e);
+            setJobs([]);
+            setDatasets([]);
+            setLineageNodes([]);
+            setLineageEdges([]);
+            setSelectedNode(null);
+            setError(e instanceof Error ? e.message : 'Failed to fetch namespace data');
         }
-    }, []);
+    }, [parseLineageResponse]);
 
     // ─── Fetch Lineage Graph ───
     const fetchLineage = useCallback(async (nodeId: string) => {
@@ -189,8 +219,7 @@ export default function LineagePage() {
             setGraphLoading(true);
             setError(null);
             const res = await fetch(`/api/lineage?action=lineage&nodeId=${encodeURIComponent(nodeId)}&depth=10`);
-            const data = await res.json();
-            if (data.error) throw new Error(data.error);
+            const data = await parseLineageResponse(res, 'Failed to fetch lineage graph');
 
             const graph = data.graph || [];
             const nodes: MarquezNode[] = graph.map((n: any) => ({
@@ -220,14 +249,17 @@ export default function LineagePage() {
         } finally {
             setGraphLoading(false);
         }
-    }, []);
+    }, [parseLineageResponse]);
 
     // Auto-fetch namespaces on mount
-    useEffect(() => { fetchNamespaces(); }, []);
+    useEffect(() => { fetchNamespaces(); }, [fetchNamespaces]);
 
     // Fetch jobs/datasets when namespace changes
     useEffect(() => {
         if (selectedNs) {
+            setSelectedNode(null);
+            setLineageNodes([]);
+            setLineageEdges([]);
             fetchNamespaceData(selectedNs);
         }
     }, [selectedNs, fetchNamespaceData]);

@@ -435,6 +435,7 @@ export default function DataExplorer() {
     const [limitMenuPos, setLimitMenuPos] = useState({ top: 0, right: 0 });
     const [showDbMenu, setShowDbMenu] = useState(false);
     const [dbMenuPos, setDbMenuPos] = useState({ top: 0, left: 0 });
+    const [trinoSettingsPos, setTrinoSettingsPos] = useState({ top: 0, left: 0 });
 
     // ─── Context Menu State ───
     const [contextMenu, setContextMenu] = useState<{
@@ -677,6 +678,10 @@ export default function DataExplorer() {
 
         return Object.keys(props).length > 0 ? props : undefined;
     }, [trinoSessionPropsText]);
+
+    const trinoTagCount = parsedTrinoClientTags?.length || 0;
+    const trinoSessionPropCount = parsedTrinoSessionProperties ? Object.keys(parsedTrinoSessionProperties).length : 0;
+    const hasTrinoSettings = trinoRole.trim().length > 0 || trinoTagCount > 0 || trinoSessionPropCount > 0;
 
     const trinoDetailStages = useMemo<TrinoQueryStage[]>(() => {
         if (!trinoQueryDetail) return [];
@@ -2783,61 +2788,84 @@ export default function DataExplorer() {
                         {engine === 'trino' && (
                             <div className="relative">
                                 <button
-                                    onClick={() => setShowTrinoSettings(prev => !prev)}
+                                    onClick={(e) => {
+                                        const rect = e.currentTarget.getBoundingClientRect();
+                                        const panelWidth = 360;
+                                        const left = Math.min(
+                                            Math.max(8, rect.right - panelWidth),
+                                            Math.max(8, window.innerWidth - panelWidth - 8)
+                                        );
+                                        setTrinoSettingsPos({ top: rect.bottom + 4, left });
+                                        setShowTrinoSettings(prev => !prev);
+                                    }}
                                     className={clsx(
                                         "flex items-center gap-1.5 px-2 py-1 rounded-md border transition-colors",
                                         showTrinoSettings
                                             ? "bg-sky-500/15 text-sky-300 border-sky-400/40"
                                             : "bg-white/[0.02] text-white/60 border-white/10 hover:text-white hover:bg-white/[0.05]"
                                     )}
-                                    title="Trino session settings"
+                                    title="Advanced query options"
                                 >
                                     <SlidersHorizontal className="w-3.5 h-3.5" />
-                                    <span>Trino Session</span>
+                                    <span>Advanced</span>
+                                    {hasTrinoSettings && (
+                                        <span className="ml-0.5 rounded bg-sky-500/20 px-1.5 py-0.5 text-[10px] text-sky-200 border border-sky-400/30">
+                                            Configured
+                                        </span>
+                                    )}
                                 </button>
                                 {showTrinoSettings && (
-                                    <>
-                                        <div className="fixed inset-0 z-[9998]" onClick={() => setShowTrinoSettings(false)} />
-                                        <div className="absolute right-0 top-full mt-1 z-[9999] w-[360px] rounded-xl border border-white/10 bg-[#09090b] shadow-2xl p-3 space-y-2.5">
-                                            <div className="text-[10px] uppercase tracking-wider text-white/50 font-semibold">Role / Session Properties / Client Tags</div>
-                                            <div className="space-y-1">
-                                                <label className="text-[10px] text-white/50 uppercase tracking-wide">Role</label>
-                                                <input
-                                                    value={trinoRole}
-                                                    onChange={(e) => setTrinoRole(e.target.value)}
-                                                    placeholder="e.g. catalog_or_schema, role_name"
-                                                    className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1.5 text-[11px] text-white placeholder-white/30 focus:outline-none focus:border-sky-400/40"
-                                                />
+                                    createPortal(
+                                        <>
+                                            <div className="fixed inset-0 z-[9998]" onClick={() => setShowTrinoSettings(false)} />
+                                            <div
+                                                className="fixed z-[9999] w-[360px] rounded-xl border border-white/10 bg-[#09090b] shadow-2xl p-3 space-y-2.5"
+                                                style={{ top: trinoSettingsPos.top, left: trinoSettingsPos.left }}
+                                            >
+                                                <div className="text-[10px] uppercase tracking-wider text-white/50 font-semibold">Advanced · Trino Query Settings</div>
+                                                <div className="text-[10px] text-white/45 leading-relaxed">
+                                                    These values are sent to Trino as request headers for each query.
+                                                </div>
+                                                <div className="space-y-1">
+                                                    <label className="text-[10px] text-white/50 uppercase tracking-wide">Role</label>
+                                                    <input
+                                                        value={trinoRole}
+                                                        onChange={(e) => setTrinoRole(e.target.value)}
+                                                        placeholder="e.g. catalog_or_schema, role_name"
+                                                        className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1.5 text-[11px] text-white placeholder-white/30 focus:outline-none focus:border-sky-400/40"
+                                                    />
+                                                </div>
+                                                <div className="space-y-1">
+                                                    <label className="text-[10px] text-white/50 uppercase tracking-wide">Client Tags (comma separated)</label>
+                                                    <input
+                                                        value={trinoClientTagsInput}
+                                                        onChange={(e) => setTrinoClientTagsInput(e.target.value)}
+                                                        placeholder="adhoc,finance,priority_high"
+                                                        className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1.5 text-[11px] text-white placeholder-white/30 focus:outline-none focus:border-sky-400/40"
+                                                    />
+                                                </div>
+                                                <div className="space-y-1">
+                                                    <label className="text-[10px] text-white/50 uppercase tracking-wide">Session Properties (one per line: key=value)</label>
+                                                    <textarea
+                                                        value={trinoSessionPropsText}
+                                                        onChange={(e) => setTrinoSessionPropsText(e.target.value)}
+                                                        placeholder={`query_max_run_time=5m\njoin_distribution_type=AUTOMATIC`}
+                                                        className="w-full h-24 resize-y bg-white/5 border border-white/10 rounded-md px-2.5 py-1.5 text-[11px] text-white placeholder-white/30 focus:outline-none focus:border-sky-400/40 font-mono"
+                                                    />
+                                                </div>
+                                                <div className="flex items-center justify-between text-[10px] text-white/40">
+                                                    <span>{trinoTagCount} tags, {trinoSessionPropCount} session props</span>
+                                                    <button
+                                                        onClick={() => { setTrinoRole(''); setTrinoClientTagsInput(''); setTrinoSessionPropsText(''); }}
+                                                        className="px-2 py-1 rounded hover:bg-white/5 text-white/60 hover:text-white"
+                                                    >
+                                                        Clear
+                                                    </button>
+                                                </div>
                                             </div>
-                                            <div className="space-y-1">
-                                                <label className="text-[10px] text-white/50 uppercase tracking-wide">Client Tags (comma separated)</label>
-                                                <input
-                                                    value={trinoClientTagsInput}
-                                                    onChange={(e) => setTrinoClientTagsInput(e.target.value)}
-                                                    placeholder="adhoc,finance,priority_high"
-                                                    className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-1.5 text-[11px] text-white placeholder-white/30 focus:outline-none focus:border-sky-400/40"
-                                                />
-                                            </div>
-                                            <div className="space-y-1">
-                                                <label className="text-[10px] text-white/50 uppercase tracking-wide">Session Properties (one per line: key=value)</label>
-                                                <textarea
-                                                    value={trinoSessionPropsText}
-                                                    onChange={(e) => setTrinoSessionPropsText(e.target.value)}
-                                                    placeholder={`query_max_run_time=5m\njoin_distribution_type=AUTOMATIC`}
-                                                    className="w-full h-24 resize-y bg-white/5 border border-white/10 rounded-md px-2.5 py-1.5 text-[11px] text-white placeholder-white/30 focus:outline-none focus:border-sky-400/40 font-mono"
-                                                />
-                                            </div>
-                                            <div className="flex items-center justify-between text-[10px] text-white/40">
-                                                <span>{parsedTrinoClientTags?.length || 0} tags, {parsedTrinoSessionProperties ? Object.keys(parsedTrinoSessionProperties).length : 0} session props</span>
-                                                <button
-                                                    onClick={() => { setTrinoRole(''); setTrinoClientTagsInput(''); setTrinoSessionPropsText(''); }}
-                                                    className="px-2 py-1 rounded hover:bg-white/5 text-white/60 hover:text-white"
-                                                >
-                                                    Clear
-                                                </button>
-                                            </div>
-                                        </div>
-                                    </>
+                                        </>,
+                                        document.body
+                                    )
                                 )}
                             </div>
                         )}

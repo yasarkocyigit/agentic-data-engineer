@@ -18,6 +18,7 @@ from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
+from airflow.sdk import Asset
 import yaml
 import os
 
@@ -73,22 +74,86 @@ SPARK_CONF = {
 # HELPER FUNCTIONS
 # =============================================================
 
-def read_pipeline_config(**context):
-    """Read active pipeline config from YAML files."""
+def resolve_pipeline_config_path() -> str:
+    """Resolve pipelines.yml path for container and local development."""
     config_path = "/opt/airflow/config/pipelines.yml"
+    if os.path.exists(config_path):
+        return config_path
+    return os.path.join(
+        os.path.dirname(os.path.dirname(__file__)),
+        "config",
+        "pipelines.yml",
+    )
 
-    # Fallback for local dev
-    if not os.path.exists(config_path):
-        config_path = os.path.join(
-            os.path.dirname(os.path.dirname(__file__)),
-            "config", "pipelines.yml"
-        )
 
+def load_active_pipelines():
+    """Load active Bronze/Silver pipeline definitions from config."""
+    config_path = resolve_pipeline_config_path()
     with open(config_path) as f:
-        config = yaml.safe_load(f)
+        config = yaml.safe_load(f) or {}
 
     bronze = [p for p in config.get("bronze", []) if p.get("is_active", True)]
     silver = [p for p in config.get("silver", []) if p.get("is_active", True)]
+    return bronze, silver
+
+
+def normalize_asset_uri(uri: str) -> str:
+    """Normalize URI to schemes supported by OpenLineage asset converters."""
+    value = (uri or "").strip()
+    if not value:
+        return value
+    # OpenLineage Airflow converter supports s3 but not s3a.
+    if value.startswith("s3a://"):
+        return f"s3://{value[len('s3a://'):]}"
+    return value
+
+
+def source_table_asset_uri(source_table: str) -> str:
+    """Build a file-based URI for JDBC source tables."""
+    normalized = (source_table or "").strip().replace(".", "/")
+    return f"file:///postgres/{normalized}"
+
+
+def build_assets(uris: list[str]) -> list[Asset]:
+    """Create deduplicated Airflow assets from URIs."""
+    seen = set()
+    assets: list[Asset] = []
+    for uri in uris:
+        normalized = normalize_asset_uri(uri)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        assets.append(Asset(uri=normalized))
+    return assets
+
+
+def build_lineage_assets(bronze_pipelines: list[dict], silver_pipelines: list[dict]):
+    """Create inlets/outlets for Bronze and Silver tasks."""
+    bronze_sources = [source_table_asset_uri(p.get("source_table", "")) for p in bronze_pipelines]
+    bronze_targets = [p.get("target_path", "") for p in bronze_pipelines]
+    silver_sources = [p.get("source", "") for p in silver_pipelines]
+    silver_targets = [p.get("target_path", f"s3a://silver/{p.get('name', '')}") for p in silver_pipelines]
+
+    return (
+        build_assets(bronze_sources),
+        build_assets(bronze_targets),
+        build_assets(silver_sources),
+        build_assets(silver_targets),
+    )
+
+
+BRONZE_PIPELINES, SILVER_PIPELINES = load_active_pipelines()
+(
+    BRONZE_INLETS,
+    BRONZE_OUTLETS,
+    SILVER_INLETS,
+    SILVER_OUTLETS,
+) = build_lineage_assets(BRONZE_PIPELINES, SILVER_PIPELINES)
+
+
+def read_pipeline_config(**context):
+    """Read active pipeline config from YAML files."""
+    bronze, silver = load_active_pipelines()
 
     summary = {
         "bronze_count": len(bronze),
@@ -147,6 +212,8 @@ with DAG(
         conn_id='spark_default',
         conf=SPARK_CONF,
         jars=SPARK_JARS,
+        inlets=BRONZE_INLETS,
+        outlets=BRONZE_OUTLETS,
         deploy_mode='client',
         execution_timeout=timedelta(hours=1),
         verbose=True,
@@ -159,6 +226,8 @@ with DAG(
         conn_id='spark_default',
         conf=SPARK_CONF,
         jars=SPARK_JARS,
+        inlets=SILVER_INLETS,
+        outlets=SILVER_OUTLETS,
         deploy_mode='client',
         execution_timeout=timedelta(hours=1),
         verbose=True,
